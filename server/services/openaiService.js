@@ -115,7 +115,8 @@ const BULLET_RULES = `Bullet writing rules (strict — every bullet MUST follow 
 - Use strong action verbs (Led, Built, Designed, Automated, Optimized, Delivered).
 - Include measurable impact where possible (%, time saved, volume, users, revenue).
 - Weave 1–2 JD keywords naturally — never keyword-stuff.
-- Each bullet: one clear achievement, complete thought, 1–2 lines max.
+- Each bullet: one clear achievement, complete thought, MAX 18–22 words / about 1–2 lines. Never exceed 2 lines.
+- Do NOT start bullets with a bullet character (•). Plain sentence text only.
 - Sound like a confident professional, not a job description copy.`
 
 export async function parseResume(resumeText) {
@@ -172,10 +173,15 @@ Missing skills:\n${JSON.stringify(comparison.missing, null, 2)}`,
 
 export async function createSummaryEnhancement(resumeData, jdData, comparison) {
   return jsonCompletion(
-    `Create 1-2 summary enhancements for 99% JD alignment. ${BULLET_RULES}
-Return 1-2 summaryBullets (new bullets) OR 1-2 bulletRewrites with company="Summary" (or both totaling 1-2 actions).
-bulletRewrites.original must be EXACT text from resumeData.summaryBullets.`,
-    `Summary bullets in resume:\n${JSON.stringify(resumeData.summaryBullets, null, 2)}
+    `Create 1-2 NEW summary bullets for 99% JD alignment. ${BULLET_RULES}
+ALWAYS return summaryBullets with 1-2 brand-new bullets (preferred).
+Do NOT paraphrase, extend, or lightly rewrite any existing summary bullet — invent a different achievement angle.
+Optionally also return bulletRewrites with company="Summary" if rewriting existing text helps.
+bulletRewrites.original must be EXACT text from resumeData.summaryBullets when used.
+Do NOT leave summaryBullets empty.
+Weave missing JD skills/tools into the new bullets naturally.`,
+    `Existing summary bullets in resume (DO NOT repeat or paraphrase these):\n${JSON.stringify(resumeData.summaryBullets, null, 2)}
+Missing skills to weave into bullets:\n${JSON.stringify((comparison.missing || []).slice(0, 12), null, 2)}
 JD:\n${JSON.stringify(jdData, null, 2)}
 Priority keywords:\n${JSON.stringify([...(jdData.mustHaveKeywords || []), ...(comparison.missing || [])].slice(0, 12), null, 2)}`,
     'summary_enhancement',
@@ -218,17 +224,19 @@ ${BULLET_RULES}
 
 Enhancement rules (ALL mandatory):
 - Preserve original section order, fonts, and resume structure exactly.
-- MANDATORY SUMMARY: Add 1-2 new summaryBullets OR rewrite 1-2 existing summary bullets (bulletRewrites company="Summary").
-- MANDATORY PER COMPANY: Every company below must receive 1-2 new bullets (experienceAdditions) OR 1-2 rewrites (bulletRewrites). No company may be skipped.
-- Companies in resume: ${companies.join(' | ') || 'none'}
+- MANDATORY SUMMARY: Always return 1-2 NEW summaryBullets that are NOT paraphrases of existing summary bullets. Do not rewrite/copy an existing summary bullet. Prefer brand-new JD-aligned achievements.
+- NEVER return a summary bullet that repeats or lightly rewords an existing resume summary bullet.
+- MANDATORY PER COMPANY: experienceAdditions MUST include EVERY company listed below, each with 1-2 bullets. Prefer experienceAdditions over rewrites for coverage. No company may be skipped.
+- Companies in resume (include ALL of these in experienceAdditions): ${companies.join(' | ') || 'none'}
 - JD priority keywords (use each ONCE across the whole resume — never repeat the same keyword in multiple bullets): ${jdPriority.join(', ') || 'see comparison.missing'}
-- Only add skills from comparison.missing that are NOT already in the resume.
-- skillsByCategory: add under EXISTING category lines only (e.g. "Data & Reporting:", "Domain:"). Short skill names only.
-- Never duplicate skills, bullets, or keywords already in the resume.
+- MANDATORY SKILLS LIST: skillsByCategory MUST add SHORT tool/skill names only (e.g. "Jira", "Fiber optics", "AWS") under EXISTING resume category lines (e.g. "Tools & Platforms:", "Cloud & DevOps:"). NEVER invent a new "Technical Skills" heading. NEVER paste JD sentences, soft skills paragraphs, benefits, PTO, equipment, or multi-clause phrases into skills.
+- MANDATORY SKILLS IN BULLETS: Missing JD tools that are added to skillsByCategory MUST also appear naturally in at least one new summary or experience bullet (weave 1–2 tools into storytelling — do not dump a skill list into a bullet).
+- Never create underlined headings. Never duplicate the Technical Skills section.
 - New bullets go in the MIDDLE of lists — never first or last bullet in any section or company.
 - bulletRewrites.original must be copied EXACTLY from resumeData summaryBullets or experience bullets.
 - experienceAdditions.company must match resume experience company names exactly.
-- strategy: brief plan covering summary, each company, and skills.`,
+- strategy: brief plan covering summary, each company, and skills.
+- Completeness check before answering: summary present and unique? every company in experienceAdditions? every missing skill in skillsByCategory AND mentioned in a bullet? If not, fix before returning.`,
     `Resume data:\n${JSON.stringify(resumeData, null, 2)}\n\nJD data:\n${JSON.stringify(jdData, null, 2)}\n\nComparison:\n${JSON.stringify(comparison, null, 2)}`,
     'enhancement_plan',
     PLAN_SCHEMA,

@@ -40,6 +40,8 @@ function makeOpenAICompatible({ apiKey, baseURL, model, useJsonSchema }) {
     const params = {
       model,
       temperature: 0.2,
+      // Avoid truncated JSON bodies on large resume/plan responses
+      max_tokens: 8192,
       messages: [
         { role: 'system', content: system + (useJsonSchema ? '' : schemaInstruction(schema)) },
         { role: 'user', content: user },

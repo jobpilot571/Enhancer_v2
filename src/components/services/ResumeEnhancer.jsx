@@ -8,6 +8,7 @@ import {
   fetchFileBlob,
   getDownloadUrl,
   checkApiHealth,
+  setJD,
 } from '../../api/enhancer'
 
 function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
@@ -35,6 +36,97 @@ function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
         <span className="score-ring__label">{label}</span>
       </div>
     </div>
+  )
+}
+
+function ScoreDetailPanel({ breakdown, active }) {
+  if (!breakdown || !active) return null
+  const pillar = breakdown[active]
+  const details = breakdown.details?.[active] || []
+  if (!pillar) return null
+
+  return (
+    <div className="score-detail-panel">
+      <div className="score-detail-panel__meta">
+        {active === 'bullets'
+          ? `Avg coverage ${pillar.pct}% · ${pillar.matched}/${pillar.total} responsibilities covered (≥35%)`
+          : `${pillar.matched}/${pillar.total} matched · ${pillar.pct}% · contributes ~${pillar.score} pts`}
+      </div>
+      <ul className="score-detail-panel__list">
+        {details.map((row) => (
+          <li
+            key={row.item}
+            className={`score-detail-panel__item ${row.matched ? 'is-matched' : 'is-missing'}`}
+          >
+            <span className="score-detail-panel__status">
+              {row.matched ? (row.strong ? 'strong' : active === 'bullets' ? `${row.coverage}%` : 'match') : 'missing'}
+            </span>
+            <span className="score-detail-panel__text">{row.item}</span>
+          </li>
+        ))}
+        {!details.length && (
+          <li className="score-detail-panel__item is-empty">No JD items in this category</li>
+        )}
+      </ul>
+    </div>
+  )
+}
+
+function AtsScoreCard({
+  badge,
+  title,
+  desc,
+  score,
+  label,
+  gradId,
+  breakdown,
+  delta,
+  activeTab,
+  onTabChange,
+}) {
+  const tabs = [
+    { key: 'skills', label: 'Skills' },
+    { key: 'keywords', label: 'Keywords' },
+    { key: 'bullets', label: 'Bullets' },
+  ]
+
+  return (
+    <article className="feature-result-card">
+      <div className="feature-result-card__body">
+        <span className="feature-result-card__badge">{badge}</span>
+        <h3 className="feature-result-card__title">{title}</h3>
+        <p className="feature-result-card__desc">{desc}</p>
+        {typeof delta === 'number' && delta > 0 && (
+          <div className="feature-result-card__stats">
+            <span className="feature-result-card__pill">+{delta} pts</span>
+          </div>
+        )}
+        <div className="score-tab-row" role="tablist" aria-label={`${title} sections`}>
+          {tabs.map((tab) => {
+            const p = breakdown?.[tab.key]
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                className={`score-tab-btn ${activeTab === tab.key ? 'is-active' : ''}`}
+                onClick={() => onTabChange(activeTab === tab.key ? null : tab.key)}
+              >
+                <span className="score-tab-btn__label">{tab.label}</span>
+                <span className="score-tab-btn__meta">
+                  {p ? `${p.matched}/${p.total || 0} · ${p.pct}%` : '—'}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <ScoreDetailPanel breakdown={breakdown} active={activeTab} />
+      </div>
+      <div className="feature-result-card__visual">
+        <ScoreRing score={score} label={label} gradId={gradId} />
+      </div>
+    </article>
   )
 }
 
@@ -102,7 +194,12 @@ export default function ResumeEnhancer() {
   const [enhanceStep, setEnhanceStep] = useState('')
   const [error, setError] = useState('')
   const [apiOnline, setApiOnline] = useState(null)
+  const [jdPrepStatus, setJdPrepStatus] = useState('')
+  const [beforeTab, setBeforeTab] = useState(null)
+  const [afterTab, setAfterTab] = useState(null)
   const enhancingRef = useRef(false)
+  const jdSaveTimerRef = useRef(null)
+  const lastSavedJdRef = useRef('')
 
   useEffect(() => {
     checkApiHealth().then((result) => {
@@ -112,6 +209,31 @@ export default function ResumeEnhancer() {
       }
     })
   }, [])
+
+  // Step 1 speed-up: save JD shortly after paste so server can parse it before Enhance
+  useEffect(() => {
+    if (!sessionId || !jdText.trim()) {
+      setJdPrepStatus('')
+      return undefined
+    }
+    if (jdText.trim() === lastSavedJdRef.current) return undefined
+
+    setJdPrepStatus('Preparing job description…')
+    clearTimeout(jdSaveTimerRef.current)
+    jdSaveTimerRef.current = setTimeout(async () => {
+      const text = jdText.trim()
+      try {
+        await setJD(sessionId, text)
+        lastSavedJdRef.current = text
+        setJdPrepStatus('Job description ready')
+      } catch {
+        setJdPrepStatus('')
+        // Non-blocking — enhance still sends JD and will parse if needed
+      }
+    }, 800)
+
+    return () => clearTimeout(jdSaveTimerRef.current)
+  }, [sessionId, jdText])
 
   const handleUpload = useCallback(async (file) => {
     const lower = file.name.toLowerCase()
@@ -133,6 +255,8 @@ export default function ResumeEnhancer() {
     setEnhancementPlan(null)
     setAtsScore(null)
     setSessionId(null)
+    lastSavedJdRef.current = ''
+    setJdPrepStatus('')
     setUploading(true)
     setStep('uploading')
 
@@ -171,6 +295,17 @@ export default function ResumeEnhancer() {
     setEnhanceStep('analyzing_resume')
 
     try {
+      // Flush pending JD save so enhance can reuse precomputed parse
+      clearTimeout(jdSaveTimerRef.current)
+      if (jdText.trim() && jdText.trim() !== lastSavedJdRef.current) {
+        try {
+          await setJD(sessionId, jdText.trim())
+          lastSavedJdRef.current = jdText.trim()
+        } catch {
+          // enhance still carries jdText
+        }
+      }
+
       const { jobId } = await startEnhance(sessionId, jdText)
       const result = await waitForEnhance(jobId, (status) => {
         if (status.step) setEnhanceStep(status.step)
@@ -201,13 +336,20 @@ export default function ResumeEnhancer() {
     beforeScore: comparisonBefore?.atsScore ?? null,
     afterScore: atsScore,
     scoreDelta: (atsScore ?? 0) - (comparisonBefore?.atsScore ?? 0),
+    beforeBreakdown: comparisonBefore?.scoreBreakdown || null,
+    afterBreakdown: comparison?.scoreBreakdown || null,
     keywordsMatched: comparison.present || [],
     keywordsStrong: comparison.strong || [],
     keywordsWeak: comparison.weak || [],
     keywordsStillMissing: comparison.missing || [],
+    addedKeywords: [],
+    addedBullets: [],
     addedToResume: { skills: [], summary: { added: [], rewritten: [] }, experience: {} },
   } : null)
   const addedFromResults = results?.addedToResume
+  const addedSkills = addedFromResults?.skills || results?.skillsAdded || []
+  const addedBullets = results?.addedBullets || []
+  const addedKeywords = results?.addedKeywords || []
   const showResults = step === 'done' && comparison && results
 
   useEffect(() => {
@@ -277,7 +419,9 @@ export default function ResumeEnhancer() {
                 </span>
                 <div>
                   <h4 className="upload-box__label">Paste Job Description</h4>
-                  <p className="upload-box__sublabel">JD preview shown below</p>
+                  <p className="upload-box__sublabel">
+                    {jdPrepStatus || 'JD preview shown below'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -401,142 +545,95 @@ export default function ResumeEnhancer() {
           </div>
 
           <div className="enhance-results__stack">
-            <article className="feature-result-card">
-              <div className="feature-result-card__body">
-                <span className="feature-result-card__badge">ATS Match</span>
-                <h3 className="feature-result-card__title">How strong is your resume?</h3>
-                <p className="feature-result-card__desc">
-                  Expert score before and after enhancement — structure, impact, and JD alignment.
-                </p>
-                <div className="feature-result-card__stats">
-                  <span className="feature-result-card__stat">
-                    Before <strong>{results.beforeScore ?? '—'}</strong>
-                  </span>
-                  <span className="feature-result-card__stat-arrow">→</span>
-                  <span className="feature-result-card__stat feature-result-card__stat--highlight">
-                    After <strong>{results.afterScore ?? '—'}</strong>
-                  </span>
-                  {results.scoreDelta > 0 && (
-                    <span className="feature-result-card__pill">+{results.scoreDelta} pts</span>
-                  )}
-                </div>
-              </div>
-              <div className="feature-result-card__visual">
-                <ScoreRing score={results.afterScore} gradId="atsScoreGrad" />
-              </div>
-            </article>
+            <AtsScoreCard
+              badge="Before"
+              title="Before score"
+              desc="Original resume vs JD — Skills + Keywords + Bullets = 100. Click a section to see matches."
+              score={results.beforeScore}
+              label="before / 100"
+              gradId="beforeScoreGrad"
+              breakdown={results.beforeBreakdown}
+              activeTab={beforeTab}
+              onTabChange={setBeforeTab}
+            />
 
-            <article className="feature-result-card">
-              <div className="feature-result-card__body">
-                <span className="feature-result-card__badge">Keywords</span>
-                <h3 className="feature-result-card__title">JD keyword alignment</h3>
-                <p className="feature-result-card__desc">
-                  Matching keywords between your resume and the job description.
-                </p>
-                <div className="feature-result-card__stats">
-                  <span className="feature-result-card__pill feature-result-card__pill--green">
-                    {(results.keywordsStrong || []).length} strong
-                  </span>
-                  <span className="feature-result-card__pill feature-result-card__pill--yellow">
-                    {(results.keywordsWeak || []).length} weak
-                  </span>
-                  <span className="feature-result-card__pill feature-result-card__pill--red">
-                    {(results.keywordsStillMissing || []).length} missing
-                  </span>
-                </div>
-                <div className="feature-result-card__tags">
-                  {(results.keywordsMatched || []).slice(0, 10).map((kw) => (
-                    <span key={kw} className="feature-result-card__tag">{kw}</span>
-                  ))}
-                </div>
-              </div>
-              <div className="feature-result-card__visual">
-                <ScoreRing
-                  score={Math.min(100, Math.round(((results.keywordsMatched || []).length / Math.max(1, (results.keywordsMatched || []).length + (results.keywordsStillMissing || []).length)) * 100))}
-                  label="match %"
-                  gradId="kwScoreGrad"
-                />
-              </div>
-            </article>
+            <AtsScoreCard
+              badge="After"
+              title="After score"
+              desc="Enhanced resume vs JD — Skills + Keywords + Bullets = 100. Click a section to see matches."
+              score={results.afterScore}
+              label="after / 100"
+              gradId="afterScoreGrad"
+              breakdown={results.afterBreakdown}
+              delta={results.scoreDelta}
+              activeTab={afterTab}
+              onTabChange={setAfterTab}
+            />
 
+            {/* Card 3 — Added to resume */}
             <article className="feature-result-card feature-result-card--wide">
               <div className="feature-result-card__body feature-result-card__body--scroll">
                 <span className="feature-result-card__badge">Changes Applied</span>
-                <h3 className="feature-result-card__title">Added to your resume</h3>
+                <h3 className="feature-result-card__title">Added to resume</h3>
                 <p className="feature-result-card__desc">
-                  Verified updates in your enhanced DOCX — only what was successfully applied.
+                  Verified updates applied to your enhanced DOCX.
                 </p>
 
-                {addedFromResults?.skills?.length > 0 && (
-                  <div className="enhance-added-block">
-                    <h6 className="enhance-added-block__heading">Skills</h6>
-                    <ul className="enhance-added-list">
-                      {addedFromResults.skills.map(({ skill, category }) => (
-                        <li key={`${category}-${skill}`}>
-                          <span className="enhance-added-list__tag enhance-added-list__tag--new">added</span>
-                          <strong>{skill}</strong>
-                          <span className="enhance-added-list__where">in {category}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {(addedFromResults?.summary?.added?.length > 0 || addedFromResults?.summary?.rewritten?.length > 0) && (
-                  <div className="enhance-added-block">
-                    <h6 className="enhance-added-block__heading">Professional Summary</h6>
-                    <ul className="enhance-added-list">
-                      {addedFromResults.summary.added.map((text) => (
-                        <li key={text}>
-                          <span className="enhance-added-list__tag enhance-added-list__tag--new">added</span>
-                          {text}
-                        </li>
-                      ))}
-                      {addedFromResults.summary.rewritten.map(({ text }) => (
-                        <li key={text}>
-                          <span className="enhance-added-list__tag enhance-added-list__tag--rewrite">written</span>
-                          {text}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {addedFromResults && Object.keys(addedFromResults.experience || {}).length > 0 && (
-                  <div className="enhance-added-block">
-                    <h6 className="enhance-added-block__heading">Experience</h6>
-                    {Object.entries(addedFromResults.experience).map(([company, data]) => (
-                      <div key={company} className="enhance-added-company">
-                        <p className="enhance-added-company__name">{company}</p>
-                        <ul className="enhance-added-list">
-                          {data.added.map((text) => (
-                            <li key={text}>
-                              <span className="enhance-added-list__tag enhance-added-list__tag--new">added</span>
-                              {text}
-                            </li>
-                          ))}
-                          {data.rewritten.map(({ text }) => (
-                            <li key={text}>
-                              <span className="enhance-added-list__tag enhance-added-list__tag--rewrite">written</span>
-                              {text}
-                            </li>
-                          ))}
-                        </ul>
+                <div className="added-sections">
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added skills</h6>
+                    {addedSkills.length > 0 ? (
+                      <div className="added-skills-row">
+                        {addedSkills.map(({ skill, category }) => (
+                          <span key={`${category}-${skill}`} className="added-skill-chip" title={category}>
+                            {skill}
+                          </span>
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      <p className="added-section__empty">No skills added</p>
+                    )}
                   </div>
-                )}
 
-                {!addedFromResults?.skills?.length
-                  && !addedFromResults?.summary?.added?.length
-                  && !addedFromResults?.summary?.rewritten?.length
-                  && (!addedFromResults?.experience || !Object.keys(addedFromResults.experience).length) && (
-                  <p className="enhance-card__empty">No changes could be applied. Try a DOCX with clear sections.</p>
-                )}
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added bullets</h6>
+                    {addedBullets.length > 0 ? (
+                      <ol className="added-bullets-steps">
+                        {addedBullets.map((item, idx) => (
+                          <li key={`${item.section}-${idx}`} className="added-bullets-steps__item">
+                            <span className="added-bullets-steps__num">{idx + 1}</span>
+                            <div className="added-bullets-steps__content">
+                              <span className="added-bullets-steps__where">
+                                {item.section}
+                                {item.rewritten ? ' · rewritten' : ' · added'}
+                              </span>
+                              <p className="added-bullets-steps__text">{item.text}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="added-section__empty">No bullets added</p>
+                    )}
+                  </div>
+
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added keywords</h6>
+                    {addedKeywords.length > 0 ? (
+                      <div className="added-skills-row">
+                        {addedKeywords.map((kw) => (
+                          <span key={kw} className="added-skill-chip added-skill-chip--kw">{kw}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="added-section__empty">No new keywords matched</p>
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="feature-result-card__visual feature-result-card__visual--stats">
                 <div className="feature-result-card__count">
-                  <span>{(addedFromResults?.skills?.length || 0) + (addedFromResults?.summary?.added?.length || 0) + (addedFromResults?.summary?.rewritten?.length || 0) + Object.values(addedFromResults?.experience || {}).reduce((n, e) => n + e.added.length + e.rewritten.length, 0)}</span>
+                  <span>{addedSkills.length + addedBullets.length + addedKeywords.length}</span>
                   <small>total changes</small>
                 </div>
               </div>

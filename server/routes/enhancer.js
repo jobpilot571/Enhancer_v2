@@ -8,10 +8,9 @@ import {
   updateSession,
   readFile,
 } from '../store/sessionStore.js'
-import { extractResumeText } from '../services/resumeExtract.js'
-import { parseResume } from '../services/openaiService.js'
 import { createEnhanceJob, getEnhanceJob } from '../store/enhanceJobStore.js'
 import { runEnhanceJob } from '../services/enhanceWorker.js'
+import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
 
 const router = Router()
 
@@ -29,16 +28,7 @@ function mimeForType(fileType) {
   return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 }
 
-async function ensureResumeData(session) {
-  if (session.resumeData) return session.resumeData
-  const buffer = readFile(session.originalPath)
-  const resumeText = session.resumeText || await extractResumeText(buffer, session.fileType)
-  const resumeData = await parseResume(resumeText)
-  updateSession(session.sessionId, { resumeText, resumeData })
-  return resumeData
-}
-
-// 1. Fast upload — save file only, no AI
+// 1. Fast upload — save file, then precompute resume parse in background
 router.post('/upload', upload.single('resume'), (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
@@ -54,26 +44,29 @@ router.post('/upload', upload.single('resume'), (req, res, next) => {
       fileType: session.fileType,
       uploadStatus: 'success',
     })
+
+    // Warm cache while user pastes JD — does not block upload response
+    precomputeResume(session.sessionId)
   } catch (err) {
     next(err)
   }
 })
 
-// 2. Background resume extraction (AI) — not used for preview
+// 2. Explicit resume extraction (optional; upload already precomputes)
 router.post('/extract/resume', async (req, res, next) => {
   try {
     const { sessionId } = req.body
     const session = getSession(sessionId)
     if (!session) return res.status(404).json({ error: 'Session not found' })
 
-    const resumeData = await ensureResumeData(session)
+    const resumeData = await ensureResumeData(sessionId)
     res.json({ resumeData, extracted: true })
   } catch (err) {
     next(err)
   }
 })
 
-// 3. Save JD text (textarea preview is client-side)
+// 3. Save JD text + precompute JD parse in background
 router.put('/jd', (req, res, next) => {
   try {
     const { sessionId, jdText } = req.body
@@ -82,8 +75,18 @@ router.put('/jd', (req, res, next) => {
     }
     const session = getSession(sessionId)
     if (!session) return res.status(404).json({ error: 'Session not found' })
-    updateSession(sessionId, { jdText: jdText.trim(), jdData: null })
-    res.json({ ok: true })
+
+    const nextText = jdText.trim()
+    const changed = session.jdText?.trim() !== nextText
+    if (changed) {
+      updateSession(sessionId, { jdText: nextText, jdData: null, jdParseError: null })
+      console.log(`[jd] saved session=${sessionId} chars=${nextText.length}`)
+      precomputeJd(sessionId)
+    } else if (!session.jdData) {
+      precomputeJd(sessionId)
+    }
+
+    res.json({ ok: true, cached: !changed && !!session.jdData })
   } catch (err) {
     next(err)
   }
