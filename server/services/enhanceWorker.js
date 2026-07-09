@@ -9,6 +9,7 @@ import { patchDocx, filterEnhancementPlan, buildMatchAnalysis, mergeExperienceAd
 import { compareResumeToJD, buildEnhancedResumeData } from './compareService.js'
 import { createEnhancementPlan, createMissingExperienceBullets, createSummaryEnhancement } from './openaiService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
+import PizZip from 'pizzip'
 
 function log(jobId, message) {
   console.log(`[enhance:${jobId.slice(0, 8)}] ${message}`)
@@ -83,8 +84,9 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         (r) => !r.company || ['summary', 'professional summary'].includes(r.company.toLowerCase()),
       )
 
-    // Step 3: one repair pass only (no second retry). Company + summary fills run in parallel.
-    if (missingCompanies.length || !hasSummaryAction) {
+    // Repair only when coverage is incomplete — skip extra AI calls when plan is already good
+    const needsRepair = missingCompanies.length > 0 || !hasSummaryAction
+    if (needsRepair) {
       log(
         jobId,
         `repair pass: ${missingCompanies.length} companies, summary=${hasSummaryAction ? 'ok' : 'needed'}`,
@@ -115,14 +117,11 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
           ...(summaryFill.summaryBullets || []),
         ], resumeData, 2)
 
-        // If AI returned only rewrites, keep them; if those fail later, we still have additions when possible
         const rewriteCandidates = [
           ...(enhancementPlan.bulletRewrites || []),
           ...(summaryFill.bulletRewrites || []),
         ]
 
-        // Prefer new summary bullets. If AI only returned rewrites with no usable additions,
-        // convert rewrite replacements into summaryBullets so DOCX can still insert them.
         let summaryBullets = mergedSummary
         if (!summaryBullets.length) {
           const fromRewrites = keepSummaryBullets(
@@ -145,11 +144,12 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
           bulletRewrites: rewriteCandidates,
         }, resumeData, comparison)
 
-        // filter can still soft-clear; force-keep soft-deduped summary bullets
         if (!enhancementPlan.summaryBullets?.length && summaryBullets.length) {
           enhancementPlan.summaryBullets = summaryBullets
         }
       }
+    } else {
+      log(jobId, 'skipping repair pass — plan already covers summary + companies')
     }
 
     // Final safety: if summary still empty but plan had rewrite-only summary, leave as-is;
@@ -169,14 +169,17 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     log(jobId, `plan: ${enhancementPlan.summaryBullets?.length || 0} summary, ${enhancementPlan.experienceAdditions?.length || 0} companies with bullets, ${enhancementPlan.skillsToAdd?.length || 0} skills`)
     log(jobId, 'patching DOCX')
     const originalBuffer = readFile(session.originalPath)
+
+    // One patch with highlights, then strip shading for download (same formatting, half the DOCX work)
     const { buffer: previewBuffer, applied } = patchDocx(originalBuffer, enhancementPlan, {
       highlight: true,
       resumeData,
     })
-    const { buffer: downloadBuffer } = patchDocx(originalBuffer, enhancementPlan, {
-      highlight: false,
-      resumeData,
-    })
+    const downloadZip = new PizZip(previewBuffer)
+    const downloadXml = downloadZip.file('word/document.xml').asText()
+      .replace(/<w:shd[^/]*\/>/g, '')
+    downloadZip.file('word/document.xml', downloadXml)
+    const downloadBuffer = downloadZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
     setEnhancedDocx(sessionId, downloadBuffer, previewBuffer)
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)

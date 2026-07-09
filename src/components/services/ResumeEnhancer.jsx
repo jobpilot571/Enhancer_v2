@@ -312,7 +312,17 @@ export default function ResumeEnhancer() {
       })
 
       setComparison(result.comparison)
-      setMatchAnalysis(result.matchAnalysis)
+      setMatchAnalysis({
+        ...(result.matchAnalysis || {}),
+        beforeBreakdown: result.matchAnalysis?.beforeBreakdown
+          || result.beforeBreakdown
+          || result.comparisonBefore?.scoreBreakdown
+          || null,
+        afterBreakdown: result.matchAnalysis?.afterBreakdown
+          || result.afterBreakdown
+          || result.comparison?.scoreBreakdown
+          || null,
+      })
       setEnhancementPlan(result.enhancementPlan)
       setAtsScore(result.atsScore)
       if (result.comparisonBefore) {
@@ -350,6 +360,13 @@ export default function ResumeEnhancer() {
   const addedSkills = addedFromResults?.skills || results?.skillsAdded || []
   const addedBullets = results?.addedBullets || []
   const addedKeywords = results?.addedKeywords || []
+  // Prefer explicit breakdowns from matchAnalysis (production-safe)
+  const beforeBreakdown = results?.beforeBreakdown
+    || comparisonBefore?.scoreBreakdown
+    || null
+  const afterBreakdown = results?.afterBreakdown
+    || comparison?.scoreBreakdown
+    || null
   const showResults = step === 'done' && comparison && results
 
   useEffect(() => {
@@ -552,7 +569,7 @@ export default function ResumeEnhancer() {
               score={results.beforeScore}
               label="before / 100"
               gradId="beforeScoreGrad"
-              breakdown={results.beforeBreakdown}
+              breakdown={beforeBreakdown}
               activeTab={beforeTab}
               onTabChange={setBeforeTab}
             />
@@ -564,7 +581,7 @@ export default function ResumeEnhancer() {
               score={results.afterScore}
               label="after / 100"
               gradId="afterScoreGrad"
-              breakdown={results.afterBreakdown}
+              breakdown={afterBreakdown}
               delta={results.scoreDelta}
               activeTab={afterTab}
               onTabChange={setAfterTab}

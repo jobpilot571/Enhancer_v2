@@ -347,14 +347,14 @@ function extractParagraphTemplate(xml, paragraphEnd, extraBoldPhrases = []) {
   const chunk = getParagraphChunk(xml, paragraphEnd)
   if (!chunk) {
     return {
-      pPr: '',
+      pPr: '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>',
       rPr: '',
       baseRPr: '',
       boldRPr: '',
       keywordBold: false,
       boldPhrases: [],
       hasNumPr: false,
-      literalPrefix: '• ',
+      literalPrefix: '',
       pOpen: '<w:p>',
     }
   }
@@ -362,11 +362,13 @@ function extractParagraphTemplate(xml, paragraphEnd, extraBoldPhrases = []) {
   const openMatch = chunk.match(/^<w:p\b[^>]*>/)
   const pOpen = openMatch ? openMatch[0] : '<w:p>'
   const pPrMatch = chunk.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)
-  const pPr = stripBoldFromPPr(pPrMatch ? pPrMatch[0] : '')
+  // Keep original spacing/indent/numPr EXACTLY — only strip bold/underline from nested rPr in pPr
+  let pPr = pPrMatch ? pPrMatch[0] : '<w:pPr></w:pPr>'
+  pPr = pPr.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, (rPr) => stripUnderline(stripBold(rPr)))
+
   const hasNumPr = /w:numPr/.test(pPr)
     || /w:numPr/.test(chunk)
     || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(chunk)
-  // Only copy a literal • if the source bullet itself uses a glyph (not Word numbering)
   const sourceGlyph = detectLiteralBulletPrefix(chunk)
   const literalPrefix = hasNumPr ? '' : (sourceGlyph || '')
   const styles = extractRunStyles(chunk)
@@ -1379,8 +1381,8 @@ export function ensureSkillsInBullets(plan) {
 }
 
 export function buildMatchAnalysis(beforeComparison, afterComparison, applied) {
-  const expAdded = Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)
-  const expRewritten = Object.values(applied.experience).reduce((n, e) => n + e.rewritten.length, 0)
+  const expAdded = Object.values(applied.experience || {}).reduce((n, e) => n + (e.added?.length || 0), 0)
+  const expRewritten = Object.values(applied.experience || {}).reduce((n, e) => n + (e.rewritten?.length || 0), 0)
 
   const beforePresent = new Set((beforeComparison.present || []).map((k) => k.toLowerCase().trim()))
   const addedKeywords = (afterComparison.present || []).filter(
@@ -1396,21 +1398,70 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied) {
     ]),
   ]
 
+  function compactBreakdown(comparison) {
+    const raw = comparison?.scoreBreakdown
+    if (!raw) {
+      // Fallback so UI never shows "—" when only legacy comparison fields exist
+      const matched = (comparison?.present || []).length
+      const missing = (comparison?.missing || []).length
+      const total = matched + missing
+      const pct = total ? Math.round((matched / total) * 100) : 0
+      return {
+        skills: { matched, total, pct, score: 0 },
+        keywords: { matched, total, pct, score: 0 },
+        bullets: { matched: 0, total: 0, pct: 0, score: 0 },
+        weights: { skills: 33.3, keywords: 33.3, bullets: 33.3 },
+        details: { skills: [], keywords: [], bullets: [] },
+      }
+    }
+    return {
+      skills: {
+        matched: raw.skills?.matched ?? 0,
+        total: raw.skills?.total ?? 0,
+        pct: raw.skills?.pct ?? 0,
+        score: raw.skills?.score ?? 0,
+      },
+      keywords: {
+        matched: raw.keywords?.matched ?? 0,
+        total: raw.keywords?.total ?? 0,
+        pct: raw.keywords?.pct ?? 0,
+        score: raw.keywords?.score ?? 0,
+      },
+      bullets: {
+        matched: raw.bullets?.matched ?? 0,
+        total: raw.bullets?.total ?? 0,
+        pct: raw.bullets?.pct ?? 0,
+        coveragePct: raw.bullets?.coveragePct ?? raw.bullets?.pct ?? 0,
+        score: raw.bullets?.score ?? 0,
+      },
+      weights: raw.weights || { skills: 33.3, keywords: 33.3, bullets: 33.3 },
+      // Cap detail lists so production JSON stays small/reliable
+      details: {
+        skills: (raw.details?.skills || []).slice(0, 40),
+        keywords: (raw.details?.keywords || []).slice(0, 40),
+        bullets: (raw.details?.bullets || []).slice(0, 25),
+      },
+    }
+  }
+
+  const beforeBreakdown = compactBreakdown(beforeComparison)
+  const afterBreakdown = compactBreakdown(afterComparison)
+
   return {
     beforeScore: beforeComparison.atsScore,
     afterScore: afterComparison.atsScore,
     scoreDelta: afterComparison.atsScore - beforeComparison.atsScore,
-    beforeBreakdown: beforeComparison.scoreBreakdown || null,
-    afterBreakdown: afterComparison.scoreBreakdown || null,
+    beforeBreakdown,
+    afterBreakdown,
     keywordsMatched: afterComparison.present || [],
     keywordsStrong: afterComparison.strong || [],
     keywordsWeak: afterComparison.weak || [],
     keywordsStillMissing: afterComparison.missing || [],
     addedKeywords,
     addedBullets,
-    skillsAdded: applied.skills,
-    summaryBulletsAdded: applied.summary.added.length,
-    summaryRewrites: applied.summary.rewritten.length,
+    skillsAdded: applied.skills || [],
+    summaryBulletsAdded: applied.summary?.added?.length || 0,
+    summaryRewrites: applied.summary?.rewritten?.length || 0,
     experienceBulletsAdded: expAdded,
     bulletsRewritten: expRewritten,
     addedToResume: applied,

@@ -217,6 +217,33 @@ export async function createEnhancementPlan(resumeData, jdData, comparison) {
     ...(comparison.missing || []),
   ].slice(0, 20)
 
+  // Compact payload — faster AI, same quality rules
+  const compactResume = {
+    name: resumeData.name,
+    summaryBullets: (resumeData.summaryBullets || []).slice(0, 8),
+    skills: [...new Set([...(resumeData.skills || []), ...(resumeData.technicalSkills || [])])].slice(0, 40),
+    headings: (resumeData.headings || []).slice(0, 20),
+    experience: (resumeData.experience || []).map((e) => ({
+      company: e.company,
+      title: e.title,
+      bullets: (e.bullets || []).slice(0, 6),
+    })),
+  }
+  const compactJd = {
+    roleTitle: jdData.roleTitle,
+    requiredSkills: (jdData.requiredSkills || []).slice(0, 20),
+    preferredSkills: (jdData.preferredSkills || []).slice(0, 12),
+    toolsTechnologies: (jdData.toolsTechnologies || []).slice(0, 20),
+    mustHaveKeywords: (jdData.mustHaveKeywords || []).slice(0, 20),
+    domainKeywords: (jdData.domainKeywords || []).slice(0, 12),
+    responsibilities: (jdData.responsibilities || []).slice(0, 12),
+  }
+  const compactComparison = {
+    missing: (comparison.missing || []).slice(0, 25),
+    present: (comparison.present || []).slice(0, 20),
+    atsScore: comparison.atsScore,
+  }
+
   return jsonCompletion(
     `You are an expert resume writer. Create an enhancement plan to achieve 99% alignment with the job description.
 
@@ -237,7 +264,7 @@ Enhancement rules (ALL mandatory):
 - experienceAdditions.company must match resume experience company names exactly.
 - strategy: brief plan covering summary, each company, and skills.
 - Completeness check before answering: summary present and unique? every company in experienceAdditions? every missing skill in skillsByCategory AND mentioned in a bullet? If not, fix before returning.`,
-    `Resume data:\n${JSON.stringify(resumeData, null, 2)}\n\nJD data:\n${JSON.stringify(jdData, null, 2)}\n\nComparison:\n${JSON.stringify(comparison, null, 2)}`,
+    `Resume:\n${JSON.stringify(compactResume)}\n\nJD:\n${JSON.stringify(compactJd)}\n\nComparison:\n${JSON.stringify(compactComparison)}`,
     'enhancement_plan',
     PLAN_SCHEMA,
   )

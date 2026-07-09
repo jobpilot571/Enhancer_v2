@@ -141,6 +141,13 @@ router.get('/enhance-status/:jobId', (req, res, next) => {
       payload.comparison = job.result.comparison
       payload.comparisonBefore = job.result.comparisonBefore
       payload.matchAnalysis = job.result.matchAnalysis
+      // Explicit top-level fields so UI cards never miss breakdown data
+      payload.beforeBreakdown = job.result.matchAnalysis?.beforeBreakdown
+        || job.result.comparisonBefore?.scoreBreakdown
+        || null
+      payload.afterBreakdown = job.result.matchAnalysis?.afterBreakdown
+        || job.result.comparison?.scoreBreakdown
+        || null
       payload.enhancementPlan = job.result.enhancementPlan
       payload.atsScore = job.result.atsScore
       payload.sessionId = job.result.sessionId
