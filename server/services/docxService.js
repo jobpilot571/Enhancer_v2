@@ -194,6 +194,25 @@ function getRunRPr(runXml) {
   return rPrMatch ? stripShading(rPrMatch[0]) : ''
 }
 
+function mergeFontIntoRPr(targetRPr, sourceRPr) {
+  let rPr = targetRPr || ''
+  if (!sourceRPr) return rPr
+  if (!rPr) return sourceRPr
+
+  const copyTag = (tag) => {
+    if (new RegExp(`<w:${tag}\\b`).test(rPr)) return
+    const m = sourceRPr.match(new RegExp(`<w:${tag}\\b[^/]*/>|<w:${tag}\\b[\\s\\S]*?</w:${tag}>`))
+    if (m) rPr = rPr.replace('</w:rPr>', `${m[0]}</w:rPr>`)
+  }
+  copyTag('rFonts')
+  copyTag('sz')
+  copyTag('szCs')
+  copyTag('color')
+  copyTag('kern')
+  copyTag('spacing')
+  return rPr
+}
+
 /**
  * Read original resume run styles:
  * - baseRPr: normal body text (never whole-bullet bold)
@@ -207,6 +226,7 @@ function extractRunStyles(chunk) {
 
   let baseRPr = ''
   let boldRPr = ''
+  let anyFontRPr = ''
   const boldPhrases = []
   let hasNormalText = false
   let boldKeywordRuns = 0
@@ -214,14 +234,14 @@ function extractRunStyles(chunk) {
   for (const run of runs) {
     const text = getRunText(run)
     const cleaned = text.replace(/^[•\u2022▪◦\-\*\s]+/, '').trim()
+    const rPr = getRunRPr(run)
+    if (rPr && /w:rFonts|w:sz/.test(rPr) && !anyFontRPr) anyFontRPr = rPr
     if (!cleaned) continue
 
-    const rPr = getRunRPr(run)
     const bold = isBoldRPr(rPr)
 
     if (bold) {
       if (!boldRPr) boldRPr = rPr
-      // Keyword-sized bold only — skip whole-bullet bold runs
       const isKeywordSized = cleaned.length >= 2
         && cleaned.length <= 48
         && cleaned.length < paraLen * 0.55
@@ -235,22 +255,25 @@ function extractRunStyles(chunk) {
     }
   }
 
-  // Resume bolds only keywords when normal body text exists alongside short bold runs
   const keywordBold = hasNormalText && boldKeywordRuns > 0
 
-  // If we only found bold runs, strip bold for body text (don't make whole new bullets bold)
   if (!baseRPr && boldRPr) {
     baseRPr = stripBold(boldRPr)
   }
-  // Always ensure body style is not bold — keyword bolding is applied per-run only
+  baseRPr = stripBold(baseRPr || '')
+  // Guarantee font family/size so Word does not fall back to a different font
+  baseRPr = mergeFontIntoRPr(baseRPr || '<w:rPr></w:rPr>', anyFontRPr || boldRPr)
   baseRPr = stripBold(baseRPr)
+  if (!baseRPr.includes('</w:rPr>')) {
+    baseRPr = baseRPr ? `<w:rPr>${baseRPr}</w:rPr>` : ''
+  }
 
   if (!boldRPr && baseRPr) {
     boldRPr = baseRPr.includes('</w:rPr>')
       ? baseRPr.replace('</w:rPr>', '<w:b/><w:bCs/></w:rPr>')
       : '<w:rPr><w:b/><w:bCs/></w:rPr>'
   } else if (boldRPr) {
-    // Keep fonts from bold run but that's fine for keyword spans
+    boldRPr = mergeFontIntoRPr(boldRPr, baseRPr)
   }
 
   return {
@@ -529,6 +552,30 @@ function getCompanyContentEnds(xml, block) {
   return bullets.length ? bullets : substantive
 }
 
+/** Keep only the dominant bullet layout in a block so inserts stay on one vertical line. */
+function filterMajorityLayoutEnds(xml, bulletEnds) {
+  const usable = []
+  for (const end of bulletEnds || []) {
+    const chunk = getParagraphChunk(xml, end)
+    if (!isUsableBulletTemplateChunk(chunk)) continue
+    usable.push({ end, key: getBulletLayoutKey(chunk) })
+  }
+  if (!usable.length) return bulletEnds || []
+
+  const counts = new Map()
+  for (const u of usable) counts.set(u.key, (counts.get(u.key) || 0) + 1)
+  let bestKey = usable[0].key
+  let bestCount = 0
+  for (const [key, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count
+      bestKey = key
+    }
+  }
+  const filtered = usable.filter((u) => u.key === bestKey).map((u) => u.end)
+  return filtered.length ? filtered : usable.map((u) => u.end)
+}
+
 function resolveSummaryInsertPoint(xml, summaryStart, summaryEnd) {
   // Prefer real bullets only — never treat a prose summary paragraph as a bullet template source
   let bulletEnds = getBulletParagraphEnds(xml, summaryStart, summaryEnd)
@@ -539,13 +586,14 @@ function resolveSummaryInsertPoint(xml, summaryStart, summaryEnd) {
     })
     if (maybeBullets.length) bulletEnds = maybeBullets
   }
+  bulletEnds = filterMajorityLayoutEnds(xml, bulletEnds)
 
   let insertAt = getMiddleInsertionPoint(bulletEnds)
   if (!insertAt && bulletEnds.length >= 2) {
     insertAt = bulletEnds[Math.max(0, Math.floor(bulletEnds.length / 2) - 1)]
   }
 
-  // Thin / prose summary: insert after the first body paragraph (or heading), using Experience bullet style later
+  // Thin / prose summary: insert after the first body paragraph (or heading)
   if (!insertAt) {
     const allEnds = getParagraphEndsInRange(xml, summaryStart, summaryEnd)
     if (allEnds.length >= 1) {
@@ -562,7 +610,7 @@ function resolveSummaryInsertPoint(xml, summaryStart, summaryEnd) {
 }
 
 function resolveExperienceInsertPoint(xml, block) {
-  const bulletEnds = getCompanyContentEnds(xml, block)
+  let bulletEnds = filterMajorityLayoutEnds(xml, getCompanyContentEnds(xml, block))
   let insertAt = getMiddleInsertionPoint(bulletEnds)
   if (!insertAt && bulletEnds.length >= 2) {
     insertAt = bulletEnds[0]
@@ -604,21 +652,19 @@ function getParagraphSpacingMetrics(chunkOrPPr) {
   }
 }
 
-function replaceParagraphSpacing(pPr, spacingSourcePPr) {
-  if (!pPr) return spacingSourcePPr || ''
-  if (!spacingSourcePPr) return pPr
-
-  const srcSpacing = spacingSourcePPr.match(/<w:spacing\b[^/]*\/>/)
-  if (!srcSpacing) {
-    return pPr.replace(/<w:spacing\b[^/]*\/>/g, '')
-  }
-  if (/<w:spacing\b/.test(pPr)) {
-    return pPr.replace(/<w:spacing\b[^/]*\/>/g, srcSpacing[0])
-  }
-  if (/<\/w:pPr>/.test(pPr)) {
-    return pPr.replace('</w:pPr>', `${srcSpacing[0]}</w:pPr>`)
-  }
-  return pPr
+/** List level + left indent — used to keep new bullets on the same vertical start line. */
+function getBulletLayoutKey(chunk) {
+  if (!chunk) return 'none'
+  const ilvl = /w:ilvl\s[^>]*w:val="(\d+)"/.exec(chunk)
+  const left = /w:ind\b[^>]*w:left="(\d+)"/.exec(chunk)
+  const hanging = /w:ind\b[^>]*w:hanging="(\d+)"/.exec(chunk)
+  const hasNum = /w:numPr/.test(chunk) ? '1' : '0'
+  return [
+    hasNum,
+    ilvl ? ilvl[1] : 'x',
+    left ? left[1] : 'x',
+    hanging ? hanging[1] : 'x',
+  ].join(':')
 }
 
 function isUsableBulletTemplateChunk(chunk) {
@@ -629,49 +675,71 @@ function isUsableBulletTemplateChunk(chunk) {
   if (!isBulletParagraph(chunk) && !detectLiteralBulletPrefix(chunk) && !/w:numPr/.test(chunk)) {
     return false
   }
+  // Skip nested/sub-bullets when possible — they sit further right than main bullets
+  const ilvl = /w:ilvl\s[^>]*w:val="(\d+)"/.exec(chunk)
+  if (ilvl && parseInt(ilvl[1], 10) > 0) return false
   return true
 }
 
-function pickBulletTemplate(xml, bulletEnds, fallbackEnd) {
-  const candidates = [...(bulletEnds || [])]
-  if (fallbackEnd && !candidates.includes(fallbackEnd)) candidates.push(fallbackEnd)
+/**
+ * Cap absurd before/after spacing that creates half-page / full-page gaps.
+ * Keeps original spacing when it is already resume-normal.
+ */
+function tightenTemplateSpacing(template) {
+  if (!template?.pPr) return template
+  const metrics = getParagraphSpacingMetrics(template.pPr)
+  const needsTighten = metrics.after > 120 || metrics.before > 120
+    || (metrics.line && metrics.lineRule === 'auto' && metrics.line >= 360)
+  if (!needsTighten) return template
 
-  let best = null
-  let bestScore = -1
-  for (const end of candidates) {
-    const chunk = getParagraphChunk(xml, end)
-    if (!isUsableBulletTemplateChunk(chunk)) continue
-
-    let score = 0
-    if (/w:numPr/.test(chunk)) score += 6
-    if (detectLiteralBulletPrefix(chunk)) score += 5
-    if (/w:ind\b/.test(chunk)) score += 2
-    if (getPlainTextFromParagraph(chunk).length > 40) score += 1
-
-    const spacing = getParagraphSpacingMetrics(chunk)
-    if (spacing.after <= 80) score += 4
-    else if (spacing.after <= 120) score += 2
-    else if (spacing.after > 160) score -= 5
-    if (spacing.before > 120) score -= 3
-    if (spacing.line && spacing.lineRule === 'auto' && spacing.line >= 360) score -= 4
-
-    const styles = extractRunStyles(chunk)
-    if (styles.baseRPr && !isBoldRPr(styles.baseRPr)) score += 2
-    if (styles.keywordBold) score += 1
-    if (/w:b[\s/>]/.test(chunk) && getPlainTextFromParagraph(chunk).length < 60) score -= 2
-
-    if (score > bestScore) {
-      bestScore = score
-      best = end
-    }
+  let pPr = template.pPr
+  if (/<w:spacing\b/.test(pPr)) {
+    pPr = pPr.replace(/<w:spacing\b[^/]*\/>/g, '<w:spacing w:before="0" w:after="60" w:line="240" w:lineRule="auto"/>')
+  } else if (/<\/w:pPr>/.test(pPr)) {
+    pPr = pPr.replace('</w:pPr>', '<w:spacing w:before="0" w:after="60"/></w:pPr>')
   }
-
-  if (!best) return null
-  const sectionPhrases = collectBoldPhrasesFromEnds(xml, candidates)
-  return extractParagraphTemplate(xml, best, sectionPhrases)
+  return { ...template, pPr }
 }
 
-/** Find a real list bullet anywhere in the doc (prefer Experience) for spacing/indent clone. */
+/**
+ * Clone ONLY a sibling bullet in the same section/block.
+ * Never borrow indent/font from another section (that caused staggered bullets + font flips).
+ */
+function pickNearestSiblingTemplate(xml, bulletEnds, insertAt) {
+  const usable = []
+  for (const end of bulletEnds || []) {
+    const chunk = getParagraphChunk(xml, end)
+    if (!isUsableBulletTemplateChunk(chunk)) continue
+    usable.push({ end, chunk, key: getBulletLayoutKey(chunk) })
+  }
+  if (!usable.length) return null
+
+  // Prefer the layout used by the majority of bullets in this block
+  const keyCounts = new Map()
+  for (const u of usable) {
+    keyCounts.set(u.key, (keyCounts.get(u.key) || 0) + 1)
+  }
+  let majorityKey = usable[0].key
+  let majorityCount = 0
+  for (const [key, count] of keyCounts) {
+    if (count > majorityCount) {
+      majorityCount = count
+      majorityKey = key
+    }
+  }
+  const sameLayout = usable.filter((u) => u.key === majorityKey)
+  const pool = sameLayout.length ? sameLayout : usable
+
+  // Nearest sibling to the insert point (same vertical start line as neighbors)
+  const anchor = insertAt || pool[0].end
+  pool.sort((a, b) => Math.abs(a.end - anchor) - Math.abs(b.end - anchor))
+  const chosen = pool[0]
+
+  const sectionPhrases = collectBoldPhrasesFromEnds(xml, pool.map((u) => u.end))
+  return tightenTemplateSpacing(extractParagraphTemplate(xml, chosen.end, sectionPhrases))
+}
+
+/** Absolute last resort when a section has zero bullets (e.g. prose-only summary). */
 function findDocumentBulletTemplate(xml) {
   const regions = []
   const expStart = findSectionStart(xml, SECTION_ANCHORS.experience)
@@ -682,85 +750,54 @@ function findDocumentBulletTemplate(xml) {
   if (sumStart !== -1) {
     regions.push([sumStart, findNextSectionStart(xml, sumStart)])
   }
-  regions.push([0, xml.length])
 
   for (const [start, end] of regions) {
     const ends = getBulletParagraphEnds(xml, start, end)
-    const template = pickBulletTemplate(xml, ends, null)
+    const template = pickNearestSiblingTemplate(xml, ends, ends[0] || null)
     if (template) return template
   }
   return null
 }
 
-function alignTemplateSpacing(template, referenceTemplate) {
-  if (!template) return null
-  if (!referenceTemplate?.pPr) return template
+function resolveBulletTemplate(xml, bulletEnds, insertAt) {
+  // 1) Always prefer a real sibling in THIS block — same indent + font as existing lines
+  let template = pickNearestSiblingTemplate(xml, bulletEnds, insertAt)
+  if (template) return template
 
-  if (referenceTemplate.hasNumPr && !template.hasNumPr) {
-    return {
-      ...template,
-      pPr: referenceTemplate.pPr,
-      hasNumPr: referenceTemplate.hasNumPr,
-      literalPrefix: referenceTemplate.literalPrefix,
-      pOpen: referenceTemplate.pOpen || template.pOpen,
-      baseRPr: template.baseRPr || referenceTemplate.baseRPr,
-      boldRPr: template.boldRPr || referenceTemplate.boldRPr,
-      keywordBold: template.keywordBold || referenceTemplate.keywordBold,
-      boldPhrases: (template.boldPhrases?.length ? template.boldPhrases : referenceTemplate.boldPhrases) || [],
-    }
-  }
-
-  return {
-    ...template,
-    pPr: replaceParagraphSpacing(template.pPr || '<w:pPr></w:pPr>', referenceTemplate.pPr),
-  }
-}
-
-function resolveBulletTemplate(xml, bulletEnds, fallbackEnd) {
-  const localEnds = (bulletEnds || []).filter((end) => {
-    const chunk = getParagraphChunk(xml, end)
-    return isUsableBulletTemplateChunk(chunk)
-  })
-
-  let template = pickBulletTemplate(xml, localEnds, null)
+  // 2) No local bullets: clone Experience/Summary bullet style, then tighten gaps
   const docTemplate = findDocumentBulletTemplate(xml)
-
-  if (!template && docTemplate) {
-    template = {
+  if (docTemplate) {
+    return tightenTemplateSpacing({
       ...docTemplate,
       boldPhrases: uniqueBoldPhrases([
         ...(docTemplate.boldPhrases || []),
         ...collectBoldPhrasesFromEnds(xml, bulletEnds || []),
       ]),
       keywordBold: docTemplate.keywordBold || (docTemplate.boldPhrases || []).length > 0,
-    }
-  } else if (template && docTemplate) {
-    const localAfter = getParagraphSpacingMetrics(template.pPr || '').after
-    const docAfter = getParagraphSpacingMetrics(docTemplate.pPr || '').after
-    if (localAfter > 120 && docAfter <= localAfter) {
-      template = alignTemplateSpacing(template, docTemplate)
-    }
+    })
   }
 
-  // Last resort: never inherit prose paragraph gaps — force tight spacing
-  if (!template && fallbackEnd) {
-    const weak = extractParagraphTemplate(xml, fallbackEnd)
+  // 3) Last resort: clone the paragraph at insertAt but force tight spacing (never keep huge gaps)
+  if (insertAt) {
+    const weak = extractParagraphTemplate(xml, insertAt)
     if (weak) {
       let pPr = weak.pPr || '<w:pPr></w:pPr>'
       if (/<w:spacing\b/.test(pPr)) {
-        pPr = pPr.replace(/<w:spacing\b[^/]*\/>/g, '<w:spacing w:before="0" w:after="0"/>')
+        pPr = pPr.replace(/<w:spacing\b[^/]*\/>/g, '<w:spacing w:before="0" w:after="60"/>')
       } else if (/<\/w:pPr>/.test(pPr)) {
-        pPr = pPr.replace('</w:pPr>', '<w:spacing w:before="0" w:after="0"/></w:pPr>')
+        pPr = pPr.replace('</w:pPr>', '<w:spacing w:before="0" w:after="60"/></w:pPr>')
+      } else {
+        pPr = '<w:pPr><w:spacing w:before="0" w:after="60"/></w:pPr>'
       }
-      template = {
+      return {
         ...weak,
         pPr,
-        literalPrefix: weak.hasNumPr ? '' : (weak.literalPrefix || ''),
+        literalPrefix: weak.hasNumPr ? '' : (weak.literalPrefix || '• '),
       }
     }
   }
 
-  return template
+  return null
 }
 
 function getSummaryParagraphEnds(xml, start, end) {
@@ -1556,7 +1593,7 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
       const { insertAt, bulletEnds } = resolveExperienceInsertPoint(xml, block)
       if (!insertAt || !bulletEnds.length) continue
 
-      const template = resolveBulletTemplate(xml, bulletEnds, bulletEnds[0])
+      const template = resolveBulletTemplate(xml, bulletEnds, insertAt)
       if (!template) continue
       const companyApplied = ensureExperienceEntry(applied, expEntry.company)
       xml = insertBulletsAt(xml, insertAt, bullets, template, mark, companyApplied.added)
