@@ -17,6 +17,10 @@ const ENHANCE_STEP_LABELS = {
 }
 
 async function readErrorMessage(res) {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) {
+    return 'API route not configured — redeploy Vercel with vercel.json API proxy, or set VITE_API_BASE to your Render URL.'
+  }
   try {
     const data = await res.json()
     return data.error || res.statusText
