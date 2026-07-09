@@ -2295,6 +2295,11 @@ input, select, textarea { font-family: inherit; }
   color: #1d4ed8;
   font-size: 0.8125rem;
 }
+.enhancer-notice--warn {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
+}
 .enhancer-progress {
   text-align: center;
   margin-top: 10px;

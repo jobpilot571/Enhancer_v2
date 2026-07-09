@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: jobpilot-resume-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: ALLOWED_ORIGINS
+        value: "https://enhancer-v2.vercel.app,https://jobpilot.ai"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_PROVIDER_ORDER
+        value: "openai,groq,claude,gemini"

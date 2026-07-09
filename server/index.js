@@ -7,9 +7,41 @@ import { getConfiguredProviders } from './services/aiProvider.js'
 const app = express()
 const PORT = process.env.PORT || 3001
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }))
+function buildCorsOrigin() {
+  const fromEnv = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+
+  const defaults = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:4173',
+  ]
+
+  const allowed = new Set([...defaults, ...fromEnv])
+
+  return (origin, callback) => {
+    if (!origin) return callback(null, true)
+    if (allowed.has(origin) || allowed.has('*')) return callback(null, true)
+    if (/^https:\/\/[\w-]+\.vercel\.app$/.test(origin)) return callback(null, true)
+    callback(null, false)
+  }
+}
+
+app.use(cors({ origin: buildCorsOrigin(), credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/api/enhancer', enhancerRoutes)
+
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'JobPilot Resume Enhancer API',
+    status: 'running',
+    message: 'This is the backend API only. Open the frontend on Vercel to use the app.',
+    health: '/api/health',
+    api: '/api/enhancer',
+  })
+})
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -25,5 +57,5 @@ app.use((err, _req, res, _next) => {
 })
 
 app.listen(PORT, () => {
-  console.log(`Resume Enhancer API running on http://localhost:${PORT}`)
+  console.log(`Resume Enhancer API running on port ${PORT}`)
 })

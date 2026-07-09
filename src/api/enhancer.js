@@ -1,4 +1,11 @@
-const BASE = '/api/enhancer'
+const API_BASE = (import.meta.env.VITE_API_BASE || '/api/enhancer').replace(/\/$/, '')
+
+export function getApiRoot() {
+  if (API_BASE.startsWith('http')) {
+    return API_BASE.replace(/\/enhancer$/, '')
+  }
+  return '/api'
+}
 
 const ENHANCE_STEP_LABELS = {
   analyzing_resume: 'Analyzing resume…',
@@ -14,25 +21,45 @@ async function readErrorMessage(res) {
     const data = await res.json()
     return data.error || res.statusText
   } catch {
+    if (res.status === 404) {
+      return 'API not found — deploy the backend and set VITE_API_BASE in Vercel environment variables.'
+    }
     if (res.status >= 500) {
-      return 'Backend unavailable — start the API with npm run server or npm run dev:all'
+      return 'Backend error — check API server logs and AI API keys.'
     }
     return res.statusText || 'Request failed'
   }
 }
 
+function networkError(err) {
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+    return new Error('Request timed out — please try again.')
+  }
+  const apiHint = API_BASE.startsWith('http')
+    ? API_BASE
+    : 'a deployed API (set VITE_API_BASE in Vercel)'
+  return new Error(`Cannot reach the resume API at ${apiHint}. Deploy the backend on Render/Railway and configure VITE_API_BASE.`)
+}
+
 async function request(url, options = {}) {
   let res
   try {
-    res = await fetch(`${BASE}${url}`, options)
+    res = await fetch(`${API_BASE}${url}`, options)
   } catch (err) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      throw new Error('Upload timed out — please try again.')
-    }
-    throw new Error('Cannot reach the resume server. Run npm run server or npm run dev:all.')
+    throw networkError(err)
   }
   if (!res.ok) throw new Error(await readErrorMessage(res))
   return res
+}
+
+export async function checkApiHealth() {
+  try {
+    const res = await fetch(`${getApiRoot()}/health`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return { ok: false, error: await readErrorMessage(res) }
+    return { ok: true, ...(await res.json()) }
+  } catch (err) {
+    return { ok: false, error: networkError(err).message }
+  }
 }
 
 export async function uploadResume(file) {
@@ -41,7 +68,7 @@ export async function uploadResume(file) {
   const res = await request('/upload', {
     method: 'POST',
     body: form,
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(60000),
   })
   return res.json()
 }
@@ -58,13 +85,14 @@ export async function setJD(sessionId, jdText) {
 export async function startEnhance(sessionId, jdText) {
   let res
   try {
-    res = await fetch(`${BASE}/enhance`, {
+    res = await fetch(`${API_BASE}/enhance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, jdText }),
+      signal: AbortSignal.timeout(60000),
     })
-  } catch {
-    throw new Error('Cannot reach the resume server. Run npm run server or npm run dev:all.')
+  } catch (err) {
+    throw networkError(err)
   }
   if (!res.ok) throw new Error(await readErrorMessage(res))
   return res.json()
@@ -73,9 +101,11 @@ export async function startEnhance(sessionId, jdText) {
 export async function getEnhanceStatus(jobId) {
   let res
   try {
-    res = await fetch(`${BASE}/enhance-status/${jobId}`)
-  } catch {
-    throw new Error('Lost connection while checking enhancement status.')
+    res = await fetch(`${API_BASE}/enhance-status/${jobId}`, {
+      signal: AbortSignal.timeout(30000),
+    })
+  } catch (err) {
+    throw networkError(err)
   }
   if (!res.ok) throw new Error(await readErrorMessage(res))
   return res.json()
@@ -98,11 +128,11 @@ export async function waitForEnhance(jobId, onProgress, maxMs = 300000) {
 }
 
 export function getFileUrl(sessionId, type = 'original') {
-  return `${BASE}/file/${sessionId}/${type}`
+  return `${API_BASE}/file/${sessionId}/${type}`
 }
 
 export function getDownloadUrl(sessionId) {
-  return `${BASE}/download/${sessionId}`
+  return `${API_BASE}/download/${sessionId}`
 }
 
 export async function fetchFileBlob(sessionId, type = 'original') {

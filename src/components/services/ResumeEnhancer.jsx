@@ -7,6 +7,7 @@ import {
   getEnhanceStepLabel,
   fetchFileBlob,
   getDownloadUrl,
+  checkApiHealth,
 } from '../../api/enhancer'
 
 function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
@@ -100,7 +101,17 @@ export default function ResumeEnhancer() {
   const [step, setStep] = useState('idle')
   const [enhanceStep, setEnhanceStep] = useState('')
   const [error, setError] = useState('')
+  const [apiOnline, setApiOnline] = useState(null)
   const enhancingRef = useRef(false)
+
+  useEffect(() => {
+    checkApiHealth().then((result) => {
+      setApiOnline(result.ok)
+      if (!result.ok) {
+        setError(result.error || 'Resume API is not reachable. Deploy the backend and set VITE_API_BASE in Vercel.')
+      }
+    })
+  }, [])
 
   const handleUpload = useCallback(async (file) => {
     const lower = file.name.toLowerCase()
@@ -222,6 +233,12 @@ export default function ResumeEnhancer() {
       </div>
 
       {error && <div className="enhancer-error">{error}</div>}
+
+      {apiOnline === false && !error && (
+        <div className="enhancer-notice enhancer-notice--warn">
+          Resume API is offline. Deploy the backend (Render/Railway) and set <code>VITE_API_BASE</code> in Vercel.
+        </div>
+      )}
 
       {fileType === 'pdf' && sessionId && (
         <div className="enhancer-notice">
