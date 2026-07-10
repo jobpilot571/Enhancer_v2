@@ -3,7 +3,9 @@ import express from 'express'
 import cors from 'cors'
 import enhancerRoutes from './routes/enhancer.js'
 import builderRoutes from './routes/builder.js'
+import adminRoutes from './routes/admin.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
+import { isAdminConfigured } from './middleware/adminAuth.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -34,6 +36,7 @@ app.use(cors({ origin: buildCorsOrigin(), credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/api/enhancer', enhancerRoutes)
 app.use('/api/builder', builderRoutes)
+app.use('/api/admin', adminRoutes)
 
 app.get('/', (_req, res) => {
   res.json({
@@ -44,6 +47,7 @@ app.get('/', (_req, res) => {
     api: {
       enhancer: '/api/enhancer',
       builder: '/api/builder',
+      admin: '/api/admin',
     },
   })
 })
@@ -53,6 +57,7 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     service: 'jobpilot-ai',
     aiProviders: getConfiguredProviders(),
+    adminConfigured: isAdminConfigured(),
   })
 })
 

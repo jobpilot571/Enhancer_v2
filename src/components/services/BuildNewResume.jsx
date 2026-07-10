@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import FormField from './FormField'
 import DocumentPreview from './DocumentPreview'
+import DocxViewer from './DocxViewer'
 import SkillsPicker from './SkillsPicker'
 import { RESUME_TEMPLATES } from '../../data/resumeTemplates'
+import TemplatePreview from './TemplatePreview'
 import {
   checkApiHealth,
   startBuild,
@@ -11,6 +13,7 @@ import {
   fetchFileBlob,
   getDownloadUrl,
 } from '../../api/builder'
+import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
 
 const STEPS = [
   { id: 'basics', label: 'Basics' },
@@ -79,6 +82,8 @@ export default function BuildNewResume() {
   const [buildStep, setBuildStep] = useState('')
   const [sessionId, setSessionId] = useState(null)
   const [previewBlob, setPreviewBlob] = useState(null)
+  const [templateSamples, setTemplateSamples] = useState({})
+  const [samplePreview, setSamplePreview] = useState(null)
   const buildingRef = useRef(false)
 
   useEffect(() => {
@@ -86,8 +91,34 @@ export default function BuildNewResume() {
     checkApiHealth().then((h) => {
       if (!cancelled) setApiOk(h.ok)
     })
+    fetchPublicTemplateSamples()
+      .then((data) => {
+        if (!cancelled) setTemplateSamples(data.samples || {})
+      })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [])
+
+  async function openSamplePreview(templateId, e) {
+    e.stopPropagation()
+    const info = templateSamples[templateId]
+    if (!info) return
+    setSamplePreview({ templateId, loading: true, blob: null, fileType: info.fileType, error: '' })
+    try {
+      const res = await fetch(getSampleFileUrl(templateId))
+      if (!res.ok) throw new Error('Could not load sample')
+      const blob = await res.blob()
+      setSamplePreview({ templateId, loading: false, blob, fileType: info.fileType, error: '' })
+    } catch (err) {
+      setSamplePreview({
+        templateId,
+        loading: false,
+        blob: null,
+        fileType: info.fileType,
+        error: err.message || 'Failed to load sample',
+      })
+    }
+  }
 
   function updateField(e) {
     const { name, value } = e.target
@@ -489,28 +520,87 @@ export default function BuildNewResume() {
 
         {step === 4 && (
           <div className="template-grid">
-            {RESUME_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                className={`template-card ${form.templateId === tpl.id ? 'is-selected' : ''}`}
-                onClick={() => {
-                  setForm((f) => ({ ...f, templateId: tpl.id }))
-                  setError('')
-                }}
-              >
-                <div className="template-card__preview">
-                  <img src={tpl.preview} alt={`${tpl.name} resume template`} loading="lazy" />
-                </div>
-                <div className="template-card__meta">
-                  <span className="template-card__name">{tpl.name}</span>
-                  <span className="template-card__desc">{tpl.description}</span>
-                </div>
-                {form.templateId === tpl.id && (
-                  <span className="template-card__check" aria-hidden="true">✓</span>
+            {RESUME_TEMPLATES.map((tpl) => {
+              const sample = templateSamples[tpl.id]
+              return (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  className={`template-card ${form.templateId === tpl.id ? 'is-selected' : ''}`}
+                  onClick={() => {
+                    setForm((f) => ({ ...f, templateId: tpl.id }))
+                    setError('')
+                  }}
+                >
+                  <div className="template-card__preview">
+                    <TemplatePreview template={tpl} />
+                    {sample && (
+                      <span className="template-card__sample-badge">Sample ready</span>
+                    )}
+                  </div>
+                  <div className="template-card__meta">
+                    <span className="template-card__name">{tpl.name}</span>
+                    <span className="template-card__desc">{tpl.description}</span>
+                    {sample && (
+                      <span
+                        className="template-card__sample-link"
+                        role="link"
+                        tabIndex={0}
+                        onClick={(e) => openSamplePreview(tpl.id, e)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') openSamplePreview(tpl.id, e)
+                        }}
+                      >
+                        View sample doc
+                      </span>
+                    )}
+                  </div>
+                  {form.templateId === tpl.id && (
+                    <span className="template-card__check" aria-hidden="true">✓</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {samplePreview && (
+          <div
+            className="sample-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Template sample preview"
+            onClick={() => setSamplePreview(null)}
+          >
+            <div className="sample-modal__panel" onClick={(e) => e.stopPropagation()}>
+              <div className="sample-modal__head">
+                <h3>
+                  {RESUME_TEMPLATES.find((t) => t.id === samplePreview.templateId)?.name || 'Template'}{' '}
+                  sample
+                </h3>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => setSamplePreview(null)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="sample-modal__body">
+                {samplePreview.loading && <p className="admin-muted">Loading sample…</p>}
+                {samplePreview.error && <p className="builder-error">{samplePreview.error}</p>}
+                {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'pdf' && (
+                  <iframe
+                    title="Sample PDF"
+                    className="sample-modal__pdf"
+                    src={getSampleFileUrl(samplePreview.templateId)}
+                  />
                 )}
-              </button>
-            ))}
+                {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'docx' && (
+                  <DocxViewer blob={samplePreview.blob} emptyLabel="Sample unavailable" />
+                )}
+              </div>
+            </div>
           </div>
         )}
 

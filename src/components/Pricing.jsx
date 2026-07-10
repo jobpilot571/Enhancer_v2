@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { fetchPublicPricing } from '../api/admin'
 
-const plans = [
+const FALLBACK_PLANS = [
   {
     name: 'Starter',
     price: '0',
@@ -50,6 +52,24 @@ const plans = [
 ]
 
 export default function Pricing() {
+  const [plans, setPlans] = useState(FALLBACK_PLANS)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchPublicPricing()
+      .then((data) => {
+        if (!cancelled && Array.isArray(data.plans) && data.plans.length > 0) {
+          setPlans(data.plans)
+        }
+      })
+      .catch(() => {
+        /* keep fallback */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <section id="pricing" className="pricing">
       <div className="container">
@@ -64,7 +84,7 @@ export default function Pricing() {
         <div className="pricing-grid">
           {plans.map((plan) => (
             <div
-              key={plan.name}
+              key={plan.id || plan.name}
               className={`pricing-card ${plan.featured ? 'pricing-card--featured' : ''}`}
             >
               {plan.featured && <span className="pricing-card__badge">Most Popular</span>}

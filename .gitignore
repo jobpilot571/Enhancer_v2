@@ -1,5 +1,8 @@
 node_modules/
 dist/
 uploads/
+server/admin-data/samples/
+server/admin-data/pricing.json
+server/admin-data/samples-meta.json
 .env
 *.log

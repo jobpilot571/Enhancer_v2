@@ -1,13 +1,12 @@
 /**
- * Resume template catalog — styles inspired by the sample resumes.
- * preview: path under /templates (public)
+ * Resume template catalog — styles inspired by sample layouts.
+ * Previews are rendered as CSS mockups with dummy names (see TemplatePreview).
  */
 export const RESUME_TEMPLATES = [
   {
     id: 'classic-blue',
     name: 'Classic Blue',
     description: 'Blue name & headings, city | phone | email',
-    preview: '/templates/classic-blue.png',
     accent: '1E40AF',
     headerStyle: 'centered',
     showTitle: false,
@@ -17,7 +16,6 @@ export const RESUME_TEMPLATES = [
     id: 'classic-serif',
     name: 'Classic Serif',
     description: 'Traditional layout with role under name',
-    preview: '/templates/classic-serif.png',
     accent: '111827',
     headerStyle: 'centered',
     showTitle: true,
@@ -27,7 +25,6 @@ export const RESUME_TEMPLATES = [
     id: 'modern-data',
     name: 'Modern Data',
     description: 'Blue accents, LinkedIn-ready contact line',
-    preview: '/templates/modern-data.png',
     accent: '1D4ED8',
     headerStyle: 'centered',
     showTitle: true,
@@ -37,7 +34,6 @@ export const RESUME_TEMPLATES = [
     id: 'analyst-blue',
     name: 'Analyst Blue',
     description: 'Contact then italic titles, dual-line jobs',
-    preview: '/templates/analyst-blue.png',
     accent: '1E3A8A',
     headerStyle: 'centered',
     showTitle: true,
@@ -48,7 +44,6 @@ export const RESUME_TEMPLATES = [
     id: 'technical-black',
     name: 'Technical Black',
     description: 'Dense ATS-friendly black & white',
-    preview: '/templates/technical-black.png',
     accent: '111827',
     headerStyle: 'centered',
     showTitle: true,
@@ -58,7 +53,6 @@ export const RESUME_TEMPLATES = [
     id: 'teal-banner',
     name: 'Teal Banner',
     description: 'Colored header bar with white name',
-    preview: '/templates/teal-banner.png',
     accent: '0F766E',
     headerStyle: 'banner',
     showTitle: true,
@@ -68,7 +62,6 @@ export const RESUME_TEMPLATES = [
     id: 'navy-executive',
     name: 'Navy Executive',
     description: 'Deep navy headings, executive spacing',
-    preview: '/templates/classic-blue.png',
     accent: '1E3A5F',
     headerStyle: 'centered',
     showTitle: true,
@@ -78,7 +71,6 @@ export const RESUME_TEMPLATES = [
     id: 'minimal-gray',
     name: 'Minimal Gray',
     description: 'Soft gray accents, clean whitespace',
-    preview: '/templates/technical-black.png',
     accent: '4B5563',
     headerStyle: 'centered',
     showTitle: false,
@@ -88,7 +80,6 @@ export const RESUME_TEMPLATES = [
     id: 'emerald-accent',
     name: 'Emerald Accent',
     description: 'Green accents for modern tech roles',
-    preview: '/templates/teal-banner.png',
     accent: '059669',
     headerStyle: 'centered',
     showTitle: true,
@@ -98,7 +89,6 @@ export const RESUME_TEMPLATES = [
     id: 'compact-ats',
     name: 'Compact ATS',
     description: 'Tight spacing optimized for ATS parsers',
-    preview: '/templates/classic-serif.png',
     accent: '111827',
     headerStyle: 'centered',
     showTitle: true,
@@ -109,7 +99,6 @@ export const RESUME_TEMPLATES = [
     id: 'indigo-modern',
     name: 'Indigo Modern',
     description: 'Indigo headings with bold keyword style',
-    preview: '/templates/modern-data.png',
     accent: '4338CA',
     headerStyle: 'centered',
     showTitle: true,
@@ -119,7 +108,6 @@ export const RESUME_TEMPLATES = [
     id: 'charcoal-pro',
     name: 'Charcoal Pro',
     description: 'Charcoal banner header, sharp contrast',
-    preview: '/templates/analyst-blue.png',
     accent: '1F2937',
     headerStyle: 'banner',
     showTitle: true,
