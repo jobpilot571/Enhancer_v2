@@ -5,7 +5,7 @@ import {
   readFile,
 } from '../store/sessionStore.js'
 import { updateEnhanceJob } from '../store/enhanceJobStore.js'
-import { patchDocx, filterEnhancementPlan, buildMatchAnalysis, mergeExperienceAdditions, keepSummaryBullets, ensureSkillsInBullets } from './docxService.js'
+import { patchDocx, filterEnhancementPlan, buildMatchAnalysis, mergeExperienceAdditions, keepSummaryBullets, ensureSkillsInBullets, detectSummaryFormat } from './docxService.js'
 import { compareResumeToJD, buildEnhancedResumeData } from './compareService.js'
 import { createEnhancementPlan, createMissingExperienceBullets, createSummaryEnhancement } from './openaiService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
@@ -57,6 +57,23 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       ensureResumeData(sessionId),
       ensureJdData(sessionId),
     ])
+
+    // Detect summary style from original DOCX (paragraph vs bullets) — DOCX is source of truth
+    const originalBufferForFormat = readFile(getSession(sessionId).originalPath)
+    const summaryFormat = detectSummaryFormat(new PizZip(originalBufferForFormat).file('word/document.xml').asText())
+    resumeData.summaryFormat = summaryFormat
+    if (summaryFormat === 'paragraph' && !(resumeData.summary || '').trim()) {
+      // Prefer prose field when parser put paragraph text into summaryBullets
+      if ((resumeData.summaryBullets || []).length === 1) {
+        resumeData.summary = resumeData.summaryBullets[0]
+        resumeData.summaryBullets = []
+      } else if ((resumeData.summaryBullets || []).length > 1) {
+        resumeData.summary = resumeData.summaryBullets.join(' ')
+        resumeData.summaryBullets = []
+      }
+    }
+    updateSession(sessionId, { resumeData })
+    log(jobId, `summary format: ${summaryFormat}`)
 
     updateEnhanceJob(jobId, { step: 'comparing' })
     log(jobId, 'comparing skills')

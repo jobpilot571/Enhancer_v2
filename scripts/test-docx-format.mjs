@@ -133,4 +133,55 @@ assert(!gapOut.includes('w:keepNext'), 'document keepNext removed')
 assert(!gapOut.includes('w:type="page"'), 'empty page-break paragraph removed')
 assert(!gapStyles.includes('w:keepNext'), 'styles keepNext removed')
 
+// Paragraph-style summary must stay a paragraph (no new bullets)
+const paraXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
+  + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`
+  + `<w:p><w:r><w:t>SUMMARY</w:t></w:r></w:p>`
+  + `<w:p><w:pPr><w:spacing w:before="0" w:after="120"/></w:pPr>`
+  + `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="20"/></w:rPr>`
+  + `<w:t>Results-driven Business Analyst with 3+ years of experience translating business needs into actionable insights across healthcare operations.</w:t></w:r></w:p>`
+  + `<w:p><w:r><w:t>TECHNICAL SKILLS</w:t></w:r></w:p>`
+  + `<w:p><w:r><w:t>Languages: SQL, Python</w:t></w:r></w:p>`
+  + `<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>`
+  + `<w:p><w:r><w:t>Business Analyst | CVS Health</w:t></w:r></w:p>`
+  + bulletA('Partnered with stakeholders to deliver analytics solutions.', 720, 'Calibri')
+  + bulletA('Built dashboards that improved decision making by 20 percent.', 720, 'Calibri')
+  + `<w:sectPr/></w:body></w:document>`
+
+const paraZip = new PizZip()
+paraZip.file('word/document.xml', paraXml)
+paraZip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>')
+const paraBuf = paraZip.generate({ type: 'nodebuffer' })
+const paraPlan = {
+  summaryBullets: [
+    'Skilled in SQL and Power BI for healthcare analytics reporting.',
+    'Collaborated with cross-functional teams to improve operational KPIs.',
+  ],
+  experienceAdditions: [],
+  bulletRewrites: [],
+  skillsToAdd: [],
+}
+const paraResume = {
+  summaryFormat: 'paragraph',
+  summary: 'Results-driven Business Analyst with 3+ years of experience translating business needs into actionable insights across healthcare operations.',
+  summaryBullets: [],
+  experience: [{
+    company: 'CVS Health',
+    title: 'Business Analyst',
+    bullets: [
+      'Partnered with stakeholders to deliver analytics solutions.',
+      'Built dashboards that improved decision making by 20 percent.',
+    ],
+  }],
+}
+const { buffer: paraOutBuf } = patchDocx(paraBuf, paraPlan, { highlight: true, resumeData: paraResume })
+const paraOut = new PizZip(paraOutBuf).file('word/document.xml').asText()
+assert(paraOut.includes('Skilled in SQL and Power BI'), 'paragraph summary includes woven sentence')
+assert(paraOut.includes('Results-driven Business Analyst'), 'original paragraph text preserved')
+assert(!/<w:numPr>[\s\S]*Skilled in SQL/.test(paraOut), 'woven summary is not a numbered bullet')
+assert(!/>•\s*Skilled in SQL/.test(paraOut) && !/>•Skilled in SQL/.test(paraOut), 'woven summary has no literal bullet glyph')
+const summaryRegion = paraOut.slice(paraOut.indexOf('SUMMARY'), paraOut.indexOf('TECHNICAL SKILLS'))
+const bulletCountInSummary = (summaryRegion.match(/w:numPr/g) || []).length
+assert(bulletCountInSummary === 0, 'paragraph summary section has zero list bullets')
+
 console.log('ALL PASSED')

@@ -661,6 +661,157 @@ function filterMajorityLayoutEnds(xml, bulletEnds) {
   return filtered.length ? filtered : usable.map((u) => u.end)
 }
 
+/**
+ * Detect whether the original SUMMARY is bullet-style or a prose paragraph.
+ * Rule: bullets for bullet summaries, paragraph weave for paragraph summaries.
+ */
+export function detectSummaryFormat(xml) {
+  const summaryStart = findSectionStart(xml, SECTION_ANCHORS.summary)
+  if (summaryStart === -1) return 'bullets'
+  const summaryEnd = findNextSectionStart(xml, summaryStart)
+  return detectSummaryFormatInRange(xml, summaryStart, summaryEnd)
+}
+
+function detectSummaryFormatInRange(xml, summaryStart, summaryEnd) {
+  const bulletEnds = getBulletParagraphEnds(xml, summaryStart, summaryEnd)
+    .filter((end) => isUsableBulletTemplateChunk(getParagraphChunk(xml, end)))
+  const allEnds = getParagraphEndsInRange(xml, summaryStart, summaryEnd)
+  const proseEnds = allEnds.filter((end) => {
+    const chunk = getParagraphChunk(xml, end)
+    if (!chunk || isBulletParagraph(chunk) || detectLiteralBulletPrefix(chunk)) return false
+    const plain = getPlainTextFromParagraph(chunk)
+    if (!plain || plain.length < 40) return false
+    // Skip short section labels that slipped through
+    if (/^(professional\s+)?summary|profile|objective$/i.test(plain.trim())) return false
+    return true
+  })
+
+  if (bulletEnds.length >= 2) return 'bullets'
+  if (proseEnds.length >= 1 && bulletEnds.length === 0) return 'paragraph'
+  if (proseEnds.length >= 1 && bulletEnds.length === 1) return 'paragraph'
+  if (bulletEnds.length >= 1) return 'bullets'
+  if (proseEnds.length >= 1) return 'paragraph'
+  return 'bullets'
+}
+
+function findSummaryProseParagraph(xml, summaryStart, summaryEnd) {
+  const allEnds = getParagraphEndsInRange(xml, summaryStart, summaryEnd)
+  let best = null
+  let bestLen = 0
+  for (const end of allEnds) {
+    const start = findParagraphStart(xml, end)
+    if (start === -1) continue
+    const chunk = xml.slice(start, end)
+    if (isBulletParagraph(chunk) || detectLiteralBulletPrefix(chunk)) continue
+    const plain = getPlainTextFromParagraph(chunk)
+    if (!plain || plain.length < 40) continue
+    if (/^(professional\s+)?summary|profile|objective$/i.test(plain.trim())) continue
+    if (plain.length > bestLen) {
+      bestLen = plain.length
+      best = { start, end, para: chunk, plain }
+    }
+  }
+  return best
+}
+
+/** Turn plan "summary bullets" into prose sentences for paragraph summaries. */
+function summaryAdditionsToProse(items) {
+  const sentences = []
+  for (const item of items || []) {
+    let t = stripLeadingBulletGlyphs(item || '').replace(/\s+/g, ' ').trim()
+    if (!t) continue
+    // Soft length for paragraph weave (not the short bullet clamp)
+    if (t.length > 220) {
+      const cut = t.slice(0, 220)
+      const at = Math.max(cut.lastIndexOf(';'), cut.lastIndexOf(','), cut.lastIndexOf(' '))
+      t = (at > 100 ? cut.slice(0, at) : cut).trim().replace(/[,;:\-–—]+$/, '')
+    }
+    if (!/[.!?]$/.test(t)) t += '.'
+    sentences.push(t)
+  }
+  return sentences.join(' ')
+}
+
+/**
+ * Enhance a paragraph-style summary by weaving new sentences into the existing
+ * prose paragraph — never insert bullet list items.
+ */
+function enhanceParagraphSummary(xml, summaryStart, summaryEnd, plan, mark, applied) {
+  const additions = (plan.summaryBullets || []).slice(0, 2)
+  const proseAdd = summaryAdditionsToProse(additions)
+  if (!proseAdd) return xml
+
+  const found = findSummaryProseParagraph(xml, summaryStart, summaryEnd)
+  if (!found) return xml
+
+  // Prefer an explicit summary rewrite when it targets this paragraph
+  const summaryRewrite = (plan.bulletRewrites || []).find((r) => {
+    if (!isSummaryRewrite(r) || !r.replacement) return false
+    return textMatches(found.plain, r.original) || textMatches(found.plain, r.replacement)
+  })
+
+  let replacement
+  if (summaryRewrite?.replacement && !isBulletParagraph(found.para)) {
+    // If rewrite is already full prose, use it; still append unique addition if missing
+    replacement = stripLeadingBulletGlyphs(summaryRewrite.replacement).replace(/\s+/g, ' ').trim()
+    if (proseAdd && !normalizeText(replacement).includes(normalizeText(proseAdd).slice(0, 40))) {
+      replacement = `${replacement.replace(/[.!?]?$/, '')}. ${proseAdd}`.replace(/\s+/g, ' ').trim()
+    }
+  } else {
+    const base = found.plain.replace(/\s+/g, ' ').trim()
+    replacement = `${base.replace(/[.!?]?$/, '')}. ${proseAdd}`.replace(/\s+/g, ' ').trim()
+  }
+
+  const newPara = rewriteParagraphWithAppendHighlight(found.para, found.plain, replacement, mark)
+  applied.summary.added.push(...additions.map((a) => stripLeadingBulletGlyphs(a)))
+  return xml.slice(0, found.start) + newPara + xml.slice(found.end)
+}
+
+/**
+ * Rewrite a paragraph; if mark is set, highlight only the newly appended tail.
+ */
+function rewriteParagraphWithAppendHighlight(paraXml, originalPlain, replacement, mark) {
+  const openMatch = paraXml.match(/^<w:p\b[^>]*>/)
+  const pOpen = openMatch ? openMatch[0] : '<w:p>'
+  const pPrMatch = paraXml.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)
+  const pPr = sanitizeParagraphPPr(stripBoldFromPPr(pPrMatch ? pPrMatch[0] : ''), { isBullet: false })
+  const styles = extractRunStyles(paraXml)
+  const baseRPr = applyMarkToRPr(stripUnderline(stripBold(styles.baseRPr || '')), null)
+  const markedRPr = applyMarkToRPr(stripUnderline(stripBold(styles.baseRPr || '')), mark)
+
+  const cleanReplacement = stripLeadingBulletGlyphs(replacement).replace(/\s+/g, ' ').trim()
+  const origNorm = (originalPlain || '').replace(/\s+/g, ' ').trim()
+
+  // Find shared prefix so only the new tail is highlighted
+  let splitAt = 0
+  if (mark && origNorm) {
+    const max = Math.min(origNorm.length, cleanReplacement.length)
+    while (splitAt < max && origNorm[splitAt].toLowerCase() === cleanReplacement[splitAt].toLowerCase()) {
+      splitAt += 1
+    }
+    // Prefer splitting on a sentence/word boundary near the end of the original
+    if (splitAt > 20) {
+      const near = cleanReplacement.lastIndexOf('. ', splitAt)
+      if (near >= Math.floor(origNorm.length * 0.5)) splitAt = near + 2
+    } else {
+      splitAt = 0
+    }
+  }
+
+  let runs
+  if (mark && splitAt > 0 && splitAt < cleanReplacement.length) {
+    const head = cleanReplacement.slice(0, splitAt)
+    const tail = cleanReplacement.slice(splitAt)
+    runs = `<w:r>${baseRPr}<w:t xml:space="preserve">${escapeXml(head)}</w:t></w:r>`
+      + `<w:r>${markedRPr}<w:t xml:space="preserve">${escapeXml(tail)}</w:t></w:r>`
+  } else {
+    const rPr = mark ? markedRPr : baseRPr
+    runs = `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(cleanReplacement)}</w:t></w:r>`
+  }
+
+  return `${pOpen}${pPr}${runs}</w:p>`
+}
+
 function resolveSummaryInsertPoint(xml, summaryStart, summaryEnd) {
   // Prefer real bullets only — never treat a prose summary paragraph as a bullet template source
   let bulletEnds = getBulletParagraphEnds(xml, summaryStart, summaryEnd)
@@ -1604,6 +1755,7 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
   const experience = resumeData?.experience || []
   const applied = emptyApplied()
   let experienceStart = findSectionStart(xml, SECTION_ANCHORS.experience)
+  const summaryFormat = detectSummaryFormat(xml)
 
   for (const rewrite of plan.bulletRewrites || []) {
     if (!rewrite.original || !rewrite.replacement) continue
@@ -1614,6 +1766,8 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     let companyKey = rewrite.company || 'Unknown'
 
     if (isSummaryRewrite(rewrite)) {
+      // Paragraph summaries are enhanced later via weave — avoid double rewrite / bullet conversion
+      if (summaryFormat === 'paragraph') continue
       section = 'summary'
       const summaryStart = findSectionStart(xml, SECTION_ANCHORS.summary)
       if (summaryStart === -1) continue
@@ -1691,20 +1845,25 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
   const summaryStart = findSectionStart(xml, SECTION_ANCHORS.summary)
   if (summaryStart !== -1 && plan.summaryBullets?.length) {
     const summaryEnd = findNextSectionStart(xml, summaryStart)
-    const { insertAt, bulletEnds } = resolveSummaryInsertPoint(xml, summaryStart, summaryEnd)
+    const summaryFormat = detectSummaryFormatInRange(xml, summaryStart, summaryEnd)
 
-    if (insertAt) {
-      // Prefer real bullets in summary; if summary is prose-only, clone Experience bullet spacing
-      const template = resolveBulletTemplate(xml, bulletEnds, insertAt)
-      if (template) {
-        xml = insertBulletsAt(
-          xml,
-          insertAt,
-          plan.summaryBullets.slice(0, 2),
-          template,
-          mark,
-          applied.summary.added,
-        )
+    if (summaryFormat === 'paragraph') {
+      // Original is prose — weave additions into the paragraph (never insert bullets)
+      xml = enhanceParagraphSummary(xml, summaryStart, summaryEnd, plan, mark, applied)
+    } else {
+      const { insertAt, bulletEnds } = resolveSummaryInsertPoint(xml, summaryStart, summaryEnd)
+      if (insertAt) {
+        const template = resolveBulletTemplate(xml, bulletEnds, insertAt)
+        if (template) {
+          xml = insertBulletsAt(
+            xml,
+            insertAt,
+            plan.summaryBullets.slice(0, 2),
+            template,
+            mark,
+            applied.summary.added,
+          )
+        }
       }
     }
   }

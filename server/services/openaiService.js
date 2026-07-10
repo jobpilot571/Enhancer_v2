@@ -121,7 +121,11 @@ const BULLET_RULES = `Bullet writing rules (strict — every bullet MUST follow 
 
 export async function parseResume(resumeText) {
   return jsonCompletion(
-    'You are a resume parsing expert. Extract ALL structured data from the resume text. Include every section, heading, bullet, skill, company, title, and date. Return complete JSON.',
+    `You are a resume parsing expert. Extract ALL structured data from the resume text. Include every section, heading, bullet, skill, company, title, and date. Return complete JSON.
+For SUMMARY/PROFILE/OBJECTIVE:
+- If the summary is a prose paragraph (not a bullet list), put the full text in "summary" and leave summaryBullets as [].
+- If the summary is a bullet list, put each bullet in summaryBullets and put a short joined overview in "summary".
+Never invent bullets from a paragraph summary.`,
     `Parse this resume:\n\n${resumeText}`,
     'resume_parse',
     RESUME_SCHEMA,
@@ -172,6 +176,46 @@ Missing skills:\n${JSON.stringify(comparison.missing, null, 2)}`,
 }
 
 export async function createSummaryEnhancement(resumeData, jdData, comparison) {
+  const isParagraph = (resumeData.summaryFormat || '').toLowerCase() === 'paragraph'
+    || (!(resumeData.summaryBullets || []).length && !!(resumeData.summary || '').trim())
+
+  if (isParagraph) {
+    return jsonCompletion(
+      `Enhance a PARAGRAPH-style professional summary for JD alignment.
+CRITICAL FORMAT RULE: The original summary is a prose paragraph — return 1-2 NEW prose SENTENCES (not bullets, no leading • or dashes).
+These sentences will be woven into the existing paragraph. Keep each sentence under ~35 words.
+Do NOT rewrite the whole summary unless needed; prefer additive sentences that weave missing JD skills/tools naturally.
+Optionally return bulletRewrites with company="Summary" where original is EXACT existing summary text and replacement is the full enhanced paragraph.`,
+      `Existing paragraph summary:\n${resumeData.summary || ''}
+Existing summary bullets (should be empty for paragraph resumes):\n${JSON.stringify(resumeData.summaryBullets || [], null, 2)}
+Missing skills to weave in:\n${JSON.stringify((comparison.missing || []).slice(0, 12), null, 2)}
+JD:\n${JSON.stringify(jdData, null, 2)}
+Priority keywords:\n${JSON.stringify([...(jdData.mustHaveKeywords || []), ...(comparison.missing || [])].slice(0, 12), null, 2)}`,
+      'summary_enhancement',
+      {
+        type: 'object',
+        properties: {
+          summaryBullets: { type: 'array', items: { type: 'string' } },
+          bulletRewrites: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                original: { type: 'string' },
+                replacement: { type: 'string' },
+                company: { type: 'string' },
+              },
+              required: ['original', 'replacement', 'company'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['summaryBullets', 'bulletRewrites'],
+        additionalProperties: false,
+      },
+    )
+  }
+
   return jsonCompletion(
     `Create 1-2 NEW summary bullets for 99% JD alignment. ${BULLET_RULES}
 ALWAYS return summaryBullets with 1-2 brand-new bullets (preferred).
@@ -218,8 +262,15 @@ export async function createEnhancementPlan(resumeData, jdData, comparison) {
   ].slice(0, 20)
 
   // Compact payload — faster AI, same quality rules
+  const summaryFormat = (resumeData.summaryFormat || (
+    (!(resumeData.summaryBullets || []).length && (resumeData.summary || '').trim()
+      ? 'paragraph'
+      : 'bullets')
+  ))
   const compactResume = {
     name: resumeData.name,
+    summaryFormat,
+    summary: (resumeData.summary || '').slice(0, 600),
     summaryBullets: (resumeData.summaryBullets || []).slice(0, 8),
     skills: [...new Set([...(resumeData.skills || []), ...(resumeData.technicalSkills || [])])].slice(0, 40),
     headings: (resumeData.headings || []).slice(0, 20),
@@ -251,8 +302,11 @@ ${BULLET_RULES}
 
 Enhancement rules (ALL mandatory):
 - Preserve original section order, fonts, and resume structure exactly.
-- MANDATORY SUMMARY: Always return 1-2 NEW summaryBullets that are NOT paraphrases of existing summary bullets. Do not rewrite/copy an existing summary bullet. Prefer brand-new JD-aligned achievements.
-- NEVER return a summary bullet that repeats or lightly rewords an existing resume summary bullet.
+- SUMMARY FORMAT RULE (critical): resumeData.summaryFormat is "${summaryFormat}".
+  ${summaryFormat === 'paragraph'
+    ? '- Paragraph summary: return 1-2 NEW prose SENTENCES in summaryBullets (no bullet glyphs). They will be woven into the existing paragraph. Do NOT convert the summary into a bullet list.'
+    : '- Bullet summary: Always return 1-2 NEW summaryBullets that are NOT paraphrases of existing summary bullets. Prefer brand-new JD-aligned achievements.'}
+- NEVER return a summary item that repeats or lightly rewords an existing resume summary.
 - MANDATORY PER COMPANY: experienceAdditions MUST include EVERY company listed below, each with 1-2 bullets. Prefer experienceAdditions over rewrites for coverage. No company may be skipped.
 - Companies in resume (include ALL of these in experienceAdditions): ${companies.join(' | ') || 'none'}
 - JD priority keywords (use each ONCE across the whole resume — never repeat the same keyword in multiple bullets): ${jdPriority.join(', ') || 'see comparison.missing'}
