@@ -81,7 +81,7 @@ assert(sw.includes('w:left="720"'), 'summary new bullet uses left=720')
 // Large spacing on a sibling must be tightened (no half-page gaps on new bullets)
 const gapBullet = (text) =>
   `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>`
-  + `<w:ind w:left="720" w:hanging="360"/><w:spacing w:before="0" w:after="2400"/></w:pPr>`
+  + `<w:ind w:left="720" w:hanging="360"/><w:spacing w:before="0" w:after="2400"/><w:keepNext/></w:pPr>`
   + `<w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="20"/></w:rPr>`
   + `<w:t>${text}</w:t></w:r></w:p>`
 
@@ -94,10 +94,13 @@ const gapXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
   + `<w:p><w:r><w:t>Data Analyst — Cardinal Health</w:t></w:r></w:p>`
   + gapBullet('Built pipelines with Python and SQL for analytics.')
   + gapBullet('Created Power BI dashboards for stakeholders.')
+  + `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`
+  + gapBullet('After page break bullet that should flow without blank page.')
   + `<w:sectPr/></w:body></w:document>`
 
 const gapZip = new PizZip()
 gapZip.file('word/document.xml', gapXml)
+gapZip.file('word/styles.xml', `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="ListParagraph"><w:pPr><w:keepNext/><w:spacing w:after="2400"/></w:pPr></w:style></w:styles>`)
 gapZip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>')
 const gapBuf = gapZip.generate({ type: 'nodebuffer' })
 const gapPlan = {
@@ -111,14 +114,23 @@ const gapResume = {
   experience: [{
     company: 'Cardinal Health',
     title: 'Data Analyst',
-    bullets: ['Built pipelines with Python and SQL for analytics.', 'Created Power BI dashboards for stakeholders.'],
+    bullets: [
+      'Built pipelines with Python and SQL for analytics.',
+      'Created Power BI dashboards for stakeholders.',
+      'After page break bullet that should flow without blank page.',
+    ],
   }],
 }
 const { buffer: gapOutBuf } = patchDocx(gapBuf, gapPlan, { highlight: false, resumeData: gapResume })
-const gapOut = new PizZip(gapOutBuf).file('word/document.xml').asText()
+const gapOutZip = new PizZip(gapOutBuf)
+const gapOut = gapOutZip.file('word/document.xml').asText()
+const gapStyles = gapOutZip.file('word/styles.xml').asText()
 const gIdx = gapOut.indexOf('Tight spacing experience bullet')
 const gWin = gapOut.slice(Math.max(0, gIdx - 350), gIdx + 40)
 assert(!gWin.includes('w:after="2400"'), 'new bullet does not keep huge after spacing')
-assert(gWin.includes('w:after="60"'), 'new bullet uses tightened after spacing')
+assert(/w:after="(0|60|120)"/.test(gWin), 'new bullet uses tightened after spacing')
+assert(!gapOut.includes('w:keepNext'), 'document keepNext removed')
+assert(!gapOut.includes('w:type="page"'), 'empty page-break paragraph removed')
+assert(!gapStyles.includes('w:keepNext'), 'styles keepNext removed')
 
 console.log('ALL PASSED')

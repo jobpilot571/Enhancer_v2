@@ -363,6 +363,86 @@ function buildTextRuns(text, template, mark) {
 }
 
 /**
+ * Remove pagination traps that create blank half/full pages in Word:
+ * keepNext chains, forced page breaks, and absurd before/after spacing.
+ * Preserves indent, list numbering, and fonts.
+ */
+function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
+  if (!pPr) return pPr || ''
+
+  let next = pPr
+    .replace(/<w:keepNext\b[^/]*\/>/g, '')
+    .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
+    .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
+    .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
+
+  // keepLines on long bullet lists also forces orphan blank pages
+  if (isBullet) {
+    next = next
+      .replace(/<w:keepLines\b[^/]*\/>/g, '')
+      .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
+  }
+
+  next = next.replace(/<w:spacing\b[^/]*\/>/g, (tag) => {
+    const before = /w:before(?:Lines)?="(\d+)"/.exec(tag)
+    const after = /w:after(?:Lines)?="(\d+)"/.exec(tag)
+    const line = /w:line="(\d+)"/.exec(tag)
+    const lineRule = /w:lineRule="([^"]+)"/.exec(tag)
+    let b = before ? parseInt(before[1], 10) : 0
+    let a = after ? parseInt(after[1], 10) : 0
+    let ln = line ? parseInt(line[1], 10) : null
+    const rule = lineRule ? lineRule[1] : null
+
+    // Twips: ~1440 per inch. Cap kills half/full-page gaps without flattening section rhythm.
+    const maxBefore = isBullet ? 80 : 240
+    const maxAfter = isBullet ? 120 : 360
+    if (b > maxBefore) b = isBullet ? 0 : 120
+    if (a > maxAfter) a = isBullet ? 60 : 120
+    if (ln && rule === 'auto' && ln >= 360) ln = 240
+
+    const parts = [`w:before="${b}"`, `w:after="${a}"`]
+    if (ln != null) {
+      parts.push(`w:line="${ln}"`)
+      parts.push(`w:lineRule="${rule || 'auto'}"`)
+    }
+    return `<w:spacing ${parts.join(' ')}/>`
+  })
+
+  return next
+}
+
+/**
+ * Document-wide pass: stop Word from leaving blank pages after enhance inserts.
+ */
+function sanitizeDocumentPagination(xml) {
+  if (!xml) return xml
+
+  // Drop explicit page-break paragraphs inserted mid-resume
+  let out = xml.replace(
+    /<w:p\b[^>]*>\s*(?:<w:pPr\b[\s\S]*?<\/w:pPr>\s*)?(?:<w:r\b[\s\S]*?<\/w:r>\s*)*<\/w:p>/g,
+    (para) => {
+      if (/<w:br\b[^>]*w:type="page"/.test(para) && !getPlainTextFromParagraph(para).trim()) {
+        return ''
+      }
+      return para
+    },
+  )
+
+  out = out.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/g, (pPr) => {
+    const isBullet = /w:numPr/.test(pPr)
+      || /w:ilvl/.test(pPr)
+      || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(pPr)
+    return sanitizeParagraphPPr(pPr, { isBullet })
+  })
+
+  // Table rows that cannot split across pages also create blank pages in dense resumes
+  out = out.replace(/<w:cantSplit\b[^/]*\/>/g, '')
+  out = out.replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
+
+  return out
+}
+
+/**
  * Clone formatting from an existing resume bullet so new bullets keep the same
  * indent, spacing, list numbering, and font as the original document.
  */
@@ -385,9 +465,10 @@ function extractParagraphTemplate(xml, paragraphEnd, extraBoldPhrases = []) {
   const openMatch = chunk.match(/^<w:p\b[^>]*>/)
   const pOpen = openMatch ? openMatch[0] : '<w:p>'
   const pPrMatch = chunk.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)
-  // Keep original spacing/indent/numPr EXACTLY — only strip bold/underline from nested rPr in pPr
+  // Keep indent/numPr; strip pagination traps + bold/underline from nested rPr
   let pPr = pPrMatch ? pPrMatch[0] : '<w:pPr></w:pPr>'
   pPr = pPr.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, (rPr) => stripUnderline(stripBold(rPr)))
+  pPr = sanitizeParagraphPPr(pPr, { isBullet: true })
 
   const hasNumPr = /w:numPr/.test(pPr)
     || /w:numPr/.test(chunk)
@@ -423,7 +504,11 @@ function rewriteParagraph(paraXml, replacement, mark, extraBoldPhrases = []) {
   const openMatch = paraXml.match(/^<w:p\b[^>]*>/)
   const pOpen = openMatch ? openMatch[0] : '<w:p>'
   const pPrMatch = paraXml.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)
-  const pPr = stripBoldFromPPr(pPrMatch ? pPrMatch[0] : '')
+  const isBullet = /w:numPr/.test(paraXml)
+    || /w:ilvl/.test(paraXml)
+    || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(paraXml)
+    || !!detectLiteralBulletPrefix(paraXml)
+  const pPr = sanitizeParagraphPPr(stripBoldFromPPr(pPrMatch ? pPrMatch[0] : ''), { isBullet })
   const hasNumPr = /w:numPr/.test(pPr)
     || /w:numPr/.test(paraXml)
     || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(paraXml)
@@ -681,24 +766,27 @@ function isUsableBulletTemplateChunk(chunk) {
   return true
 }
 
+function sanitizeStylesXml(stylesXml) {
+  if (!stylesXml) return stylesXml
+  return stylesXml
+    .replace(/<w:keepNext\b[^/]*\/>/g, '')
+    .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
+    .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
+    .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
+    .replace(/<w:cantSplit\b[^/]*\/>/g, '')
+    .replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
+}
+
 /**
  * Cap absurd before/after spacing that creates half-page / full-page gaps.
  * Keeps original spacing when it is already resume-normal.
  */
 function tightenTemplateSpacing(template) {
   if (!template?.pPr) return template
-  const metrics = getParagraphSpacingMetrics(template.pPr)
-  const needsTighten = metrics.after > 120 || metrics.before > 120
-    || (metrics.line && metrics.lineRule === 'auto' && metrics.line >= 360)
-  if (!needsTighten) return template
-
-  let pPr = template.pPr
-  if (/<w:spacing\b/.test(pPr)) {
-    pPr = pPr.replace(/<w:spacing\b[^/]*\/>/g, '<w:spacing w:before="0" w:after="60" w:line="240" w:lineRule="auto"/>')
-  } else if (/<\/w:pPr>/.test(pPr)) {
-    pPr = pPr.replace('</w:pPr>', '<w:spacing w:before="0" w:after="60"/></w:pPr>')
+  return {
+    ...template,
+    pPr: sanitizeParagraphPPr(template.pPr, { isBullet: true }),
   }
-  return { ...template, pPr }
 }
 
 /**
@@ -1646,14 +1734,21 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     }
   }
 
-  // Do NOT rewrite document-wide spacing — that breaks original margins/gaps.
-  // New bullets already clone pPr (spacing/ind/numPr) from neighboring bullets.
+  // Kill blank half/full pages caused by keepNext chains, page breaks, and huge spacing.
+  // Indent/fonts stay intact — only pagination traps are removed.
+  xml = sanitizeDocumentPagination(xml)
 
   if (!highlight) {
     xml = stripAllHighlights(xml)
   }
 
   zip.file('word/document.xml', xml)
+
+  const stylesFile = zip.file('word/styles.xml')
+  if (stylesFile) {
+    zip.file('word/styles.xml', sanitizeStylesXml(stylesFile.asText()))
+  }
+
   return {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
     applied,
