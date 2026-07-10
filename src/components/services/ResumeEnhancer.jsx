@@ -11,14 +11,14 @@ import {
   setJD,
 } from '../../api/enhancer'
 
-function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
+function ScoreRing({ score, label = '/ 100', gradId = 'scoreGrad', size = 'sm' }) {
   const pct = Math.min(100, Math.max(0, Number(score) || 0))
   const circumference = 326.7
   const offset = circumference - (circumference * pct) / 100
   return (
-    <div className="score-ring">
+    <div className={`score-ring score-ring--${size}`}>
       <svg viewBox="0 0 120 120" aria-hidden="true">
-        <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="9" />
+        <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(15, 23, 42, 0.08)" strokeWidth="9" />
         <circle
           cx="60" cy="60" r="52" fill="none" stroke={`url(#${gradId})`} strokeWidth="9"
           strokeDasharray={circumference} strokeDashoffset={offset}
@@ -27,7 +27,7 @@ function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
         <defs>
           <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#16c784" />
-            <stop offset="100%" stopColor="#22d3ee" />
+            <stop offset="100%" stopColor="#0d9488" />
           </linearGradient>
         </defs>
       </svg>
@@ -39,93 +39,167 @@ function ScoreRing({ score, label = 'your score', gradId = 'scoreGrad' }) {
   )
 }
 
-function ScoreDetailPanel({ breakdown, active }) {
+function ScoreDetailBox({ breakdown, active, title, onClose, boxRef }) {
   if (!breakdown || !active) return null
   const pillar = breakdown[active]
   const details = breakdown.details?.[active] || []
   if (!pillar) return null
+  const labels = { skills: 'Skills', keywords: 'Keywords', bullets: 'Bullets' }
 
   return (
-    <div className="score-detail-panel">
-      <div className="score-detail-panel__meta">
-        {active === 'bullets'
-          ? `Avg coverage ${pillar.pct}% · ${pillar.matched}/${pillar.total} responsibilities covered (≥35%)`
-          : `${pillar.matched}/${pillar.total} matched · ${pillar.pct}% · contributes ~${pillar.score} pts`}
+    <div className="score-detail-box" ref={boxRef} role="dialog" aria-label={`${title} ${labels[active]}`}>
+      <div className="score-detail-box__head">
+        <div>
+          <strong>{labels[active]}</strong>
+          <span>
+            {active === 'bullets'
+              ? `Avg coverage ${pillar.pct}% · ${pillar.matched}/${pillar.total} covered`
+              : `${pillar.matched}/${pillar.total} matched · ${pillar.pct}%`}
+          </span>
+        </div>
+        <button type="button" className="score-detail-box__close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
       </div>
-      <ul className="score-detail-panel__list">
+      <ul className="score-detail-box__list">
         {details.map((row) => (
           <li
             key={row.item}
-            className={`score-detail-panel__item ${row.matched ? 'is-matched' : 'is-missing'}`}
+            className={`score-detail-box__item ${row.matched ? 'is-matched' : 'is-missing'}`}
           >
-            <span className="score-detail-panel__status">
+            <span className="score-detail-box__status">
               {row.matched ? (row.strong ? 'strong' : active === 'bullets' ? `${row.coverage}%` : 'match') : 'missing'}
             </span>
-            <span className="score-detail-panel__text">{row.item}</span>
+            <span>{row.item}</span>
           </li>
         ))}
         {!details.length && (
-          <li className="score-detail-panel__item is-empty">No JD items in this category</li>
+          <li className="score-detail-box__item is-empty">No JD items in this category</li>
         )}
       </ul>
     </div>
   )
 }
 
-function AtsScoreCard({
-  badge,
+function CompactScoreCard({
   title,
-  desc,
+  subtitle,
   score,
-  label,
   gradId,
   breakdown,
   delta,
   activeTab,
   onTabChange,
+  cardKey,
 }) {
   const tabs = [
     { key: 'skills', label: 'Skills' },
     { key: 'keywords', label: 'Keywords' },
     { key: 'bullets', label: 'Bullets' },
   ]
+  const cardRef = useRef(null)
+  const boxRef = useRef(null)
+
+  useEffect(() => {
+    if (!activeTab) return undefined
+    const onPointerDown = (e) => {
+      const t = e.target
+      if (cardRef.current?.contains(t) || boxRef.current?.contains(t)) return
+      onTabChange(null)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onTabChange(null)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [activeTab, onTabChange])
 
   return (
-    <article className="feature-result-card">
-      <div className="feature-result-card__body">
-        <span className="feature-result-card__badge">{badge}</span>
-        <h3 className="feature-result-card__title">{title}</h3>
-        <p className="feature-result-card__desc">{desc}</p>
-        {typeof delta === 'number' && delta > 0 && (
-          <div className="feature-result-card__stats">
-            <span className="feature-result-card__pill">+{delta} pts</span>
-          </div>
-        )}
-        <div className="score-tab-row" role="tablist" aria-label={`${title} sections`}>
-          {tabs.map((tab) => {
-            const p = breakdown?.[tab.key]
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.key}
-                className={`score-tab-btn ${activeTab === tab.key ? 'is-active' : ''}`}
-                onClick={() => onTabChange(activeTab === tab.key ? null : tab.key)}
-              >
-                <span className="score-tab-btn__label">{tab.label}</span>
-                <span className="score-tab-btn__meta">
-                  {p ? `${p.matched}/${p.total || 0} · ${p.pct}%` : '—'}
-                </span>
-              </button>
-            )
-          })}
+    <article className="ats-mini-card" ref={cardRef} data-card={cardKey}>
+      <div className="ats-mini-card__top">
+        <div className="ats-mini-card__icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 3v18h18" />
+            <path d="M7 14l4-4 4 3 5-7" />
+          </svg>
         </div>
-        <ScoreDetailPanel breakdown={breakdown} active={activeTab} />
+        <div className="ats-mini-card__titles">
+          <h3 className="ats-mini-card__title">{title}</h3>
+          <p className="ats-mini-card__subtitle">{subtitle}</p>
+        </div>
+        {typeof delta === 'number' && delta > 0 && (
+          <span className="ats-mini-card__delta">+{delta} pts</span>
+        )}
       </div>
-      <div className="feature-result-card__visual">
-        <ScoreRing score={score} label={label} gradId={gradId} />
+
+      <div className="ats-mini-card__ring-wrap">
+        <ScoreRing score={score} label="/ 100" gradId={gradId} size="sm" />
       </div>
+
+      <div className="ats-mini-card__tabs" role="group" aria-label={`${title} breakdown`}>
+        {tabs.map((tab) => {
+          const p = breakdown?.[tab.key]
+          const isOpen = activeTab === tab.key
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              className={`ats-mini-tab ${isOpen ? 'is-open' : ''}`}
+              aria-expanded={isOpen}
+              onClick={() => onTabChange(isOpen ? null : tab.key)}
+            >
+              <span className="ats-mini-tab__label">{tab.label}</span>
+              <span className="ats-mini-tab__meta">
+                {p ? `${p.matched}/${p.total || 0} · ${p.pct}%` : '—'}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {activeTab && (
+        <ScoreDetailBox
+          breakdown={breakdown}
+          active={activeTab}
+          title={title}
+          onClose={() => onTabChange(null)}
+          boxRef={boxRef}
+        />
+      )}
+    </article>
+  )
+}
+
+function ChangesAppliedCard({ total, onViewChanges }) {
+  return (
+    <article className="ats-mini-card ats-mini-card--changes">
+      <div className="ats-mini-card__top">
+        <div className="ats-mini-card__icon ats-mini-card__icon--blue" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <path d="M9 15l2 2 4-4" />
+          </svg>
+        </div>
+        <div className="ats-mini-card__titles">
+          <h3 className="ats-mini-card__title">Changes applied</h3>
+          <p className="ats-mini-card__subtitle">Verified updates in your DOCX</p>
+        </div>
+      </div>
+      <div className="ats-mini-card__count-block">
+        <span className="ats-mini-card__count">{total}</span>
+        <small>Total changes</small>
+      </div>
+      <div className="ats-mini-card__note">
+        Verified updates applied to your enhanced DOCX.
+      </div>
+      <button type="button" className="ats-mini-card__cta" onClick={onViewChanges}>
+        View Changes
+      </button>
     </article>
   )
 }
@@ -198,6 +272,18 @@ export default function ResumeEnhancer() {
   const [beforeTab, setBeforeTab] = useState(null)
   const [afterTab, setAfterTab] = useState(null)
   const enhancingRef = useRef(false)
+
+  const openBeforeTab = useCallback((key) => {
+    setAfterTab(null)
+    setBeforeTab(key)
+  }, [])
+  const openAfterTab = useCallback((key) => {
+    setBeforeTab(null)
+    setAfterTab(key)
+  }, [])
+  const scrollToAdded = useCallback(() => {
+    document.getElementById('added-to-resume')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
   const jdSaveTimerRef = useRef(null)
   const lastSavedJdRef = useRef('')
 
@@ -481,183 +567,178 @@ export default function ResumeEnhancer() {
         )}
       </div>
 
-      {comparison && (
-        <div className="service-section">
-          <h4 className="comparison-title">Before & After Comparison</h4>
-          <p className="comparison-legend">
-            <span className="comparison-legend__item comparison-legend__item--green">Green = newly added</span>
-            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = rewritten</span>
-          </p>
-          <div className="resume-enhancer-workspace">
-            <div className="upload-box">
-              <div className="upload-box__header">
-                <div className="upload-box__label-group">
-                  <span className="upload-box__icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                    </svg>
-                  </span>
-                  <div>
-                    <h4 className="upload-box__label">Original Resume</h4>
-                    <p className="upload-box__sublabel">Your uploaded document</p>
-                  </div>
-                </div>
-              </div>
-              <div className="upload-box__content upload-box__content--docx">
-                <DocumentPreview blob={originalBlob} fileType={fileType} />
-              </div>
-            </div>
-
-            <div className="upload-box">
-              <div className="upload-box__header">
-                <div className="upload-box__label-group">
-                  <span className="upload-box__icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    </svg>
-                  </span>
-                  <div>
-                    <h4 className="upload-box__label">Enhanced Resume</h4>
-                    <p className="upload-box__sublabel">Optimized content, same format</p>
-                  </div>
-                </div>
-              </div>
-              <div className="upload-box__content upload-box__content--docx">
-                <DocumentPreview
-                  blob={enhancedBlob}
-                  fileType="docx"
-                  emptyLabel="Enhanced resume will appear here"
-                />
-              </div>
-            </div>
-          </div>
-
-          {enhancedBlob && sessionId && (
-            <div className="service-cta-row">
-              <a
-                href={getDownloadUrl(sessionId)}
-                className="btn btn--primary btn--xl"
-                download
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                Download Enhanced DOCX
-              </a>
-            </div>
-          )}
-        </div>
-      )}
-
       {showResults && (
-        <section id="enhancement-results" className="enhance-results" aria-label="Enhancement results">
+        <section id="enhancement-results" className="enhance-results enhance-results--v2" aria-label="Enhancement results">
           <div className="enhance-results__header">
+            <span className="enhance-results__eyebrow">02</span>
             <h4 className="enhance-results__title">Enhancement Results</h4>
             <p className="enhance-results__subtitle">
-              Verified changes applied to your enhanced resume
+              Score breakdown, verified changes, then your resume preview
             </p>
           </div>
 
-          <div className="enhance-results__stack">
-            <AtsScoreCard
-              badge="Before"
+          {/* Section 2 — compact score cards */}
+          <div className="ats-mini-grid" aria-label="Score cards">
+            <CompactScoreCard
+              cardKey="before"
               title="Before score"
-              desc="Original resume vs JD — Skills + Keywords + Bullets = 100. Click a section to see matches."
+              subtitle="Original resume vs JD"
               score={results.beforeScore}
-              label="before / 100"
               gradId="beforeScoreGrad"
               breakdown={beforeBreakdown}
               activeTab={beforeTab}
-              onTabChange={setBeforeTab}
+              onTabChange={openBeforeTab}
             />
-
-            <AtsScoreCard
-              badge="After"
+            <CompactScoreCard
+              cardKey="after"
               title="After score"
-              desc="Enhanced resume vs JD — Skills + Keywords + Bullets = 100. Click a section to see matches."
+              subtitle="Enhanced resume vs JD"
               score={results.afterScore}
-              label="after / 100"
               gradId="afterScoreGrad"
               breakdown={afterBreakdown}
               delta={results.scoreDelta}
               activeTab={afterTab}
-              onTabChange={setAfterTab}
+              onTabChange={openAfterTab}
             />
-
-            {/* Card 3 — Added to resume */}
-            <article className="feature-result-card feature-result-card--wide">
-              <div className="feature-result-card__body feature-result-card__body--scroll">
-                <span className="feature-result-card__badge">Changes Applied</span>
-                <h3 className="feature-result-card__title">Added to resume</h3>
-                <p className="feature-result-card__desc">
-                  Verified updates applied to your enhanced DOCX.
-                </p>
-
-                <div className="added-sections">
-                  <div className="added-section">
-                    <h6 className="added-section__heading">Added skills</h6>
-                    {addedSkills.length > 0 ? (
-                      <div className="added-skills-row">
-                        {addedSkills.map(({ skill, category }) => (
-                          <span key={`${category}-${skill}`} className="added-skill-chip" title={category}>
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="added-section__empty">No skills added</p>
-                    )}
-                  </div>
-
-                  <div className="added-section">
-                    <h6 className="added-section__heading">Added bullets</h6>
-                    {addedBullets.length > 0 ? (
-                      <ol className="added-bullets-steps">
-                        {addedBullets.map((item, idx) => (
-                          <li key={`${item.section}-${idx}`} className="added-bullets-steps__item">
-                            <span className="added-bullets-steps__num">{idx + 1}</span>
-                            <div className="added-bullets-steps__content">
-                              <span className="added-bullets-steps__where">
-                                {item.section}
-                                {item.rewritten ? ' · rewritten' : ' · added'}
-                              </span>
-                              <p className="added-bullets-steps__text">{item.text}</p>
-                            </div>
-                          </li>
-                        ))}
-                      </ol>
-                    ) : (
-                      <p className="added-section__empty">No bullets added</p>
-                    )}
-                  </div>
-
-                  <div className="added-section">
-                    <h6 className="added-section__heading">Added keywords</h6>
-                    {addedKeywords.length > 0 ? (
-                      <div className="added-skills-row">
-                        {addedKeywords.map((kw) => (
-                          <span key={kw} className="added-skill-chip added-skill-chip--kw">{kw}</span>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="added-section__empty">No new keywords matched</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="feature-result-card__visual feature-result-card__visual--stats">
-                <div className="feature-result-card__count">
-                  <span>{addedSkills.length + addedBullets.length + addedKeywords.length}</span>
-                  <small>total changes</small>
-                </div>
-              </div>
-            </article>
+            <ChangesAppliedCard
+              total={addedSkills.length + addedBullets.length + addedKeywords.length}
+              onViewChanges={scrollToAdded}
+            />
           </div>
 
-          <div className="enhance-results__fade" aria-hidden="true" />
+          {/* Added to resume */}
+          <article id="added-to-resume" className="added-panel">
+            <div className="added-panel__head">
+              <h3 className="added-panel__title">
+                Added to resume
+                <span className="added-panel__count">
+                  {addedSkills.length + addedBullets.length + addedKeywords.length} changes
+                </span>
+              </h3>
+            </div>
+
+            <div className="added-sections">
+              <div className="added-section">
+                <h6 className="added-section__heading">Added skills</h6>
+                {addedSkills.length > 0 ? (
+                  <div className="added-skills-row">
+                    {addedSkills.map(({ skill, category }) => (
+                      <span key={`${category}-${skill}`} className="added-skill-chip" title={category}>
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="added-section__empty">No skills added</p>
+                )}
+              </div>
+
+              <div className="added-section">
+                <h6 className="added-section__heading">Added bullets</h6>
+                {addedBullets.length > 0 ? (
+                  <ol className="added-bullets-steps">
+                    {addedBullets.map((item, idx) => (
+                      <li key={`${item.section}-${idx}`} className="added-bullets-steps__item">
+                        <span className="added-bullets-steps__num">{idx + 1}</span>
+                        <div className="added-bullets-steps__content">
+                          <span className="added-bullets-steps__where">
+                            {item.section}
+                            {item.rewritten ? ' · rewritten' : ' · added'}
+                          </span>
+                          <p className="added-bullets-steps__text">{item.text}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="added-section__empty">No bullets added</p>
+                )}
+              </div>
+
+              <div className="added-section">
+                <h6 className="added-section__heading">Added keywords</h6>
+                {addedKeywords.length > 0 ? (
+                  <div className="added-skills-row">
+                    {addedKeywords.map((kw) => (
+                      <span key={kw} className="added-skill-chip added-skill-chip--kw">{kw}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="added-section__empty">No new keywords matched</p>
+                )}
+              </div>
+            </div>
+          </article>
+
+          {/* Preview */}
+          <div className="enhance-preview-block">
+            <h4 className="comparison-title">Enhanced Resume Preview</h4>
+            <p className="comparison-legend">
+              <span className="comparison-legend__item comparison-legend__item--green">Green = newly added</span>
+              <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = rewritten</span>
+            </p>
+            <div className="resume-enhancer-workspace">
+              <div className="upload-box">
+                <div className="upload-box__header">
+                  <div className="upload-box__label-group">
+                    <span className="upload-box__icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="upload-box__label">Original Resume</h4>
+                      <p className="upload-box__sublabel">Your uploaded document</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="upload-box__content upload-box__content--docx">
+                  <DocumentPreview blob={originalBlob} fileType={fileType} />
+                </div>
+              </div>
+
+              <div className="upload-box">
+                <div className="upload-box__header">
+                  <div className="upload-box__label-group">
+                    <span className="upload-box__icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="upload-box__label">Enhanced Resume</h4>
+                      <p className="upload-box__sublabel">Optimized content, same format</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="upload-box__content upload-box__content--docx">
+                  <DocumentPreview
+                    blob={enhancedBlob}
+                    fileType="docx"
+                    emptyLabel="Enhanced resume will appear here"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {enhancedBlob && sessionId && (
+              <div className="service-cta-row">
+                <a
+                  href={getDownloadUrl(sessionId)}
+                  className="btn btn--primary btn--xl"
+                  download
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Download Enhanced DOCX
+                </a>
+              </div>
+            )}
+          </div>
         </section>
       )}
     </div>
