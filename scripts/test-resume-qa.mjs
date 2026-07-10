@@ -107,6 +107,35 @@ assert(!fixedXml.includes('w:after="5000"'), 'huge spacing removed after repair'
 assert(!fixedXml.toLowerCase().includes('cloud environments'), 'skills dump stripped')
 assert(fixedXml.includes('Capgemini'), 'company preserved')
 
+// Permanent fix: paragraphs with NO pPr must get keepNext=0 (style inheritance trap)
+const noPprBody = [
+  '<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Business Analyst | Acme</w:t></w:r></w:p>',
+  // list bullet with numPr but keepNext only in STYLE — classic blank-page source
+  `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>`
+  + `<w:r><w:t>Acted as a thought partner to senior leadership on strategy.</w:t></w:r></w:p>`,
+  `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>`
+  + `<w:r><w:t>Delivered dashboards that improved decision speed by 30 percent.</w:t></w:r></w:p>`,
+  // paragraph with ZERO pPr
+  `<w:p><w:r><w:t>Another bullet-like line without any paragraph properties at all.</w:t></w:r></w:p>`,
+].join('')
+
+const noPprStyles = `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`
+  + `<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/>`
+  + `<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:after="200"/></w:pPr></w:style></w:styles>`
+
+const noPprBuf = makeDocx(noPprBody, noPprStyles)
+const noPprQaBefore = qaEnhancedResume(noPprBuf, noPprBuf, { experience: [{ company: 'Acme' }] })
+assert(!noPprQaBefore.ok, 'list paras without keepNext=0 fail QA')
+
+const noPprFixed = ensureEnhancedResumeQuality(noPprBuf, noPprBuf, { experience: [{ company: 'Acme' }] }, { maxAttempts: 2 })
+assert(noPprFixed.qa.ok, 'nuclear repair passes QA')
+const noPprXml = new PizZip(noPprFixed.buffer).file('word/document.xml').asText()
+const noPprStylesOut = new PizZip(noPprFixed.buffer).file('word/styles.xml').asText()
+assert((noPprXml.match(/w:keepNext w:val="0"/g) || []).length >= 3, 'every para got keepNext=0')
+assert(noPprStylesOut.includes('w:keepNext w:val="0"'), 'styles forced keepNext off')
+assert(!/<w:keepNext\s*\/>/.test(noPprStylesOut), 'styles have no bare keepNext enabled')
+
 // --- Patch + QA path still works ---
 const plan = {
   summaryBullets: [],

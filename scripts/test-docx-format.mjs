@@ -131,7 +131,8 @@ assert(!gWin.includes('w:after="2400"'), 'new bullet does not keep huge after sp
 assert(/w:after="(0|40|60|80|120)"/.test(gWin), 'new bullet uses tightened after spacing')
 assert(!/<w:keepNext\s*\/>/.test(gapOut), 'document has no bare keepNext enabled')
 assert(!gapOut.includes('w:type="page"'), 'empty page-break paragraph removed')
-assert(!gapStyles.includes('w:keepNext'), 'styles keepNext removed')
+assert(!/<w:keepNext\s*\/>/.test(gapStyles), 'styles have no bare keepNext enabled')
+assert(gapStyles.includes('w:keepNext w:val="0"') || !gapStyles.includes('w:keepNext'), 'styles keepNext forced off')
 
 // Skills dump must NOT explode category lines / table layouts
 const skillsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`

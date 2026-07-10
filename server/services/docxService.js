@@ -390,7 +390,9 @@ function buildTextRuns(text, template, mark) {
  * Preserves indent, list numbering, and fonts.
  */
 function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
-  if (!pPr) return pPr || ''
+  if (!pPr) {
+    return '<w:pPr><w:keepNext w:val="0"/><w:keepLines w:val="0"/><w:spacing w:before="0" w:after="40"/></w:pPr>'
+  }
 
   let next = pPr
     .replace(/<w:keepNext\b[^/]*\/>/g, '')
@@ -401,7 +403,6 @@ function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
     .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
 
   next = next.replace(/<w:spacing\b[^/]*\/>/g, (tag) => {
-    // Prefer explicit twip attrs; ignore *Lines when twips exist
     const beforeTwip = /(?:^|\s)w:before="(\d+)"/.exec(tag)
     const afterTwip = /(?:^|\s)w:after="(\d+)"/.exec(tag)
     const beforeLines = /w:beforeLines="(\d+)"/.exec(tag)
@@ -411,34 +412,69 @@ function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
 
     let b = beforeTwip ? parseInt(beforeTwip[1], 10) : 0
     let a = afterTwip ? parseInt(afterTwip[1], 10) : 0
-    // afterLines/beforeLines are 1/100 of a line — convert roughly to twips (240 twips ≈ 1 line)
     if (!beforeTwip && beforeLines) b = Math.round(parseInt(beforeLines[1], 10) * 2.4)
     if (!afterTwip && afterLines) a = Math.round(parseInt(afterLines[1], 10) * 2.4)
 
     let ln = line ? parseInt(line[1], 10) : null
     const rule = lineRule ? lineRule[1] : null
 
-    // Aggressive caps — half/full page gaps are usually 2000–12000 twips
     const maxBefore = isBullet ? 60 : 160
     const maxAfter = isBullet ? 80 : 200
     if (b > maxBefore) b = isBullet ? 0 : 80
     if (a > maxAfter) a = isBullet ? 40 : 80
     if (ln && (rule === 'auto' || !rule) && ln >= 360) ln = 240
+    // Exact line spacing with huge values also creates blank bands
+    if (ln && rule === 'exact' && ln > 480) ln = 240
 
     const parts = [`w:before="${b}"`, `w:after="${a}"`]
     if (ln != null) {
       parts.push(`w:line="${ln}"`)
-      parts.push(`w:lineRule="${rule || 'auto'}"`)
+      parts.push(`w:lineRule="${rule === 'exact' ? 'auto' : (rule || 'auto')}"`)
     }
     return `<w:spacing ${parts.join(' ')}/>`
   })
 
-  // Explicitly disable keep-with-next so style inheritance cannot reopen blank pages
-  if (/<\/w:pPr>/.test(next) && !/<w:keepNext\b/.test(next)) {
-    next = next.replace('</w:pPr>', '<w:keepNext w:val="0"/><w:keepLines w:val="0"/></w:pPr>')
+  // ALWAYS set explicit off — required to override List Paragraph / basedOn style inheritance
+  if (/<\/w:pPr>/.test(next)) {
+    next = next
+      .replace(/<w:keepNext\b[^/]*\/>/g, '')
+      .replace(/<w:keepLines\b[^/]*\/>/g, '')
+      .replace('</w:pPr>', '<w:keepNext w:val="0"/><w:keepLines w:val="0"/><w:pageBreakBefore w:val="0"/></w:pPr>')
   }
 
   return next
+}
+
+/**
+ * Permanent fix: EVERY body paragraph must explicitly disable keep-with-next.
+ * Paragraphs with no pPr were still inheriting keepNext from list styles — that
+ * creates the classic "1 bullet on a blank page, rest on the next page" gap.
+ */
+function forceSafePaginationOnAllParagraphs(xml) {
+  if (!xml) return xml
+
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    // Skip sectPr-only / empty structural noise carefully — still sanitize real content paras
+    const openMatch = para.match(/^<w:p\b[^>]*>/)
+    if (!openMatch) return para
+    const open = openMatch[0]
+    const rest = para.slice(open.length)
+
+    if (/^<w:pPr\b[\s\S]*?<\/w:pPr>/.test(rest)) {
+      return para.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/, (pPr) => {
+        const isBullet = /w:numPr/.test(pPr)
+          || /w:ilvl/.test(pPr)
+          || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(pPr)
+          || /[•\u2022]/.test(para)
+        return sanitizeParagraphPPr(pPr, { isBullet })
+      })
+    }
+
+    // No pPr — inject explicit safe pagination so styles cannot reintroduce keepNext
+    const isBullet = /w:numPr/.test(para) || /[•\u2022]/.test(para)
+    const safePPr = sanitizeParagraphPPr(null, { isBullet })
+    return `${open}${safePPr}${rest}`
+  })
 }
 
 /**
@@ -448,12 +484,11 @@ function sanitizeDocumentPagination(xml) {
   if (!xml) return xml
 
   let out = xml
-    // Word cached page breaks from prior layout
     .replace(/<w:lastRenderedPageBreak\s*\/>/g, '')
-    // Soft page breaks inside runs
     .replace(/<w:br\b[^>]*w:type="page"[^/]*\/>/g, '')
+    .replace(/<w:br\b[^>]*w:type="page"[^>]*>\s*<\/w:br>/g, '')
 
-  // Drop empty page-break-only paragraphs
+  // Drop empty page-break-only / huge-spacer paragraphs
   out = out.replace(
     /<w:p\b[^>]*>\s*(?:<w:pPr\b[\s\S]*?<\/w:pPr>\s*)?(?:<w:r\b[\s\S]*?<\/w:r>\s*)*<\/w:p>/g,
     (para) => {
@@ -461,32 +496,24 @@ function sanitizeDocumentPagination(xml) {
       if (!plain && (/w:type="page"/.test(para) || /w:lastRenderedPageBreak/.test(para))) {
         return ''
       }
-      // Empty spacer paragraphs with huge spacing → collapse
       if (!plain) {
         const spacing = getParagraphSpacingMetrics(para)
-        if (spacing.after > 200 || spacing.before > 200) return ''
+        if (spacing.after > 120 || spacing.before > 120) return ''
       }
       return para
     },
   )
 
-  out = out.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/g, (pPr) => {
-    const isBullet = /w:numPr/.test(pPr)
-      || /w:ilvl/.test(pPr)
-      || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(pPr)
-    return sanitizeParagraphPPr(pPr, { isBullet })
-  })
+  // Nuclear: every paragraph gets explicit keepNext/keepLines off
+  out = forceSafePaginationOnAllParagraphs(out)
 
-  // Table rows that cannot split across pages also create blank pages in dense resumes
   out = out.replace(/<w:cantSplit\b[^/]*\/>/g, '')
   out = out.replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
-  // Absurd fixed row heights create blank regions
   out = out.replace(/<w:trHeight\b[^>]*w:val="(\d+)"[^/]*\/>/g, (tag, val) => {
     const n = parseInt(val, 10)
     if (n > 600) return '<w:trHeight w:val="0" w:hRule="auto"/>'
     return tag
   })
-  // Floating frames often leave blank page regions in Word
   out = out.replace(/<w:framePr\b[^/]*\/>/g, '')
   out = out.replace(/<w:framePr\b[\s\S]*?<\/w:framePr>/g, '')
 
@@ -494,7 +521,44 @@ function sanitizeDocumentPagination(xml) {
 }
 
 /**
- * Post-enhance layout repair: re-sanitize document + styles to kill page gaps.
+ * Strip keepNext from styles AND force explicit off on every style pPr.
+ */
+function sanitizeStylesXml(stylesXml) {
+  if (!stylesXml) return stylesXml
+  let out = stylesXml
+    .replace(/<w:keepNext\b[^/]*\/>/g, '')
+    .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
+    .replace(/<w:keepLines\b[^/]*\/>/g, '')
+    .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
+    .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
+    .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
+    .replace(/<w:cantSplit\b[^/]*\/>/g, '')
+    .replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
+
+  // Inject explicit off into every style paragraph properties block
+  out = out.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/g, (pPr) => {
+    let next = pPr
+      .replace(/<w:keepNext\b[^/]*\/>/g, '')
+      .replace(/<w:keepLines\b[^/]*\/>/g, '')
+      .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
+    if (/<\/w:pPr>/.test(next) && !/<w:keepNext\b/.test(next)) {
+      next = next.replace('</w:pPr>', '<w:keepNext w:val="0"/><w:keepLines w:val="0"/><w:pageBreakBefore w:val="0"/></w:pPr>')
+    }
+    return next
+  })
+
+  return out
+}
+
+function sanitizeAllStyleParts(zip) {
+  for (const name of ['word/styles.xml', 'word/stylesWithEffects.xml']) {
+    const file = zip.file(name)
+    if (file) zip.file(name, sanitizeStylesXml(file.asText()))
+  }
+}
+
+/**
+ * Post-enhance layout repair: re-sanitize document + ALL style parts.
  * Does not re-run AI — deterministic XML cleanup only.
  */
 export function repairDocxLayout(docxBuffer) {
@@ -503,14 +567,9 @@ export function repairDocxLayout(docxBuffer) {
   if (!docFile) throw new Error('Invalid DOCX: missing document.xml')
 
   let xml = sanitizeDocumentPagination(docFile.asText())
-  // Extra pass: force every paragraph pPr through sanitize again after structural deletes
-  xml = sanitizeDocumentPagination(xml)
+  xml = sanitizeDocumentPagination(xml) // second pass after structural deletes
   zip.file('word/document.xml', xml)
-
-  const stylesFile = zip.file('word/styles.xml')
-  if (stylesFile) {
-    zip.file('word/styles.xml', sanitizeStylesXml(stylesFile.asText()))
-  }
+  sanitizeAllStyleParts(zip)
 
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
@@ -1000,19 +1059,6 @@ function isUsableBulletTemplateChunk(chunk) {
   const ilvl = /w:ilvl\s[^>]*w:val="(\d+)"/.exec(chunk)
   if (ilvl && parseInt(ilvl[1], 10) > 0) return false
   return true
-}
-
-function sanitizeStylesXml(stylesXml) {
-  if (!stylesXml) return stylesXml
-  return stylesXml
-    .replace(/<w:keepNext\b[^/]*\/>/g, '')
-    .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
-    .replace(/<w:keepLines\b[^/]*\/>/g, '')
-    .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
-    .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
-    .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
-    .replace(/<w:cantSplit\b[^/]*\/>/g, '')
-    .replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
 }
 
 /**
@@ -2040,11 +2086,7 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
   }
 
   zip.file('word/document.xml', xml)
-
-  const stylesFile = zip.file('word/styles.xml')
-  if (stylesFile) {
-    zip.file('word/styles.xml', sanitizeStylesXml(stylesFile.asText()))
-  }
+  sanitizeAllStyleParts(zip)
 
   return {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),

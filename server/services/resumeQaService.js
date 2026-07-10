@@ -53,6 +53,25 @@ export function findPaginationDefects(xml) {
     })
   }
 
+  // List bullets without explicit keepNext=0 still inherit style keepNext → blank pages
+  const listParas = [...xml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].filter((m) => {
+    const para = m[0]
+    return /w:numPr/.test(para) || /w:pStyle\s[^>]*w:val="[^"]*List/i.test(para)
+  })
+  let missingOverride = 0
+  for (const m of listParas) {
+    const para = m[0]
+    const pPr = para.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)
+    if (!pPr || !/<w:keepNext\b[^>]*w:val="0"/.test(pPr[0])) missingOverride += 1
+  }
+  if (missingOverride > 0) {
+    defects.push({
+      code: 'missing_keepnext_override',
+      severity: 'high',
+      message: `${missingOverride} list paragraphs missing explicit keepNext=0 override`,
+    })
+  }
+
   const keepLinesHits = [...xml.matchAll(/<w:keepLines\b[^/]*\/>|<w:keepLines\b[\s\S]*?<\/w:keepLines>/g)]
   const enabledKeepLines = keepLinesHits.filter((m) => isKeepLinesEnabled(m[0]))
   if (enabledKeepLines.length > 3) {
@@ -232,8 +251,16 @@ export function repairEnhancedResume(enhancedBuffer, qaResult) {
   const actions = []
   let buffer = enhancedBuffer
 
-  const needsLayout = ['keep_next', 'keep_lines', 'page_break', 'cant_split', 'huge_spacing', 'frame', 'tall_row']
-    .some((c) => codes.has(c))
+  const needsLayout = [
+    'keep_next',
+    'keep_lines',
+    'page_break',
+    'cant_split',
+    'huge_spacing',
+    'frame',
+    'tall_row',
+    'missing_keepnext_override',
+  ].some((c) => codes.has(c))
 
   if (needsLayout || !qaResult?.ok) {
     buffer = repairDocxLayout(buffer)
