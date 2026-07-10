@@ -480,13 +480,51 @@ function sanitizeDocumentPagination(xml) {
   // Table rows that cannot split across pages also create blank pages in dense resumes
   out = out.replace(/<w:cantSplit\b[^/]*\/>/g, '')
   out = out.replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
-  // Don't let a whole table row stay glued to the next (blank-page trap)
-  out = out.replace(/<w:tblHeader\b[^/]*\/>/g, (tag) => {
-    // keep real header rows; only strip if val=true on non-first — safest: leave tblHeader
+  // Absurd fixed row heights create blank regions
+  out = out.replace(/<w:trHeight\b[^>]*w:val="(\d+)"[^/]*\/>/g, (tag, val) => {
+    const n = parseInt(val, 10)
+    if (n > 600) return '<w:trHeight w:val="0" w:hRule="auto"/>'
     return tag
   })
+  // Floating frames often leave blank page regions in Word
+  out = out.replace(/<w:framePr\b[^/]*\/>/g, '')
+  out = out.replace(/<w:framePr\b[\s\S]*?<\/w:framePr>/g, '')
 
   return out
+}
+
+/**
+ * Post-enhance layout repair: re-sanitize document + styles to kill page gaps.
+ * Does not re-run AI — deterministic XML cleanup only.
+ */
+export function repairDocxLayout(docxBuffer) {
+  const zip = new PizZip(docxBuffer)
+  const docFile = zip.file('word/document.xml')
+  if (!docFile) throw new Error('Invalid DOCX: missing document.xml')
+
+  let xml = sanitizeDocumentPagination(docFile.asText())
+  // Extra pass: force every paragraph pPr through sanitize again after structural deletes
+  xml = sanitizeDocumentPagination(xml)
+  zip.file('word/document.xml', xml)
+
+  const stylesFile = zip.file('word/styles.xml')
+  if (stylesFile) {
+    zip.file('word/styles.xml', sanitizeStylesXml(stylesFile.asText()))
+  }
+
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
+}
+
+/** Fast plain-text extract from DOCX for QA (no mammoth). */
+export function extractDocxPlainText(docxBuffer) {
+  const zip = new PizZip(docxBuffer)
+  const docFile = zip.file('word/document.xml')
+  if (!docFile) return ''
+  return [...docFile.asText().matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((m) => unescapeXml(m[1]))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**

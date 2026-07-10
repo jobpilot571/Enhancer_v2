@@ -6,6 +6,7 @@ import {
 } from '../store/sessionStore.js'
 import { updateEnhanceJob } from '../store/enhanceJobStore.js'
 import { patchDocx, filterEnhancementPlan, buildMatchAnalysis, mergeExperienceAdditions, keepSummaryBullets, ensureSkillsInBullets, detectSummaryFormat } from './docxService.js'
+import { ensureEnhancedResumeQuality } from './resumeQaService.js'
 import { compareResumeToJD, buildEnhancedResumeData } from './compareService.js'
 import { createEnhancementPlan, createMissingExperienceBullets, createSummaryEnhancement } from './openaiService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
@@ -187,11 +188,33 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     log(jobId, 'patching DOCX')
     const originalBuffer = readFile(session.originalPath)
 
-    // One patch with highlights, then strip shading for download (same formatting, half the DOCX work)
-    const { buffer: previewBuffer, applied } = patchDocx(originalBuffer, enhancementPlan, {
+    // One patch with highlights, then QA gate + auto-repair before download
+    const { buffer: patchedPreview, applied } = patchDocx(originalBuffer, enhancementPlan, {
       highlight: true,
       resumeData,
     })
+
+    updateEnhanceJob(jobId, { step: 'preparing_preview' })
+    log(jobId, 'qa checking enhanced resume')
+    const qaResult = ensureEnhancedResumeQuality(
+      originalBuffer,
+      patchedPreview,
+      resumeData,
+      {
+        maxAttempts: 2,
+        log: (msg) => log(jobId, msg),
+      },
+    )
+    let previewBuffer = qaResult.buffer
+    if (qaResult.repaired) {
+      log(jobId, `qa auto-repaired: ${qaResult.history.slice(1).map((h) => (h.actions || []).join('+')).join(' | ')}`)
+    }
+    if (!qaResult.qa.ok) {
+      log(jobId, `qa warning: remaining defects ${qaResult.qa.defects.map((d) => d.code).join(', ')}`)
+    } else {
+      log(jobId, 'qa: enhanced resume verified')
+    }
+
     const downloadZip = new PizZip(previewBuffer)
     const downloadXml = downloadZip.file('word/document.xml').asText()
       .replace(/<w:shd[^/]*\/>/g, '')
@@ -201,7 +224,6 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)
 
-    updateEnhanceJob(jobId, { step: 'preparing_preview' })
     log(jobId, 'finalizing')
 
     const enhancedResumeData = buildEnhancedResumeData(resumeData, applied)
