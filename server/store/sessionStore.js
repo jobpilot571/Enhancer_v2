@@ -47,6 +47,44 @@ export function createSession(fileName, fileType, originalBuffer) {
   return session
 }
 
+/** Form-based Resume Builder session (no upload). */
+export function createBuilderSession(formData) {
+  const sessionId = randomUUID()
+  const fileName = `${(formData?.name || 'resume').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'resume'}.docx`
+  const session = {
+    sessionId,
+    kind: 'builder',
+    fileName,
+    fileType: 'docx',
+    originalPath: null,
+    enhancedPath: null,
+    enhancedPreviewPath: null,
+    builderInput: formData || {},
+    resumeData: null,
+    jdText: '',
+    jdData: null,
+    comparison: null,
+    enhancementPlan: null,
+    atsScore: null,
+    createdAt: Date.now(),
+  }
+  sessions.set(sessionId, session)
+  return session
+}
+
+export function setGeneratedDocx(sessionId, downloadBuffer, previewBuffer = downloadBuffer) {
+  const session = getSession(sessionId)
+  if (!session) return null
+  const enhancedPath = path.join(UPLOAD_DIR, `${sessionId}-generated.docx`)
+  const enhancedPreviewPath = path.join(UPLOAD_DIR, `${sessionId}-generated-preview.docx`)
+  fs.writeFileSync(enhancedPath, downloadBuffer)
+  fs.writeFileSync(enhancedPreviewPath, previewBuffer)
+  session.enhancedPath = enhancedPath
+  session.enhancedPreviewPath = enhancedPreviewPath
+  session.originalPath = enhancedPath
+  return session
+}
+
 export function getSession(sessionId) {
   return sessions.get(sessionId) || null
 }

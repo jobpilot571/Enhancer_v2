@@ -323,3 +323,137 @@ Enhancement rules (ALL mandatory):
     PLAN_SCHEMA,
   )
 }
+
+const BUILD_RESUME_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    email: { type: 'string' },
+    phone: { type: 'string' },
+    location: { type: 'string' },
+    summary: { type: 'string' },
+    summaryBullets: { type: 'array', items: { type: 'string' } },
+    skills: { type: 'array', items: { type: 'string' } },
+    technicalSkills: { type: 'array', items: { type: 'string' } },
+    skillCategories: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          category: { type: 'string' },
+          skills: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['category', 'skills'],
+        additionalProperties: false,
+      },
+    },
+    experience: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          company: { type: 'string' },
+          title: { type: 'string' },
+          dates: { type: 'string' },
+          location: { type: 'string' },
+          bullets: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['company', 'title', 'dates', 'location', 'bullets'],
+        additionalProperties: false,
+      },
+    },
+    education: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          school: { type: 'string' },
+          degree: { type: 'string' },
+          course: { type: 'string' },
+          dates: { type: 'string' },
+        },
+        required: ['school', 'degree', 'course', 'dates'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: [
+    'name',
+    'email',
+    'phone',
+    'location',
+    'summary',
+    'summaryBullets',
+    'skills',
+    'technicalSkills',
+    'skillCategories',
+    'experience',
+    'education',
+  ],
+  additionalProperties: false,
+}
+
+/**
+ * Generate a full resume from Resume Builder form input.
+ * Uses user-provided company/role/dates/education/skills; invents realistic bullets.
+ */
+export async function generateResumeFromForm(formData) {
+  const companies = Array.isArray(formData.companies) ? formData.companies : []
+  const bulletsPerCompany = Math.min(15, Math.max(5, Number(formData.bulletsPerCompany) || 8))
+  const years = Number(formData.yearsOfExperience) || 0
+  const education = formData.education || {}
+
+  const companyLines = companies.map((c, i) => {
+    const loc = [c.city, c.state].filter(Boolean).join(', ')
+    const skills = Array.isArray(c.skills) && c.skills.length
+      ? c.skills.join(', ')
+      : '(none selected)'
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | City/State="${loc || 'N/A'}" | Skills=[${skills}]`
+  }).join('\n')
+
+  const allUserSkills = [...new Set(
+    companies.flatMap((c) => (c.skills || []).map((s) => String(s).trim()).filter(Boolean)),
+  )]
+
+  return jsonCompletion(
+    `You are an expert resume writer creating a professional resume from scratch for someone who does not have one yet.
+
+${BULLET_RULES}
+
+Hard rules:
+- Use the EXACT company names, job titles, and dates the user provided. Do not rename companies or invent extra jobs.
+- Write EXACTLY ${bulletsPerCompany} bullets for EACH company (no more, no less).
+- Weave the user-selected skills for each company naturally into that company's bullets.
+- Bullets must be role-appropriate for "${formData.role}" with about ${years} years of experience.
+- Make bullets sound human and specific — tools, projects, outcomes — never generic filler.
+- summaryBullets: return 4–8 strong summary bullets (leave summary as a short 1–2 sentence overview).
+- skillCategories: group ALL user-selected skills (plus closely related tools) into 4–8 categories like "Tools", "Data & Reporting", "Methodologies". Prefer the user's selected skills as the core list.
+- skills + technicalSkills: flat list of the same skills (short names only).
+- email/phone/location: copy from user input when provided.
+- education: use the user's school, course, degree, and dates exactly (format dates as "Start – End").
+- Return experience entries in the SAME order as the companies listed.`,
+    `Candidate:
+- Name: ${formData.name}
+- Email: ${formData.email || ''}
+- Phone: ${formData.phone || ''}
+- LinkedIn: ${formData.linkedin || ''}
+- Target role: ${formData.role}
+- Years of experience: ${years}
+- User-selected skills (must appear in skillCategories): ${allUserSkills.join(', ') || '(none — invent realistic skills for the role)'}
+- Summary notes from user (optional guidance): ${formData.summaryNotes || '(none — invent a strong summary)'}
+
+Companies (write ${bulletsPerCompany} bullets each; use that company's skills in bullets):
+${companyLines || '(none)'}
+
+Education:
+- School: ${education.school || ''}
+- Course: ${education.course || ''}
+- Degree: ${education.degree || ''}
+- Start: ${education.startDate || ''}
+- End: ${education.endDate || ''}
+
+Generate the complete resume JSON.`,
+    'build_resume',
+    BUILD_RESUME_SCHEMA,
+  )
+}

@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import enhancerRoutes from './routes/enhancer.js'
+import builderRoutes from './routes/builder.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 
 const app = express()
@@ -32,21 +33,25 @@ function buildCorsOrigin() {
 app.use(cors({ origin: buildCorsOrigin(), credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/api/enhancer', enhancerRoutes)
+app.use('/api/builder', builderRoutes)
 
 app.get('/', (_req, res) => {
   res.json({
-    service: 'JobPilot Resume Enhancer API',
+    service: 'JobPilot AI API',
     status: 'running',
     message: 'This is the backend API only. Open the frontend on Vercel to use the app.',
     health: '/api/health',
-    api: '/api/enhancer',
+    api: {
+      enhancer: '/api/enhancer',
+      builder: '/api/builder',
+    },
   })
 })
 
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
-    service: 'resume-enhancer',
+    service: 'jobpilot-ai',
     aiProviders: getConfiguredProviders(),
   })
 })
