@@ -128,10 +128,73 @@ const gapStyles = gapOutZip.file('word/styles.xml').asText()
 const gIdx = gapOut.indexOf('Tight spacing experience bullet')
 const gWin = gapOut.slice(Math.max(0, gIdx - 350), gIdx + 40)
 assert(!gWin.includes('w:after="2400"'), 'new bullet does not keep huge after spacing')
-assert(/w:after="(0|60|120)"/.test(gWin), 'new bullet uses tightened after spacing')
-assert(!gapOut.includes('w:keepNext'), 'document keepNext removed')
+assert(/w:after="(0|40|60|80|120)"/.test(gWin), 'new bullet uses tightened after spacing')
+assert(!/<w:keepNext\s*\/>/.test(gapOut), 'document has no bare keepNext enabled')
 assert(!gapOut.includes('w:type="page"'), 'empty page-break paragraph removed')
 assert(!gapStyles.includes('w:keepNext'), 'styles keepNext removed')
+
+// Skills dump must NOT explode category lines / table layouts
+const skillsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
+  + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`
+  + `<w:p><w:r><w:t>SUMMARY</w:t></w:r></w:p>`
+  + bulletA('Summary bullet one about devops and cloud work here.', 720, 'Calibri')
+  + bulletA('Summary bullet two about pipelines and automation here.', 720, 'Calibri')
+  + `<w:p><w:r><w:t>TECHNICAL SKILLS</w:t></w:r></w:p>`
+  + `<w:tbl><w:tr>`
+  + `<w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>CI/CD &amp; Automation Tools:</w:t></w:r>`
+  + `<w:r><w:t> Jenkins, GitHub Actions</w:t></w:r></w:p></w:tc>`
+  + `<w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Cloud Platforms:</w:t></w:r>`
+  + `<w:r><w:t> AWS, Azure</w:t></w:r></w:p></w:tc>`
+  + `</w:tr></w:tbl>`
+  + `<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>`
+  + `<w:p><w:r><w:t>DevOps Engineer — Capgemini</w:t></w:r></w:p>`
+  + bulletA('Built CI/CD pipelines with Jenkins and GitHub Actions.', 720, 'Calibri')
+  + bulletA('Deployed workloads on AWS EKS with Terraform.', 720, 'Calibri')
+  + `<w:sectPr/></w:body></w:document>`
+
+const skillsZip = new PizZip()
+skillsZip.file('word/document.xml', skillsXml)
+skillsZip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>')
+const skillsBuf = skillsZip.generate({ type: 'nodebuffer' })
+const skillsPlan = {
+  summaryBullets: [],
+  experienceAdditions: [],
+  bulletRewrites: [],
+  skillsByCategory: [{
+    category: 'CI/CD & Automation Tools',
+    skills: [
+      'AI tools, SRE, Cloud environments, Cloud deployments, Cloud infrastructure, Cloud-native applications, Developer-facing products, Dashboards, Internal tools',
+      'Terraform',
+      'Kubernetes',
+      'Helm',
+      'Prometheus',
+      'Grafana',
+      'Docker',
+      'Ansible',
+    ],
+  }],
+  skillsToAdd: [],
+}
+const skillsResume = {
+  summaryBullets: ['Summary bullet one about devops and cloud work here.', 'Summary bullet two about pipelines and automation here.'],
+  headings: ['CI/CD & Automation Tools', 'Cloud Platforms'],
+  experience: [{
+    company: 'Capgemini',
+    title: 'DevOps Engineer',
+    bullets: ['Built CI/CD pipelines with Jenkins and GitHub Actions.', 'Deployed workloads on AWS EKS with Terraform.'],
+  }],
+}
+const { buffer: skillsOutBuf, applied: skillsApplied } = patchDocx(skillsBuf, skillsPlan, {
+  highlight: false,
+  resumeData: skillsResume,
+})
+const skillsOut = new PizZip(skillsOutBuf).file('word/document.xml').asText()
+assert(!skillsOut.includes('Cloud environments'), 'soft JD phrases not dumped into skills')
+assert(!skillsOut.includes('Developer-facing'), 'soft phrases rejected')
+assert((skillsApplied.skills || []).length <= 5, 'skills append capped')
+const cicdCell = skillsOut.slice(skillsOut.indexOf('CI/CD'), skillsOut.indexOf('Cloud Platforms'))
+assert(cicdCell.length < 500, 'CI/CD cell did not explode into a dump block')
+assert(skillsOut.includes('Terraform') || skillsOut.includes('Kubernetes') || skillsOut.includes('Docker'), 'at least one real tool skill added')
 
 // Paragraph-style summary must stay a paragraph (no new bullets)
 const paraXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`

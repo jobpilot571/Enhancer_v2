@@ -163,24 +163,46 @@ function clampBulletLength(text, maxChars = 155) {
   return `${trimmed}.`
 }
 
-/** True short skill/tool names only — reject JD sentences and soft benefits. */
+/** True short skill/tool names only — reject JD sentences, soft phrases, and dumps. */
 function isValidSkillName(skill) {
   const s = (skill || '').trim()
   if (!s) return false
-  if (s.length > 42) return false
-  if (s.split(/\s+/).length > 5) return false
+  if (s.length > 36) return false
+  if (s.split(/\s+/).length > 4) return false
   if (/[.!?]/.test(s)) return false
-  if (/,.*,/.test(s)) return false // multi-clause dumps
+  if (/,/.test(s)) return false // never accept comma-lists as one "skill"
+  if (/[:;]/.test(s)) return false
   const lower = s.toLowerCase()
   const banned = [
     'pto', 'flexible', 'apple equipment', 'track record', 'customer engagement',
     'technical fluency', 'owning complex', 'build integrations', 'salary',
     'benefits', 'remote work', 'work from home', 'equal opportunity',
+    'cloud environments', 'cloud deployments', 'cloud infrastructure',
+    'cloud-native applications', 'cloud-native platforms', 'cloud-native systems',
+    'cloud-native technologies', 'cloud-native tools', 'cloud platforms',
+    'cloud services', 'developer-facing', 'internal tools', 'ai tools',
+    'continuous delivery', 'continuous integration', 'exceptional',
+    'operations experience', 'problem solving', 'cross-functional',
+    'best practices', 'hands-on', 'self-starter', 'team player',
   ]
   if (banned.some((b) => lower.includes(b))) return false
-  // Prefer tool-like tokens (letters/numbers/+/#/.)
+  // Soft/generic fluff that is not a concrete tool
+  if (/^(cloud|software|hardware|systems?|applications?|platforms?|tools?|technologies|environments?|deployments?|services?|products?|dashboards?)$/i.test(s)) {
+    return false
+  }
   if (!/[a-z0-9]/i.test(s)) return false
   return true
+}
+
+/** Expand a plan skill entry that may be a comma-dump into individual candidates. */
+function expandSkillCandidates(raw) {
+  const text = (raw || '').trim()
+  if (!text) return []
+  if (!text.includes(',')) return isValidSkillName(text) ? [text] : []
+  return text
+    .split(',')
+    .map((p) => p.trim())
+    .filter(isValidSkillName)
 }
 
 function getRunText(runXml) {
@@ -373,32 +395,35 @@ function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
   let next = pPr
     .replace(/<w:keepNext\b[^/]*\/>/g, '')
     .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
+    .replace(/<w:keepLines\b[^/]*\/>/g, '')
+    .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
     .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
     .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
 
-  // keepLines on long bullet lists also forces orphan blank pages
-  if (isBullet) {
-    next = next
-      .replace(/<w:keepLines\b[^/]*\/>/g, '')
-      .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
-  }
-
   next = next.replace(/<w:spacing\b[^/]*\/>/g, (tag) => {
-    const before = /w:before(?:Lines)?="(\d+)"/.exec(tag)
-    const after = /w:after(?:Lines)?="(\d+)"/.exec(tag)
+    // Prefer explicit twip attrs; ignore *Lines when twips exist
+    const beforeTwip = /(?:^|\s)w:before="(\d+)"/.exec(tag)
+    const afterTwip = /(?:^|\s)w:after="(\d+)"/.exec(tag)
+    const beforeLines = /w:beforeLines="(\d+)"/.exec(tag)
+    const afterLines = /w:afterLines="(\d+)"/.exec(tag)
     const line = /w:line="(\d+)"/.exec(tag)
     const lineRule = /w:lineRule="([^"]+)"/.exec(tag)
-    let b = before ? parseInt(before[1], 10) : 0
-    let a = after ? parseInt(after[1], 10) : 0
+
+    let b = beforeTwip ? parseInt(beforeTwip[1], 10) : 0
+    let a = afterTwip ? parseInt(afterTwip[1], 10) : 0
+    // afterLines/beforeLines are 1/100 of a line — convert roughly to twips (240 twips ≈ 1 line)
+    if (!beforeTwip && beforeLines) b = Math.round(parseInt(beforeLines[1], 10) * 2.4)
+    if (!afterTwip && afterLines) a = Math.round(parseInt(afterLines[1], 10) * 2.4)
+
     let ln = line ? parseInt(line[1], 10) : null
     const rule = lineRule ? lineRule[1] : null
 
-    // Twips: ~1440 per inch. Cap kills half/full-page gaps without flattening section rhythm.
-    const maxBefore = isBullet ? 80 : 240
-    const maxAfter = isBullet ? 120 : 360
-    if (b > maxBefore) b = isBullet ? 0 : 120
-    if (a > maxAfter) a = isBullet ? 60 : 120
-    if (ln && rule === 'auto' && ln >= 360) ln = 240
+    // Aggressive caps — half/full page gaps are usually 2000–12000 twips
+    const maxBefore = isBullet ? 60 : 160
+    const maxAfter = isBullet ? 80 : 200
+    if (b > maxBefore) b = isBullet ? 0 : 80
+    if (a > maxAfter) a = isBullet ? 40 : 80
+    if (ln && (rule === 'auto' || !rule) && ln >= 360) ln = 240
 
     const parts = [`w:before="${b}"`, `w:after="${a}"`]
     if (ln != null) {
@@ -407,6 +432,11 @@ function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
     }
     return `<w:spacing ${parts.join(' ')}/>`
   })
+
+  // Explicitly disable keep-with-next so style inheritance cannot reopen blank pages
+  if (/<\/w:pPr>/.test(next) && !/<w:keepNext\b/.test(next)) {
+    next = next.replace('</w:pPr>', '<w:keepNext w:val="0"/><w:keepLines w:val="0"/></w:pPr>')
+  }
 
   return next
 }
@@ -417,12 +447,24 @@ function sanitizeParagraphPPr(pPr, { isBullet = false } = {}) {
 function sanitizeDocumentPagination(xml) {
   if (!xml) return xml
 
-  // Drop explicit page-break paragraphs inserted mid-resume
-  let out = xml.replace(
+  let out = xml
+    // Word cached page breaks from prior layout
+    .replace(/<w:lastRenderedPageBreak\s*\/>/g, '')
+    // Soft page breaks inside runs
+    .replace(/<w:br\b[^>]*w:type="page"[^/]*\/>/g, '')
+
+  // Drop empty page-break-only paragraphs
+  out = out.replace(
     /<w:p\b[^>]*>\s*(?:<w:pPr\b[\s\S]*?<\/w:pPr>\s*)?(?:<w:r\b[\s\S]*?<\/w:r>\s*)*<\/w:p>/g,
     (para) => {
-      if (/<w:br\b[^>]*w:type="page"/.test(para) && !getPlainTextFromParagraph(para).trim()) {
+      const plain = getPlainTextFromParagraph(para).trim()
+      if (!plain && (/w:type="page"/.test(para) || /w:lastRenderedPageBreak/.test(para))) {
         return ''
+      }
+      // Empty spacer paragraphs with huge spacing → collapse
+      if (!plain) {
+        const spacing = getParagraphSpacingMetrics(para)
+        if (spacing.after > 200 || spacing.before > 200) return ''
       }
       return para
     },
@@ -438,6 +480,11 @@ function sanitizeDocumentPagination(xml) {
   // Table rows that cannot split across pages also create blank pages in dense resumes
   out = out.replace(/<w:cantSplit\b[^/]*\/>/g, '')
   out = out.replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
+  // Don't let a whole table row stay glued to the next (blank-page trap)
+  out = out.replace(/<w:tblHeader\b[^/]*\/>/g, (tag) => {
+    // keep real header rows; only strip if val=true on non-first — safest: leave tblHeader
+    return tag
+  })
 
   return out
 }
@@ -922,6 +969,8 @@ function sanitizeStylesXml(stylesXml) {
   return stylesXml
     .replace(/<w:keepNext\b[^/]*\/>/g, '')
     .replace(/<w:keepNext\b[\s\S]*?<\/w:keepNext>/g, '')
+    .replace(/<w:keepLines\b[^/]*\/>/g, '')
+    .replace(/<w:keepLines\b[\s\S]*?<\/w:keepLines>/g, '')
     .replace(/<w:pageBreakBefore\b[^/]*\/>/g, '')
     .replace(/<w:pageBreakBefore\b[\s\S]*?<\/w:pageBreakBefore>/g, '')
     .replace(/<w:cantSplit\b[^/]*\/>/g, '')
@@ -1129,26 +1178,26 @@ function discoverSkillCategoryLines(xml) {
     const raw = getRawParagraphText(chunk).trim()
 
     if (plain && !isSkillsSectionTitle(plain)) {
-      // Prefer "Category: rest" lines; also accept short category-only labels
-      const colonMatch = plain.match(/^([^:]{2,60}):\s*(.*)$/)
+      const colonMatch = plain.match(/^([^:]{2,48}):\s*(.*)$/)
       if (colonMatch) {
-        lines.push({
-          label: colonMatch[1].replace(/[•\u2022]/g, '').trim(),
-          plain,
-          raw,
-          paraEnd,
-          pStart,
-        })
-      } else {
-        // Short label-only line without colon (rare)
-        const labelOnly = plain.replace(/[•\u2022]/g, '').trim()
-        if (labelOnly.length >= 2 && labelOnly.length <= 48 && /[A-Za-z]/.test(labelOnly) && !labelOnly.includes(',')) {
+        const label = colonMatch[1].replace(/[•\u2022]/g, '').trim()
+        const rest = (colonMatch[2] || '').trim()
+        // Only real short category labels — skip prose / already-dumped lines
+        if (
+          label.length >= 2
+          && label.length <= 40
+          && label.split(/\s+/).length <= 6
+          && !label.includes(',')
+          && rest.length < 350
+        ) {
           lines.push({
-            label: labelOnly,
+            label,
             plain,
             raw,
             paraEnd,
             pStart,
+            restLen: rest.length,
+            inTable: isParagraphInsideTable(xml, pStart),
           })
         }
       }
@@ -1158,6 +1207,13 @@ function discoverSkillCategoryLines(xml) {
   }
 
   return lines
+}
+
+function isParagraphInsideTable(xml, paraStart) {
+  const before = xml.slice(Math.max(0, paraStart - 2500), paraStart)
+  const lastTc = before.lastIndexOf('<w:tc')
+  const lastTcEnd = before.lastIndexOf('</w:tc>')
+  return lastTc !== -1 && lastTc > lastTcEnd
 }
 
 function scoreCategoryForSkill(skill, categoryLabel) {
@@ -1211,6 +1267,7 @@ function pickBestCategoryLine(skill, categoryLines, preferredLabel = '') {
 /**
  * Map planned skills onto existing DOCX category lines only.
  * Never targets the top-level Technical Skills heading.
+ * Caps per-line inserts so table layouts cannot explode into dumps.
  */
 function redistributeSkillsToExistingCategories(plan, xml) {
   const categoryLines = discoverSkillCategoryLines(xml)
@@ -1230,23 +1287,42 @@ function redistributeSkillsToExistingCategories(plan, xml) {
   const allSkills = []
   for (const entry of plan.skillsByCategory || []) {
     for (const skill of entry.skills || []) {
-      allSkills.push({ skill, preferred: entry.category })
+      for (const part of expandSkillCandidates(skill)) {
+        allSkills.push({ skill: part, preferred: entry.category })
+      }
     }
   }
   for (const skill of plan.skillsToAdd || []) {
-    if (!allSkills.some((s) => normalizeText(s.skill) === normalizeText(skill))) {
-      allSkills.push({ skill, preferred: '' })
+    for (const part of expandSkillCandidates(skill)) {
+      if (!allSkills.some((s) => normalizeText(s.skill) === normalizeText(part))) {
+        allSkills.push({ skill: part, preferred: '' })
+      }
     }
   }
 
   const skipped = []
   for (const { skill, preferred } of allSkills) {
+    if (!isValidSkillName(skill)) {
+      skipped.push(skill)
+      continue
+    }
     const line = pickBestCategoryLine(skill, categoryLines, preferred)
     if (!line) {
       skipped.push(skill)
       continue
     }
     const bucket = ensureBucket(line)
+    const maxPerLine = line.inTable ? 3 : 5
+    if (bucket.skills.length >= maxPerLine) {
+      skipped.push(skill)
+      continue
+    }
+    // Skip if line is already long — appending more breaks table/column layouts
+    const projected = (line.restLen || 0) + bucket.skills.join(', ').length + skill.length
+    if (projected > (line.inTable ? 140 : 220)) {
+      skipped.push(skill)
+      continue
+    }
     if (!bucket.skills.some((s) => normalizeText(s) === normalizeText(skill))) {
       bucket.skills.push(skill)
     }
@@ -1258,6 +1334,7 @@ function redistributeSkillsToExistingCategories(plan, xml) {
       category: b.line.label,
       skills: b.skills,
       paraEnd: b.line.paraEnd,
+      inTable: !!b.line.inTable,
     }))
 
   return { entries, categoryLines, skipped }
@@ -1563,7 +1640,9 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
   if (rawSkills.length) {
     for (const entry of rawSkills) {
       const skills = (entry.skills || [])
+        .flatMap(expandSkillCandidates)
         .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s) && isMissing(s))
+        .slice(0, 8)
       if (skills.length) {
         skillsByCategory.push({
           category: resolveCategory(entry.category, resumeData),
@@ -1574,7 +1653,9 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
     }
   } else {
     const flat = (plan.skillsToAdd || [])
+      .flatMap(expandSkillCandidates)
       .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s) && isMissing(s))
+      .slice(0, 10)
     if (flat.length) {
       // Prefer a real category heading from the resume — never invent "Technical Skills"
       const realCats = [...(resumeData.headings || []), ...(resumeData.allSections || [])]
@@ -1587,7 +1668,9 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
 
   // Force-add remaining short missing skills only (never JD sentences)
   const stillMissing = (comparison?.missing || [])
+    .flatMap(expandSkillCandidates)
     .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s))
+    .slice(0, 8)
   if (stillMissing.length) {
     const realCats = [...(resumeData.headings || []), ...(resumeData.allSections || [])]
       .filter((h) => h && !isSkillsSectionTitle(h))
@@ -1870,8 +1953,8 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
 
   // Skills: append ONLY into existing category lines (Tools & Platforms:, etc.).
   // Never create a new Technical Skills heading / underlined dump block.
+  // Cap inserts so table/column skill layouts cannot explode.
   const { entries: skillEntries } = redistributeSkillsToExistingCategories(plan, xml)
-  // Apply from bottom to top so earlier paraEnd offsets stay valid
   const orderedSkillEntries = [...skillEntries].sort((a, b) => b.paraEnd - a.paraEnd)
 
   for (const entry of orderedSkillEntries) {
@@ -1881,14 +1964,31 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     if (!chunk || isSkillsSectionTitle(getPlainTextFromParagraph(chunk))) continue
 
     const existingText = getRawParagraphText(chunk).trimEnd()
+    // Hard stop: never dump into an already-long skills line (breaks 2-col tables)
+    const maxLineLen = entry.inTable ? 160 : 260
+    if (existingText.length > maxLineLen) continue
+
+    const room = Math.max(0, maxLineLen - existingText.length - 2)
+    const toAdd = []
+    let used = 0
+    for (const skill of entry.skills) {
+      if (!isValidSkillName(skill)) continue
+      const addLen = skill.length + 2
+      if (used + addLen > room) break
+      if (toAdd.length >= (entry.inTable ? 3 : 5)) break
+      toAdd.push(skill)
+      used += addLen
+    }
+    if (!toAdd.length) continue
+
     const needsComma = existingText.length > 0 && !/[,;:]$/.test(existingText)
     const rPr = extractLastRunRPr(xml, entry.paraEnd)
-    const runs = entry.skills.map((s, i) => buildSkillRun(s, rPr, mark, {
+    const runs = toAdd.map((s, i) => buildSkillRun(s, rPr, mark, {
       leadingSeparator: i === 0 ? (needsComma ? ', ' : ' ') : ', ',
     })).join('')
     xml = xml.slice(0, entry.paraEnd - 6) + runs + xml.slice(entry.paraEnd - 6)
 
-    for (const skill of entry.skills) {
+    for (const skill of toAdd) {
       applied.skills.push({ skill, category: entry.category })
     }
   }
