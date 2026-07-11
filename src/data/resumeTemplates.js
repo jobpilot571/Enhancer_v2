@@ -1,6 +1,7 @@
 /**
  * Resume template catalog — styles inspired by sample layouts.
- * Previews are rendered as CSS mockups with dummy names (see TemplatePreview).
+ * When an admin sample is uploaded, TemplatePreview renders that DOCX/PDF
+ * (anonymized). Otherwise a CSS mockup with dummy names is shown.
  */
 export const RESUME_TEMPLATES = [
   {

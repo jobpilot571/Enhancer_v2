@@ -17,6 +17,7 @@ import {
   getTemplateIds,
 } from '../store/adminStore.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
+import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
 
 const router = Router()
 
@@ -64,9 +65,21 @@ router.get('/public/template-samples', (_req, res) => {
 router.get('/public/samples/:templateId', (req, res) => {
   const sample = getSample(req.params.templateId)
   if (!sample) return res.status(404).json({ error: 'Sample not found' })
+
+  // Re-anonymize on serve so older uploads (pre-anonymize) never leak real PII
+  let payload = sample.buffer
+  if (sample.fileType === 'docx') {
+    try {
+      payload = anonymizeSampleBuffer(sample.buffer, 'docx').buffer
+    } catch (err) {
+      console.warn('[admin] sample anonymize on serve failed:', err.message)
+    }
+  }
+
   res.setHeader('Content-Type', mimeForType(sample.fileType))
   res.setHeader('Content-Disposition', `inline; filename="${sample.fileName}"`)
-  res.send(sample.buffer)
+  res.setHeader('Cache-Control', 'public, max-age=300')
+  res.send(payload)
 })
 
 // ——— Auth ———

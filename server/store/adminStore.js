@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
+import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../admin-data')
@@ -185,7 +186,9 @@ export function saveSample(templateId, fileName, fileType, buffer) {
     }
   }
 
-  fs.writeFileSync(filePath, buffer)
+  // Store anonymized DOCX so public previews never show real personal info
+  const { buffer: safeBuffer, meta: anonMeta } = anonymizeSampleBuffer(buffer, fileType)
+  fs.writeFileSync(filePath, safeBuffer)
 
   const meta = getSamplesMeta()
   meta.samples = meta.samples || {}
@@ -193,8 +196,10 @@ export function saveSample(templateId, fileName, fileType, buffer) {
     fileName,
     fileType,
     storedName,
-    size: buffer.length,
+    size: safeBuffer.length,
     uploadedAt: new Date().toISOString(),
+    anonymized: Boolean(anonMeta?.anonymized),
+    dummyName: anonMeta?.dummyName || null,
   }
   saveSamplesMeta(meta)
 
@@ -203,7 +208,8 @@ export function saveSample(templateId, fileName, fileType, buffer) {
     fileName,
     fileType,
     uploadedAt: meta.samples[templateId].uploadedAt,
-    size: buffer.length,
+    size: safeBuffer.length,
+    anonymized: meta.samples[templateId].anonymized,
   }
 }
 

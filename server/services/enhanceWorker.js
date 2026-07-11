@@ -10,6 +10,7 @@ import { ensureEnhancedResumeQuality } from './resumeQaService.js'
 import { compareResumeToJD, buildEnhancedResumeData } from './compareService.js'
 import { createEnhancementPlan, createMissingExperienceBullets, createSummaryEnhancement } from './openaiService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
+import { beginAiUsageTracking, endAiUsageTracking } from './aiProvider.js'
 import PizZip from 'pizzip'
 
 function log(jobId, message) {
@@ -17,6 +18,8 @@ function log(jobId, message) {
 }
 
 export async function runEnhanceJob(jobId, sessionId, jdText) {
+  beginAiUsageTracking()
+  const startedAt = Date.now()
   try {
     const session = getSession(sessionId)
     if (!session) throw new Error('Session not found')
@@ -228,15 +231,23 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     const enhancedResumeData = buildEnhancedResumeData(resumeData, applied)
 
-    const newComparison = compareResumeToJD(enhancedResumeData, jdData)
-    const matchAnalysis = buildMatchAnalysis(comparison, newComparison, applied)
+    const newComparison = compareResumeToJD(enhancedResumeData, jdData, { applied })
+    const aiUsage = endAiUsageTracking()
+    const processingMeta = {
+      durationMs: Date.now() - startedAt,
+      durationSec: Math.round((Date.now() - startedAt) / 100) / 10,
+      aiUsage,
+      scoringEngine: 'JoBPilot Deterministic Resume-to-JD Scorer v2.0',
+    }
+    const matchAnalysis = buildMatchAnalysis(comparison, newComparison, applied, processingMeta)
 
     log(
       jobId,
       `ATS before=${comparison.atsScore} after=${newComparison.atsScore} `
-      + `(skills ${comparison.scoreBreakdown?.skills?.pct ?? '?'}%→${newComparison.scoreBreakdown?.skills?.pct ?? '?'}%, `
-      + `kw ${comparison.scoreBreakdown?.keywords?.pct ?? '?'}%→${newComparison.scoreBreakdown?.keywords?.pct ?? '?'}%, `
-      + `bullets ${comparison.scoreBreakdown?.bullets?.pct ?? '?'}%→${newComparison.scoreBreakdown?.bullets?.pct ?? '?'}%)`,
+      + `(skills ${comparison.scoreBreakdown?.skills?.score ?? '?'}→${newComparison.scoreBreakdown?.skills?.score ?? '?'}, `
+      + `exp ${comparison.scoreBreakdown?.bullets?.score ?? '?'}→${newComparison.scoreBreakdown?.bullets?.score ?? '?'}, `
+      + `kw ${comparison.scoreBreakdown?.keywords?.score ?? '?'}→${newComparison.scoreBreakdown?.keywords?.score ?? '?'}) `
+      + `AI=${aiUsage.primaryProvider || 'n/a'}`,
     )
 
     updateSession(sessionId, {
@@ -245,6 +256,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       matchAnalysis,
       enhancementPlan,
       atsScore: newComparison.atsScore,
+      processingMeta,
     })
 
     updateEnhanceJob(jobId, {
@@ -257,12 +269,15 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         matchAnalysis,
         enhancementPlan,
         atsScore: newComparison.atsScore,
+        processingMeta,
         downloadUrl: `/api/enhancer/download/${sessionId}`,
+        scoreReportPdfUrl: `/api/enhancer/score-report/${sessionId}`,
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
       },
     })
     log(jobId, 'completed')
   } catch (err) {
+    endAiUsageTracking()
     console.error(`[enhance:${jobId.slice(0, 8)}] failed:`, err.message)
     updateEnhanceJob(jobId, {
       status: 'failed',

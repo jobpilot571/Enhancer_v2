@@ -83,6 +83,7 @@ export default function BuildNewResume() {
   const [sessionId, setSessionId] = useState(null)
   const [previewBlob, setPreviewBlob] = useState(null)
   const [templateSamples, setTemplateSamples] = useState({})
+  const [sampleBlobs, setSampleBlobs] = useState({})
   const [samplePreview, setSamplePreview] = useState(null)
   const buildingRef = useRef(false)
 
@@ -92,8 +93,27 @@ export default function BuildNewResume() {
       if (!cancelled) setApiOk(h.ok)
     })
     fetchPublicTemplateSamples()
-      .then((data) => {
-        if (!cancelled) setTemplateSamples(data.samples || {})
+      .then(async (data) => {
+        const samples = data.samples || {}
+        if (cancelled) return
+        setTemplateSamples(samples)
+
+        // Prefetch DOCX samples so template cards show the real Word layout
+        await Promise.all(
+          Object.entries(samples).map(async ([id, info]) => {
+            if (info?.fileType !== 'docx') return
+            try {
+              const res = await fetch(getSampleFileUrl(id))
+              if (!res.ok) return
+              const blob = await res.blob()
+              if (!cancelled) {
+                setSampleBlobs((prev) => ({ ...prev, [id]: blob }))
+              }
+            } catch {
+              // keep CSS mockup fallback
+            }
+          }),
+        )
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -533,7 +553,12 @@ export default function BuildNewResume() {
                   }}
                 >
                   <div className="template-card__preview">
-                    <TemplatePreview template={tpl} />
+                    <TemplatePreview
+                      template={tpl}
+                      sampleBlob={sampleBlobs[tpl.id] || null}
+                      sampleFileType={sample?.fileType || null}
+                      sampleUrl={sample ? getSampleFileUrl(tpl.id) : null}
+                    />
                     {sample && (
                       <span className="template-card__sample-badge">Sample ready</span>
                     )}

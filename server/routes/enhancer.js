@@ -11,6 +11,7 @@ import {
 import { createEnhanceJob, getEnhanceJob } from '../store/enhanceJobStore.js'
 import { runEnhanceJob } from '../services/enhanceWorker.js'
 import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
+import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
 
 const router = Router()
 
@@ -197,6 +198,31 @@ router.get('/download/:sessionId', (req, res, next) => {
     res.setHeader('Content-Type', mimeForType('docx'))
     res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
     res.send(buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/score-report/:sessionId', async (req, res, next) => {
+  try {
+    const session = getSession(req.params.sessionId)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+    if (!session.matchAnalysis && !session.comparison) {
+      return res.status(404).json({ error: 'Score report not ready — run Enhance first' })
+    }
+
+    const pdf = await buildScoreReportPdf({
+      session,
+      matchAnalysis: session.matchAnalysis || {},
+      comparison: session.comparison || {},
+      comparisonBefore: session.comparisonBefore || {},
+      aiUsage: session.processingMeta?.aiUsage || session.matchAnalysis?.processingMeta?.aiUsage || null,
+    })
+
+    const base = (session.fileName || 'resume').replace(/\.(docx|pdf)$/i, '')
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="${base}-score-report.pdf"`)
+    res.send(pdf)
   } catch (err) {
     next(err)
   }

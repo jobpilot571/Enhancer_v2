@@ -139,6 +139,35 @@ export function getDownloadUrl(sessionId) {
   return `${API_BASE}/download/${sessionId}`
 }
 
+export function getScoreReportPdfUrl(sessionId) {
+  return `${API_BASE}/score-report/${sessionId}`
+}
+
+export async function downloadScoreReportPdf(sessionId) {
+  const res = await fetch(getScoreReportPdfUrl(sessionId), {
+    signal: AbortSignal.timeout(60000),
+  })
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res))
+  }
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('pdf')) {
+    throw new Error('Score report API did not return a PDF. Restart the backend server and try again.')
+  }
+  const blob = await res.blob()
+  const disposition = res.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename="?([^"]+)"?/i)
+  const fileName = match?.[1] || 'resume-score-report.pdf'
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export async function fetchFileBlob(sessionId, type = 'original') {
   const res = await fetch(getFileUrl(sessionId, type))
   if (!res.ok) throw new Error(await readErrorMessage(res))

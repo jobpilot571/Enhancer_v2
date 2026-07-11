@@ -1823,7 +1823,7 @@ export function ensureSkillsInBullets(plan) {
   return next
 }
 
-export function buildMatchAnalysis(beforeComparison, afterComparison, applied) {
+export function buildMatchAnalysis(beforeComparison, afterComparison, applied, processingMeta = null) {
   const expAdded = Object.values(applied.experience || {}).reduce((n, e) => n + (e.added?.length || 0), 0)
   const expRewritten = Object.values(applied.experience || {}).reduce((n, e) => n + (e.rewritten?.length || 0), 0)
 
@@ -1841,48 +1841,71 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied) {
     ]),
   ]
 
+  function compactPillar(raw, key) {
+    const p = raw?.[key] || {}
+    return {
+      matched: p.matched ?? 0,
+      total: p.total ?? 0,
+      pct: p.pct ?? 0,
+      score: p.score ?? 0,
+      max: p.max,
+      coveragePct: p.coveragePct ?? p.pct ?? 0,
+      label: p.label,
+    }
+  }
+
   function compactBreakdown(comparison) {
     const raw = comparison?.scoreBreakdown
     if (!raw) {
-      // Fallback so UI never shows "—" when only legacy comparison fields exist
       const matched = (comparison?.present || []).length
       const missing = (comparison?.missing || []).length
       const total = matched + missing
       const pct = total ? Math.round((matched / total) * 100) : 0
       return {
-        skills: { matched, total, pct, score: 0 },
-        keywords: { matched, total, pct, score: 0 },
-        bullets: { matched: 0, total: 0, pct: 0, score: 0 },
-        weights: { skills: 33.3, keywords: 33.3, bullets: 33.3 },
-        details: { skills: [], keywords: [], bullets: [] },
+        skills: { matched, total, pct, score: 0, max: 30 },
+        keywords: { matched, total, pct, score: 0, max: 15 },
+        bullets: { matched: 0, total: 0, pct: 0, score: 0, max: 25 },
+        tools: { matched: 0, total: 0, pct: 0, score: 0, max: 10 },
+        structure: { matched: 0, total: 0, pct: 0, score: 0, max: 10 },
+        summary: { matched: 0, total: 0, pct: 0, score: 0, max: 5 },
+        completeness: { matched: 0, total: 0, pct: 0, score: 0, max: 5 },
+        weights: {
+          requiredSkills: 30,
+          experience: 25,
+          keywords: 15,
+          tools: 10,
+          structure: 10,
+          summary: 5,
+          completeness: 5,
+        },
+        details: { skills: [], keywords: [], bullets: [], tools: [], structure: [], summary: [], completeness: [] },
       }
     }
     return {
-      skills: {
-        matched: raw.skills?.matched ?? 0,
-        total: raw.skills?.total ?? 0,
-        pct: raw.skills?.pct ?? 0,
-        score: raw.skills?.score ?? 0,
+      skills: compactPillar(raw, 'skills'),
+      keywords: compactPillar(raw, 'keywords'),
+      bullets: compactPillar(raw, 'bullets'),
+      tools: compactPillar(raw, 'tools'),
+      structure: compactPillar(raw, 'structure'),
+      summary: compactPillar(raw, 'summary'),
+      completeness: compactPillar(raw, 'completeness'),
+      weights: raw.weights || {
+        requiredSkills: 30,
+        experience: 25,
+        keywords: 15,
+        tools: 10,
+        structure: 10,
+        summary: 5,
+        completeness: 5,
       },
-      keywords: {
-        matched: raw.keywords?.matched ?? 0,
-        total: raw.keywords?.total ?? 0,
-        pct: raw.keywords?.pct ?? 0,
-        score: raw.keywords?.score ?? 0,
-      },
-      bullets: {
-        matched: raw.bullets?.matched ?? 0,
-        total: raw.bullets?.total ?? 0,
-        pct: raw.bullets?.pct ?? 0,
-        coveragePct: raw.bullets?.coveragePct ?? raw.bullets?.pct ?? 0,
-        score: raw.bullets?.score ?? 0,
-      },
-      weights: raw.weights || { skills: 33.3, keywords: 33.3, bullets: 33.3 },
-      // Cap detail lists so production JSON stays small/reliable
       details: {
         skills: (raw.details?.skills || []).slice(0, 40),
         keywords: (raw.details?.keywords || []).slice(0, 40),
         bullets: (raw.details?.bullets || []).slice(0, 25),
+        tools: (raw.details?.tools || []).slice(0, 25),
+        structure: (raw.details?.structure || []).slice(0, 20),
+        summary: (raw.details?.summary || []).slice(0, 15),
+        completeness: (raw.details?.completeness || []).slice(0, 10),
       },
     }
   }
@@ -1890,12 +1913,53 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied) {
   const beforeBreakdown = compactBreakdown(beforeComparison)
   const afterBreakdown = compactBreakdown(afterComparison)
 
+  const catKeys = [
+    ['requiredSkills', 'skills', 30],
+    ['experience', 'bullets', 25],
+    ['keywords', 'keywords', 15],
+    ['tools', 'tools', 10],
+    ['structure', 'structure', 10],
+    ['summary', 'summary', 5],
+    ['completeness', 'completeness', 5],
+  ]
+  const breakdown = {}
+  for (const [reportKey, uiKey, max] of catKeys) {
+    const before = beforeComparison.report?.categories?.[reportKey]?.score
+      ?? beforeBreakdown[uiKey]?.score
+      ?? 0
+    const after = afterComparison.report?.categories?.[reportKey]?.score
+      ?? afterBreakdown[uiKey]?.score
+      ?? 0
+    breakdown[reportKey] = {
+      before: Math.round(before * 10) / 10,
+      after: Math.round(after * 10) / 10,
+      max,
+      change: Math.round((after - before) * 10) / 10,
+    }
+  }
+
+  const scoreComparison = {
+    beforeScore: beforeComparison.atsScore,
+    afterScore: afterComparison.atsScore,
+    improvement: afterComparison.atsScore - beforeComparison.atsScore,
+    breakdown,
+  }
+
   return {
     beforeScore: beforeComparison.atsScore,
     afterScore: afterComparison.atsScore,
     scoreDelta: afterComparison.atsScore - beforeComparison.atsScore,
     beforeBreakdown,
     afterBreakdown,
+    scoreComparison,
+    scoreReport: {
+      ...scoreComparison,
+      beforeReport: beforeComparison.report || null,
+      afterReport: afterComparison.report || null,
+      penalties: afterComparison.penalties || [],
+      processingMeta: processingMeta || null,
+    },
+    processingMeta: processingMeta || null,
     keywordsMatched: afterComparison.present || [],
     keywordsStrong: afterComparison.strong || [],
     keywordsWeak: afterComparison.weak || [],

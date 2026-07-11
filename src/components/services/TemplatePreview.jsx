@@ -1,3 +1,5 @@
+import DocxViewer from './DocxViewer'
+
 const DUMMY = {
   name: 'Alex Morgan',
   title: 'Business Analyst',
@@ -94,10 +96,7 @@ function JobBlock({ job, layout, accent }) {
   )
 }
 
-/**
- * Mini resume mockup for template picker — always uses dummy placeholder content.
- */
-export default function TemplatePreview({ template }) {
+function MockupPreview({ template }) {
   const accent = template.accent || '1E40AF'
   const isBanner = template.headerStyle === 'banner'
   const showTitle = template.showTitle
@@ -160,4 +159,41 @@ export default function TemplatePreview({ template }) {
       </div>
     </div>
   )
+}
+
+/**
+ * Template picker preview — prefers the admin-uploaded sample DOCX/PDF
+ * (already anonymized on the server). Falls back to CSS mockup when no sample.
+ */
+export default function TemplatePreview({
+  template,
+  sampleBlob = null,
+  sampleFileType = null,
+  sampleUrl = null,
+}) {
+  if (sampleBlob && sampleFileType === 'docx') {
+    return (
+      <div className="tpl-preview tpl-preview--live" aria-hidden="true">
+        <DocxViewer
+          blob={sampleBlob}
+          className="tpl-preview__docx"
+          emptyLabel="Loading sample…"
+        />
+      </div>
+    )
+  }
+
+  if (sampleFileType === 'pdf' && sampleUrl) {
+    return (
+      <div className="tpl-preview tpl-preview--live" aria-hidden="true">
+        <iframe
+          title={`${template.name} sample`}
+          className="tpl-preview__pdf"
+          src={`${sampleUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+        />
+      </div>
+    )
+  }
+
+  return <MockupPreview template={template} />
 }

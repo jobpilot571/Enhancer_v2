@@ -100,55 +100,65 @@ function buildProviders() {
   const providers = {}
 
   if (process.env.OPENAI_API_KEY) {
+    const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
     providers.openai = {
-      label: 'OpenAI',
+      label: 'OpenAI (ChatGPT)',
+      model,
       run: makeOpenAICompatible({
         apiKey: process.env.OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        model,
         useJsonSchema: true,
       }),
     }
   }
 
   if (process.env.GROQ_API_KEY) {
+    const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
     providers.groq = {
       label: 'Groq',
+      model,
       run: makeOpenAICompatible({
         apiKey: process.env.GROQ_API_KEY,
         baseURL: 'https://api.groq.com/openai/v1',
-        model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+        model,
         useJsonSchema: false,
       }),
     }
   }
 
   if (process.env.ANTHROPIC_API_KEY) {
+    const model = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-latest'
     providers.claude = {
-      label: 'Claude',
+      label: 'Anthropic Claude',
+      model,
       run: makeClaude({
         apiKey: process.env.ANTHROPIC_API_KEY,
-        model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-latest',
+        model,
       }),
     }
   }
 
   if (process.env.GEMINI_API_KEY) {
+    const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
     providers.gemini = {
-      label: 'Gemini',
+      label: 'Google Gemini',
+      model,
       run: makeGemini({
         apiKey: process.env.GEMINI_API_KEY,
-        model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+        model,
       }),
     }
   }
 
   if (process.env.OLLAMA_API_KEY) {
+    const model = process.env.OLLAMA_MODEL || 'gpt-oss:20b'
     providers.ollama = {
       label: 'Ollama',
+      model,
       run: makeOpenAICompatible({
         apiKey: process.env.OLLAMA_API_KEY,
         baseURL: process.env.OLLAMA_BASE_URL || 'https://ollama.com/v1',
-        model: process.env.OLLAMA_MODEL || 'gpt-oss:20b',
+        model,
         useJsonSchema: false,
       }),
     }
@@ -168,6 +178,39 @@ function getOrder() {
   return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
 }
 
+/** Per-async-context usage log for score reports */
+let usageLog = null
+
+export function beginAiUsageTracking() {
+  usageLog = []
+  return usageLog
+}
+
+export function endAiUsageTracking() {
+  const log = usageLog || []
+  usageLog = null
+  const byProvider = {}
+  for (const entry of log) {
+    const key = `${entry.provider}::${entry.model}`
+    if (!byProvider[key]) {
+      byProvider[key] = {
+        provider: entry.provider,
+        model: entry.model,
+        calls: 0,
+        tasks: [],
+      }
+    }
+    byProvider[key].calls += 1
+    byProvider[key].tasks.push(entry.task)
+  }
+  return {
+    calls: log,
+    summary: Object.values(byProvider),
+    primaryProvider: log[0]?.provider || null,
+    primaryModel: log[0]?.model || null,
+  }
+}
+
 /**
  * Run a structured JSON completion, trying each configured provider in order
  * until one succeeds. Throws only if all providers fail.
@@ -184,7 +227,13 @@ export async function structuredJSON(system, user, schemaName, schema) {
   for (const name of order) {
     try {
       const result = await providers[name].run(system, user, schemaName, schema)
-      return { result, provider: providers[name].label }
+      const info = {
+        provider: providers[name].label,
+        model: providers[name].model,
+        task: schemaName,
+      }
+      if (usageLog) usageLog.push(info)
+      return { result, ...info }
     } catch (err) {
       console.warn(`[AI] ${providers[name].label} failed: ${err.message}`)
       errors.push(`${providers[name].label}: ${err.message}`)
@@ -196,5 +245,26 @@ export async function structuredJSON(system, user, schemaName, schema) {
 
 export function getConfiguredProviders() {
   const providers = getProviders()
-  return getOrder().filter((name) => providers[name]).map((name) => providers[name].label)
+  return getOrder().filter((name) => providers[name]).map((name) => ({
+    label: providers[name].label,
+    model: providers[name].model,
+  }))
+}
+
+export function getScoringEngineInfo() {
+  return {
+    name: 'JoBPilot Deterministic Resume-to-JD Scorer',
+    version: '2.0',
+    method: 'Rule-based + synonym dictionary + cached semantic token matching',
+    note: 'Scoring does not use an LLM. AI providers are used only for resume/JD parsing and enhancement planning.',
+    categories: {
+      requiredSkills: 30,
+      experience: 25,
+      keywords: 15,
+      tools: 10,
+      structure: 10,
+      summary: 5,
+      completeness: 5,
+    },
+  }
 }
