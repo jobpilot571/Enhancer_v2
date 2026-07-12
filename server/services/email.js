@@ -30,7 +30,14 @@ async function sendViaResend({ to, subject, html, text }) {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`Email provider error (${res.status}): ${body || res.statusText}`)
+    let detail = body || res.statusText
+    try {
+      const parsed = JSON.parse(body)
+      detail = parsed.message || parsed.error || detail
+    } catch {
+      /* keep raw body */
+    }
+    throw new Error(detail)
   }
   return res.json()
 }

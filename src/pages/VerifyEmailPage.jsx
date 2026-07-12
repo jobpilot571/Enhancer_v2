@@ -91,17 +91,25 @@ export default function VerifyEmailPage() {
 
         {previewCode && (
           <div className="auth-otp-preview">
-            <p className="auth-otp-preview__label">Dev mode — email not configured</p>
+            <p className="auth-otp-preview__label">
+              {emailConfigured ? 'Email delivery failed — temporary code' : 'Dev mode — email not configured'}
+            </p>
             <p className="auth-otp-preview__code">{previewCode}</p>
             <p className="auth-otp-preview__hint">
-              Add <code>RESEND_API_KEY</code> to <code>.env</code> to receive real emails.
+              {emailConfigured
+                ? (message || 'Check Render EMAIL_FROM / domain verification in Resend.')
+                : <>Add <code>RESEND_API_KEY</code> on Render (not only local .env) to send real emails.</>}
             </p>
           </div>
         )}
 
-        {!previewCode && !delivered && emailConfigured === false && (
+        {!previewCode && message && !delivered && (
+          <p className="auth-banner auth-banner--warn">{message}</p>
+        )}
+
+        {!previewCode && !delivered && !message && emailConfigured === false && (
           <p className="auth-banner auth-banner--warn">
-            Email is not configured. Click Resend code to show a preview OTP, or check the server terminal for <code>[auth:otp]</code>.
+            Email is not configured on the API. Set <code>RESEND_API_KEY</code> on Render and restart.
           </p>
         )}
 

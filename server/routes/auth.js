@@ -80,10 +80,13 @@ async function issueOtpAndRespond(res, user, { created = false } = {}) {
     expiresInSeconds,
   }
 
-  // Only expose OTP when email is not configured or delivery failed (so local signup still works)
-  if (!delivery.delivered) {
+  // Expose OTP on-screen only when email is not configured (local/dev).
+  // Never leak codes in production when Resend is configured.
+  if (!emailConfigured && !delivery.delivered) {
     payload.previewCode = code
     console.log(`[auth:otp] Preview code for ${email}: ${code}`)
+  } else if (!delivery.delivered) {
+    console.log(`[auth:otp] Delivery failed for ${email}: ${deliveryError}`)
   }
 
   return res.status(created ? 201 : 200).json(payload)
