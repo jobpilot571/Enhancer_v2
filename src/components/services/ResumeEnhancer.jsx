@@ -46,9 +46,9 @@ function ScoreDetailBox({ breakdown, active, title, onClose, boxRef }) {
   const details = breakdown.details?.[active] || []
   if (!pillar) return null
   const labels = {
-    skills: 'Required Skills',
-    keywords: 'JD Keywords',
-    bullets: 'Experience',
+    skills: 'Hard Skills & Tools',
+    keywords: 'Title & Domain Keywords',
+    bullets: 'Experience & Impact',
   }
 
   return (
@@ -58,8 +58,8 @@ function ScoreDetailBox({ breakdown, active, title, onClose, boxRef }) {
           <strong>{labels[active]}</strong>
           <span>
             {active === 'bullets'
-              ? `Coverage ${pillar.pct}%  |  ${pillar.matched}/${pillar.total} covered  |  ${pillar.score ?? 0}/${pillar.max ?? 25} pts`
-              : `${pillar.matched}/${pillar.total} matched  |  ${pillar.pct}%  |  ${pillar.score ?? 0}/${pillar.max ?? (active === 'skills' ? 30 : 15)} pts`}
+              ? `Coverage ${pillar.pct}%  |  ${pillar.matched}/${pillar.total} covered  |  ${pillar.score ?? 0}/${pillar.max ?? 40} pts`
+              : `${pillar.matched}/${pillar.total} matched  |  ${pillar.pct}%  |  ${pillar.score ?? 0}/${pillar.max ?? (active === 'skills' ? 24 : 16)} pts`}
           </span>
         </div>
         <button type="button" className="score-detail-box__close" onClick={onClose} aria-label="Close">
@@ -67,9 +67,9 @@ function ScoreDetailBox({ breakdown, active, title, onClose, boxRef }) {
         </button>
       </div>
       <ul className="score-detail-box__list">
-        {details.map((row) => (
+        {details.map((row, idx) => (
           <li
-            key={row.item}
+            key={`${row.item}-${idx}`}
             className={`score-detail-box__item ${row.matched ? 'is-matched' : 'is-missing'}`}
           >
             <span className="score-detail-box__status">
@@ -98,9 +98,9 @@ function CompactScoreCard({
   cardKey,
 }) {
   const tabs = [
-    { key: 'skills', label: 'Skills', maxDefault: 30 },
-    { key: 'keywords', label: 'Keywords', maxDefault: 15 },
-    { key: 'bullets', label: 'Experience', maxDefault: 25 },
+    { key: 'skills', label: 'Skills', maxDefault: 24 },
+    { key: 'keywords', label: 'Keywords', maxDefault: 16 },
+    { key: 'bullets', label: 'Experience', maxDefault: 40 },
   ]
   const cardRef = useRef(null)
   const boxRef = useRef(null)
@@ -143,6 +143,11 @@ function CompactScoreCard({
 
       <div className="ats-mini-card__ring-wrap">
         <ScoreRing score={score} label="/ 100" gradId={gradId} size="sm" />
+        {breakdown?.format?.max != null && (
+          <p className="ats-mini-card__format-meta">
+            Format {breakdown.format.score ?? 0}/{breakdown.format.max} pts
+          </p>
+        )}
       </div>
 
       <div className="ats-mini-card__tabs" role="group" aria-label={`${title} breakdown`}>

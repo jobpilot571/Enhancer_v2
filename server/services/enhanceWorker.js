@@ -5,10 +5,22 @@ import {
   readFile,
 } from '../store/sessionStore.js'
 import { updateEnhanceJob } from '../store/enhanceJobStore.js'
-import { patchDocx, filterEnhancementPlan, buildMatchAnalysis, mergeExperienceAdditions, keepSummaryBullets, ensureSkillsInBullets, detectSummaryFormat } from './docxService.js'
+import {
+  patchDocx,
+  filterEnhancementPlan,
+  buildMatchAnalysis,
+  mergeExperienceAdditions,
+  ensureSkillsInBullets,
+  ensureDomainKeywordsInBullets,
+  detectSummaryFormat,
+} from './docxService.js'
 import { ensureEnhancedResumeQuality } from './resumeQaService.js'
 import { compareResumeToJD, buildEnhancedResumeData } from './compareService.js'
-import { createEnhancementPlan, createMissingExperienceBullets, createSummaryEnhancement } from './openaiService.js'
+import {
+  createEnhancementPlan,
+  repairEnhancementPlan,
+  isPlanTechnicallyValid,
+} from './openaiService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
 import { beginAiUsageTracking, endAiUsageTracking } from './aiProvider.js'
 import PizZip from 'pizzip'
@@ -17,9 +29,24 @@ function log(jobId, message) {
   console.log(`[enhance:${jobId.slice(0, 8)}] ${message}`)
 }
 
+function stageTimer() {
+  const stages = []
+  const t0 = Date.now()
+  let last = t0
+  return {
+    mark(name) {
+      const now = Date.now()
+      stages.push({ name, ms: now - last, atMs: now - t0 })
+      last = now
+    },
+    stages,
+    totalMs: () => Date.now() - t0,
+  }
+}
+
 export async function runEnhanceJob(jobId, sessionId, jdText) {
   beginAiUsageTracking()
-  const startedAt = Date.now()
+  const timer = stageTimer()
   try {
     const session = getSession(sessionId)
     if (!session) throw new Error('Session not found')
@@ -47,27 +74,37 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       log(jobId, 'using cached resume + JD parse')
     } else if (resumeReady) {
       updateEnhanceJob(jobId, { step: 'parsing_jd', status: 'processing' })
-      log(jobId, 'resume cached — parsing JD')
+      log(jobId, 'resume cached — analyzing JD')
     } else if (jdReady) {
       updateEnhanceJob(jobId, { step: 'analyzing_resume', status: 'processing' })
-      log(jobId, 'JD cached — analyzing resume')
+      log(jobId, 'JD cached — parsing resume locally')
     } else {
       updateEnhanceJob(jobId, { step: 'analyzing_resume', status: 'processing' })
-      log(jobId, 'analyzing resume + JD in parallel')
+      log(jobId, 'local resume parse + JD analysis in parallel')
     }
 
-    // Parallel when both needed; shared inflight promises if precompute already running
+    // Parallel: local resume parse (or AI fallback) + JD cache/analysis
     const [resumeData, jdData] = await Promise.all([
       ensureResumeData(sessionId),
       ensureJdData(sessionId),
     ])
+    timer.mark('parse_resume_and_jd')
+
+    const afterParse = getSession(sessionId)
+    const resumeParseMethod = afterParse.resumeParseMethod || (resumeReady ? 'cached' : 'unknown')
+    const jdCached = !!afterParse.jdAnalysisCached || jdReady
+    log(
+      jobId,
+      `resumeParse=${resumeParseMethod}`
+      + (afterParse.resumeParseConfidence != null ? ` conf=${afterParse.resumeParseConfidence}` : '')
+      + ` | jd=${jdCached ? 'cache' : 'AI'}`,
+    )
 
     // Detect summary style from original DOCX (paragraph vs bullets) — DOCX is source of truth
     const originalBufferForFormat = readFile(getSession(sessionId).originalPath)
     const summaryFormat = detectSummaryFormat(new PizZip(originalBufferForFormat).file('word/document.xml').asText())
     resumeData.summaryFormat = summaryFormat
     if (summaryFormat === 'paragraph' && !(resumeData.summary || '').trim()) {
-      // Prefer prose field when parser put paragraph text into summaryBullets
       if ((resumeData.summaryBullets || []).length === 1) {
         resumeData.summary = resumeData.summaryBullets[0]
         resumeData.summaryBullets = []
@@ -78,124 +115,66 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     }
     updateSession(sessionId, { resumeData })
     log(jobId, `summary format: ${summaryFormat}`)
+    timer.mark('detect_summary_format')
 
     updateEnhanceJob(jobId, { step: 'comparing' })
-    log(jobId, 'comparing skills')
+    log(jobId, 'comparing skills (local)')
     const comparison = compareResumeToJD(resumeData, jdData)
+    timer.mark('compare_local')
 
     updateEnhanceJob(jobId, { step: 'writing_plan' })
-    log(jobId, 'writing enhancement plan')
-    let enhancementPlan = filterEnhancementPlan(
-      await createEnhancementPlan(resumeData, jdData, comparison),
-      resumeData,
-      comparison,
-    )
+    log(jobId, 'writing complete enhancement plan (1 LLM call)')
+    let planRaw
+    let repaired = false
+    try {
+      planRaw = await createEnhancementPlan(resumeData, jdData, comparison)
+      if (!isPlanTechnicallyValid(planRaw)) {
+        throw new Error('Enhancement plan missing required array fields')
+      }
+    } catch (err) {
+      // Repair ONLY on technical failure — never because arrays are empty
+      log(jobId, `plan technical failure — one repair attempt: ${err.message}`)
+      planRaw = await repairEnhancementPlan(resumeData, jdData, comparison, err.message)
+      repaired = true
+      if (!isPlanTechnicallyValid(planRaw)) {
+        throw new Error(`Enhancement plan invalid after repair: ${err.message}`)
+      }
+    }
+    timer.mark('enhancement_plan_llm')
 
+    let enhancementPlan = filterEnhancementPlan(planRaw, resumeData, comparison)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
     enhancementPlan.summaryBullets = (enhancementPlan.summaryBullets || []).slice(0, 2)
 
-    const companies = resumeData.experience || []
-    const missingCompanies = companies.filter(
-      (c) => !(enhancementPlan.experienceAdditions || []).some(
-        (e) => e.company?.toLowerCase() === c.company?.toLowerCase() && e.bullets?.length,
-      ),
-    )
-    const hasSummaryAction = (enhancementPlan.summaryBullets?.length || 0) > 0
-      || (enhancementPlan.bulletRewrites || []).some(
-        (r) => !r.company || ['summary', 'professional summary'].includes(r.company.toLowerCase()),
-      )
+    // Local validation / skill weaving — no extra LLM calls for empty coverage
+    enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
+    enhancementPlan = ensureSkillsInBullets(enhancementPlan, comparison, resumeData)
+    enhancementPlan = ensureDomainKeywordsInBullets(enhancementPlan, comparison, 6)
+    timer.mark('validate_plan_local')
 
-    // Repair only when coverage is incomplete — skip extra AI calls when plan is already good
-    const needsRepair = missingCompanies.length > 0 || !hasSummaryAction
-    if (needsRepair) {
-      log(
-        jobId,
-        `repair pass: ${missingCompanies.length} companies, summary=${hasSummaryAction ? 'ok' : 'needed'}`,
-      )
-
-      const [companyFill, summaryFill] = await Promise.all([
-        missingCompanies.length
-          ? createMissingExperienceBullets(missingCompanies, resumeData, jdData, comparison)
-          : Promise.resolve([]),
-        hasSummaryAction
-          ? Promise.resolve(null)
-          : createSummaryEnhancement(resumeData, jdData, comparison),
-      ])
-
-      if (companyFill.length) {
-        enhancementPlan = mergeExperienceAdditions(filterEnhancementPlan({
-          ...enhancementPlan,
-          experienceAdditions: [
-            ...(enhancementPlan.experienceAdditions || []),
-            ...companyFill,
-          ],
-        }, resumeData, comparison), resumeData)
-      }
-
-      if (summaryFill) {
-        const mergedSummary = keepSummaryBullets([
-          ...(enhancementPlan.summaryBullets || []),
-          ...(summaryFill.summaryBullets || []),
-        ], resumeData, 2)
-
-        const rewriteCandidates = [
-          ...(enhancementPlan.bulletRewrites || []),
-          ...(summaryFill.bulletRewrites || []),
-        ]
-
-        let summaryBullets = mergedSummary
-        if (!summaryBullets.length) {
-          const fromRewrites = keepSummaryBullets(
-            (summaryFill.bulletRewrites || [])
-              .filter((r) => {
-                const c = (r.company || '').toLowerCase()
-                return !c || c === 'summary' || c === 'professional summary'
-              })
-              .map((r) => r.replacement)
-              .filter(Boolean),
-            resumeData,
-            2,
-          )
-          summaryBullets = fromRewrites
-        }
-
-        enhancementPlan = filterEnhancementPlan({
-          ...enhancementPlan,
-          summaryBullets,
-          bulletRewrites: rewriteCandidates,
-        }, resumeData, comparison)
-
-        if (!enhancementPlan.summaryBullets?.length && summaryBullets.length) {
-          enhancementPlan.summaryBullets = summaryBullets
-        }
-      }
-    } else {
-      log(jobId, 'skipping repair pass — plan already covers summary + companies')
-    }
-
-    // Final safety: if summary still empty but plan had rewrite-only summary, leave as-is;
-    // if we somehow lost summary after filter, log it clearly
     if (!(enhancementPlan.summaryBullets?.length) && !(enhancementPlan.bulletRewrites || []).some((r) => {
       const c = (r.company || '').toLowerCase()
       return !c || c === 'summary' || c === 'professional summary'
     })) {
-      log(jobId, 'warning: no summary actions after plan/repair')
+      log(jobId, 'note: plan has no summary actions (allowed — no repair for empty)')
     }
 
-    // Ensure missing JD skills are on the skills list AND mentioned in bullets
-    enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
-    enhancementPlan = ensureSkillsInBullets(enhancementPlan)
-
     updateEnhanceJob(jobId, { step: 'updating_resume' })
-    log(jobId, `plan: ${enhancementPlan.summaryBullets?.length || 0} summary, ${enhancementPlan.experienceAdditions?.length || 0} companies with bullets, ${enhancementPlan.skillsToAdd?.length || 0} skills`)
+    log(
+      jobId,
+      `plan: ${enhancementPlan.summaryBullets?.length || 0} summary, `
+      + `${enhancementPlan.experienceAdditions?.length || 0} companies with bullets, `
+      + `${enhancementPlan.skillsToAdd?.length || 0} skills`
+      + (repaired ? ' (repaired)' : ''),
+    )
     log(jobId, 'patching DOCX')
     const originalBuffer = readFile(session.originalPath)
 
-    // One patch with highlights, then QA gate + auto-repair before download
     const { buffer: patchedPreview, applied } = patchDocx(originalBuffer, enhancementPlan, {
       highlight: true,
       resumeData,
     })
+    timer.mark('patch_docx')
 
     updateEnhanceJob(jobId, { step: 'preparing_preview' })
     log(jobId, 'qa checking enhanced resume')
@@ -217,6 +196,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     } else {
       log(jobId, 'qa: enhanced resume verified')
     }
+    timer.mark('qa')
 
     const downloadZip = new PizZip(previewBuffer)
     const downloadXml = downloadZip.file('word/document.xml').asText()
@@ -227,17 +207,40 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)
 
-    log(jobId, 'finalizing')
-
+    log(jobId, 'scoring (local)')
     const enhancedResumeData = buildEnhancedResumeData(resumeData, applied)
-
     const newComparison = compareResumeToJD(enhancedResumeData, jdData, { applied })
+    timer.mark('score_after')
+
     const aiUsage = endAiUsageTracking()
+    const totalMs = timer.totalMs()
     const processingMeta = {
-      durationMs: Date.now() - startedAt,
-      durationSec: Math.round((Date.now() - startedAt) / 100) / 10,
+      durationMs: totalMs,
+      durationSec: Math.round(totalMs / 100) / 10,
+      stages: timer.stages,
+      resumeParseMethod,
+      resumeParseConfidence: afterParse.resumeParseConfidence ?? null,
+      jdAnalysisCached: jdCached,
+      planRepaired: repaired,
+      llmCalls: aiUsage.totals?.llmCalls ?? aiUsage.calls?.length ?? 0,
+      tokenUsage: {
+        promptTokens: aiUsage.totals?.promptTokens ?? 0,
+        completionTokens: aiUsage.totals?.completionTokens ?? 0,
+        cachedInputTokens: aiUsage.totals?.cachedInputTokens ?? 0,
+        costUsd: aiUsage.totals?.costUsd ?? 0,
+        calls: (aiUsage.calls || []).map((c) => ({
+          task: c.task,
+          provider: c.provider,
+          model: c.model,
+          promptTokens: c.promptTokens,
+          completionTokens: c.completionTokens,
+          cachedInputTokens: c.cachedInputTokens,
+          durationMs: c.durationMs,
+          costUsd: c.costUsd,
+        })),
+      },
       aiUsage,
-      scoringEngine: 'JoBPilot Deterministic Resume-to-JD Scorer v2.0',
+      scoringEngine: 'JoBPilot Deterministic ATS Scorer v3.0 (40/40/20)',
     }
     const matchAnalysis = buildMatchAnalysis(comparison, newComparison, applied, processingMeta)
 
@@ -247,8 +250,14 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       + `(skills ${comparison.scoreBreakdown?.skills?.score ?? '?'}→${newComparison.scoreBreakdown?.skills?.score ?? '?'}, `
       + `exp ${comparison.scoreBreakdown?.bullets?.score ?? '?'}→${newComparison.scoreBreakdown?.bullets?.score ?? '?'}, `
       + `kw ${comparison.scoreBreakdown?.keywords?.score ?? '?'}→${newComparison.scoreBreakdown?.keywords?.score ?? '?'}) `
-      + `AI=${aiUsage.primaryProvider || 'n/a'}`,
+      + `LLM=${processingMeta.llmCalls} in=${processingMeta.tokenUsage.promptTokens} `
+      + `out=${processingMeta.tokenUsage.completionTokens} ${processingMeta.durationSec}s `
+      + `$${processingMeta.tokenUsage.costUsd}`,
     )
+
+    for (const s of timer.stages) {
+      log(jobId, `stage ${s.name}: ${s.ms}ms (at ${s.atMs}ms)`)
+    }
 
     updateSession(sessionId, {
       comparison: newComparison,

@@ -114,6 +114,20 @@ export const RESUME_TEMPLATES = [
     showTitle: true,
     experienceLayout: 'company-first',
   },
+  {
+    id: 'jd-classic',
+    name: 'JD Classic',
+    description: 'Black & white bordered layout — company first, skills by category',
+    accent: '000000',
+    headerStyle: 'centered',
+    showTitle: true,
+    experienceLayout: 'company-first',
+    contactStyle: 'phone-email',
+    headingStyle: 'underline-colon',
+    skillsAsBullets: true,
+    showResponsibilitiesLabel: true,
+    pageBorder: true,
+  },
 ]
 
 export function getTemplateById(id) {

@@ -1,5 +1,5 @@
 /**
- * Acceptance tests for deterministic Resume-to-JD scoring.
+ * Acceptance tests for ATS-style 40/40/20 Resume-to-JD scoring.
  * Run: node scripts/test-scoring.mjs
  */
 import {
@@ -105,7 +105,7 @@ function assert(cond, msg) {
 }
 
 function run() {
-  console.log('=== Deterministic scoring acceptance tests ===\n')
+  console.log('=== ATS 40/40/20 scoring acceptance tests ===\n')
 
   const before = compareResumeToJD(originalResume, baJd)
   const before2 = compareResumeToJD(originalResume, baJd)
@@ -114,10 +114,17 @@ function run() {
 
   console.log(`Original score: ${before.atsScore}`)
   console.log('Categories:', before.report.categories)
+  console.log('Weights:', before.scoreBreakdown.weights)
   console.log('Reasons:', before.report.scoringReasons.join('\n  '))
 
   assert(before.atsScore >= 0 && before.atsScore <= 100, 'score in 0–100')
-  assert(before.atsScore >= 45 && before.atsScore <= 95, `original score realistic (got ${before.atsScore})`)
+  assert(before.atsScore >= 40 && before.atsScore <= 95, `original score realistic (got ${before.atsScore})`)
+
+  // Pillar maxes
+  assert(before.scoreBreakdown.skills.max === 24, 'skills max 24')
+  assert(before.scoreBreakdown.keywords.max === 16, 'keywords max 16')
+  assert(before.scoreBreakdown.bullets.max === 40, 'experience max 40')
+  assert(before.scoreBreakdown.format.max === 20, 'format max 20')
 
   const catSum = Object.values(before.report.categories).reduce((s, c) => s + c.score, 0)
   const expectedRaw = Math.round(catSum * 10) / 10
@@ -125,6 +132,23 @@ function run() {
     Math.abs(before.report.rawTotal - expectedRaw) < 0.2,
     `rawTotal ${before.report.rawTotal} should equal category sum ${expectedRaw}`,
   )
+  assert(
+    Math.abs(catSum - (before.scoreBreakdown.skills.score
+      + before.scoreBreakdown.keywords.score
+      + before.scoreBreakdown.bullets.score
+      + before.scoreBreakdown.format.score)) < 0.2,
+    'UI pillars must sum to category total',
+  )
+
+  // Skills ∩ Keywords must be empty (ignore title-alignment row)
+  const skillItems = new Set(
+    (before.scoreBreakdown.details.skills || []).map((d) => String(d.item).toLowerCase()),
+  )
+  const kwItems = (before.scoreBreakdown.details.keywords || [])
+    .filter((d) => !/job title alignment/i.test(d.item))
+    .map((d) => String(d.item).toLowerCase())
+  const overlap = kwItems.filter((k) => skillItems.has(k))
+  assert(overlap.length === 0, `Skills/Keywords must be disjoint (overlap: ${overlap.join(', ')})`)
 
   // Duplicate skill adds zero points
   const dupResume = {
@@ -179,21 +203,33 @@ function run() {
     'unsupported tools must not receive match credit',
   )
 
-  // Structure/completeness unchanged when formatting preserved
+  // Format unchanged when structure preserved
   assert(
-    comparison.breakdown.structure.change === 0,
-    'structure should be unchanged when formatting preserved',
-  )
-  assert(
-    comparison.breakdown.completeness.change === 0,
-    'completeness should be unchanged when formatting preserved',
+    comparison.breakdown.format.change === 0,
+    'format should be unchanged when formatting preserved',
   )
 
   // Evidence present for matched items
   assert(after.report.evidence.length > 0, 'evidence list required')
-  assert(after.report.scoringReasons.length >= 7, 'scoring reasons required')
+  assert(after.report.scoringReasons.length >= 5, 'scoring reasons required')
 
-  // Category totals explain overall (within penalty)
+  // Skills-only stuffing should not get full hard-skill credit
+  const stuffed = {
+    ...originalResume,
+    skills: [...originalResume.skills, 'Visio', 'Power BI', 'Tableau'],
+    technicalSkills: [...originalResume.technicalSkills, 'Visio', 'Power BI', 'Tableau'],
+    experience: originalResume.experience.map((e) => ({
+      ...e,
+      bullets: (e.bullets || []).filter((b) => !/visio|power bi|tableau/i.test(b)),
+    })),
+  }
+  const stuffedScore = compareResumeToJD(stuffed, baJd)
+  const visioDetail = (stuffedScore.scoreBreakdown.details.skills || [])
+    .find((d) => /visio/i.test(d.item))
+  if (visioDetail?.matched) {
+    assert(!visioDetail.strong, 'skills-list-only tool must not be strong/full credit')
+  }
+
   const afterCatSum = Object.values(after.report.categories).reduce((s, c) => s + c.score, 0)
   assert(
     after.atsScore <= Math.ceil(afterCatSum) && after.atsScore >= 0,

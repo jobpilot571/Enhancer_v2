@@ -34,6 +34,8 @@ export default function useScrollReveal() {
       el.classList.add('reveal')
     })
 
+    // threshold 0: any pixel visible counts. A tall .form-card (multi-section page)
+    // never reaches 12% intersection in a normal viewport, so it stayed opacity:0.
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -43,11 +45,17 @@ export default function useScrollReveal() {
           }
         })
       },
-      { threshold: 0.12, rootMargin: '0px 0px -40px 0px' }
+      { threshold: 0, rootMargin: '0px 0px -8px 0px' },
     )
 
     els.forEach((el, i) => {
       el.style.setProperty('--reveal-delay', `${(i % 4) * 70}ms`)
+      const rect = el.getBoundingClientRect()
+      // Already on screen (e.g. after route change) — show immediately
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        el.classList.add('reveal--visible')
+        return
+      }
       observer.observe(el)
     })
 

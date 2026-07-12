@@ -3,6 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import enhancerRoutes from './routes/enhancer.js'
 import builderRoutes from './routes/builder.js'
+import jdBuilderRoutes from './routes/jdBuilder.js'
 import adminRoutes from './routes/admin.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
@@ -36,6 +37,7 @@ app.use(cors({ origin: buildCorsOrigin(), credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/api/enhancer', enhancerRoutes)
 app.use('/api/builder', builderRoutes)
+app.use('/api/jd-builder', jdBuilderRoutes)
 app.use('/api/admin', adminRoutes)
 
 app.get('/', (_req, res) => {
@@ -47,6 +49,7 @@ app.get('/', (_req, res) => {
     api: {
       enhancer: '/api/enhancer',
       builder: '/api/builder',
+      jdBuilder: '/api/jd-builder',
       admin: '/api/admin',
     },
   })

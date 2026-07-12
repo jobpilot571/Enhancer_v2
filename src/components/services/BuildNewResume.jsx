@@ -15,7 +15,7 @@ import {
 } from '../../api/builder'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
 
-const STEPS = [
+const SECTIONS = [
   { id: 'basics', label: 'Basics' },
   { id: 'experience', label: 'Experience' },
   { id: 'summary', label: 'Summary' },
@@ -74,7 +74,7 @@ function syncCompanies(companies, count) {
 }
 
 export default function BuildNewResume() {
-  const [step, setStep] = useState(0)
+  const [activeSection, setActiveSection] = useState(0)
   const [form, setForm] = useState(initialForm)
   const [error, setError] = useState('')
   const [apiOk, setApiOk] = useState(null)
@@ -86,6 +86,8 @@ export default function BuildNewResume() {
   const [sampleBlobs, setSampleBlobs] = useState({})
   const [samplePreview, setSamplePreview] = useState(null)
   const buildingRef = useRef(false)
+  const scrollingRef = useRef(false)
+  const sectionRefs = useRef({})
 
   useEffect(() => {
     let cancelled = false
@@ -98,7 +100,6 @@ export default function BuildNewResume() {
         if (cancelled) return
         setTemplateSamples(samples)
 
-        // Prefetch DOCX samples so template cards show the real Word layout
         await Promise.all(
           Object.entries(samples).map(async ([id, info]) => {
             if (info?.fileType !== 'docx') return
@@ -118,6 +119,38 @@ export default function BuildNewResume() {
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
+
+  // Highlight nav item based on which section is in view
+  useEffect(() => {
+    const observers = []
+    SECTIONS.forEach((section, index) => {
+      const el = sectionRefs.current[section.id]
+      if (!el) return
+      const obs = new IntersectionObserver(
+        ([entry]) => {
+          if (scrollingRef.current) return
+          if (entry.isIntersecting) setActiveSection(index)
+        },
+        { rootMargin: '-20% 0px -55% 0px', threshold: 0.1 },
+      )
+      obs.observe(el)
+      observers.push(obs)
+    })
+    return () => observers.forEach((o) => o.disconnect())
+  }, [])
+
+  function scrollToSection(index) {
+    const id = SECTIONS[index]?.id
+    const el = sectionRefs.current[id]
+    if (!el) return
+    scrollingRef.current = true
+    setActiveSection(index)
+    setError('')
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    window.setTimeout(() => {
+      scrollingRef.current = false
+    }, 600)
+  }
 
   async function openSamplePreview(templateId, e) {
     e.stopPropagation()
@@ -179,7 +212,7 @@ export default function BuildNewResume() {
     setError('')
   }
 
-  function validateStep(index) {
+  function validateSection(index) {
     if (index === 0) {
       if (!form.name.trim()) return 'Please enter your name.'
       if (!form.email.trim()) return 'Please enter your email.'
@@ -219,22 +252,6 @@ export default function BuildNewResume() {
     return ''
   }
 
-  /** Steps are free to navigate; required fields are checked only on Build. */
-  function goNext() {
-    setError('')
-    setStep((s) => Math.min(STEPS.length - 1, s + 1))
-  }
-
-  function goBack() {
-    setError('')
-    setStep((s) => Math.max(0, s - 1))
-  }
-
-  function goToStep(index) {
-    setError('')
-    setStep(index)
-  }
-
   function buildPayload() {
     const count = Number(form.companyCount) || form.companies.length
     return {
@@ -268,11 +285,11 @@ export default function BuildNewResume() {
   }
 
   async function handleBuild() {
-    for (let i = 0; i < STEPS.length - 1; i++) {
-      const msg = validateStep(i)
+    for (let i = 0; i < SECTIONS.length - 1; i++) {
+      const msg = validateSection(i)
       if (msg) {
         setError(msg)
-        setStep(i)
+        scrollToSection(i)
         return
       }
     }
@@ -283,6 +300,7 @@ export default function BuildNewResume() {
     setError('')
     setPreviewBlob(null)
     setBuildStep('generating_content')
+    scrollToSection(SECTIONS.length - 1)
 
     try {
       const payload = buildPayload()
@@ -296,7 +314,7 @@ export default function BuildNewResume() {
       const blob = await fetchFileBlob(result.sessionId || sid)
       setPreviewBlob(blob)
       setSessionId(result.sessionId || sid)
-      setStep(STEPS.length - 1)
+      scrollToSection(SECTIONS.length - 1)
     } catch (err) {
       setError(err.message || 'Failed to build resume')
     } finally {
@@ -306,6 +324,12 @@ export default function BuildNewResume() {
   }
 
   const companyCount = Number(form.companyCount) || form.companies.length
+
+  function setSectionRef(id) {
+    return (el) => {
+      if (el) sectionRefs.current[id] = el
+    }
+  }
 
   return (
     <div className="service-block">
@@ -325,13 +349,13 @@ export default function BuildNewResume() {
         </div>
       )}
 
-      <nav className="builder-steps" aria-label="Resume builder steps">
-        {STEPS.map((s, i) => (
+      <nav className="builder-steps builder-steps--sticky" aria-label="Resume builder sections">
+        {SECTIONS.map((s, i) => (
           <button
             key={s.id}
             type="button"
-            className={`builder-steps__item ${i === step ? 'is-active' : ''} ${i < step ? 'is-done' : ''}`}
-            onClick={() => goToStep(i)}
+            className={`builder-steps__item ${i === activeSection ? 'is-active' : ''} ${i < activeSection ? 'is-done' : ''}`}
+            onClick={() => scrollToSection(i)}
           >
             <span className="builder-steps__num">{i + 1}</span>
             <span className="builder-steps__label">{s.label}</span>
@@ -339,8 +363,16 @@ export default function BuildNewResume() {
         ))}
       </nav>
 
-      <div className="form-card">
-        {step === 0 && (
+      <div className="form-card form-card--single">
+        <section
+          id="builder-basics"
+          ref={setSectionRef('basics')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">1</span>
+            Basics
+          </h4>
           <div className="form-grid">
             <FormField
               label="Name"
@@ -405,9 +437,17 @@ export default function BuildNewResume() {
               required
             />
           </div>
-        )}
+        </section>
 
-        {step === 1 && (
+        <section
+          id="builder-experience"
+          ref={setSectionRef('experience')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">2</span>
+            Experience
+          </h4>
           <div className="builder-experience">
             <div className="form-grid">
               <FormField
@@ -477,9 +517,17 @@ export default function BuildNewResume() {
               </div>
             ))}
           </div>
-        )}
+        </section>
 
-        {step === 2 && (
+        <section
+          id="builder-summary"
+          ref={setSectionRef('summary')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">3</span>
+            Summary
+          </h4>
           <div className="form-grid">
             <FormField
               label="Summary section"
@@ -491,9 +539,17 @@ export default function BuildNewResume() {
               className="form-field--full"
             />
           </div>
-        )}
+        </section>
 
-        {step === 3 && (
+        <section
+          id="builder-education"
+          ref={setSectionRef('education')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">4</span>
+            Education
+          </h4>
           <div className="form-grid">
             <FormField
               label="University or college name"
@@ -536,9 +592,17 @@ export default function BuildNewResume() {
               onChange={updateEducation}
             />
           </div>
-        )}
+        </section>
 
-        {step === 4 && (
+        <section
+          id="builder-templates"
+          ref={setSectionRef('templates')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">5</span>
+            Templates
+          </h4>
           <div className="template-grid">
             {RESUME_TEMPLATES.map((tpl) => {
               const sample = templateSamples[tpl.id]
@@ -587,49 +651,17 @@ export default function BuildNewResume() {
               )
             })}
           </div>
-        )}
+        </section>
 
-        {samplePreview && (
-          <div
-            className="sample-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Template sample preview"
-            onClick={() => setSamplePreview(null)}
-          >
-            <div className="sample-modal__panel" onClick={(e) => e.stopPropagation()}>
-              <div className="sample-modal__head">
-                <h3>
-                  {RESUME_TEMPLATES.find((t) => t.id === samplePreview.templateId)?.name || 'Template'}{' '}
-                  sample
-                </h3>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => setSamplePreview(null)}
-                >
-                  Close
-                </button>
-              </div>
-              <div className="sample-modal__body">
-                {samplePreview.loading && <p className="admin-muted">Loading sample…</p>}
-                {samplePreview.error && <p className="builder-error">{samplePreview.error}</p>}
-                {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'pdf' && (
-                  <iframe
-                    title="Sample PDF"
-                    className="sample-modal__pdf"
-                    src={getSampleFileUrl(samplePreview.templateId)}
-                  />
-                )}
-                {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'docx' && (
-                  <DocxViewer blob={samplePreview.blob} emptyLabel="Sample unavailable" />
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {step === 5 && (
+        <section
+          id="builder-review"
+          ref={setSectionRef('review')}
+          className="builder-section"
+        >
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">6</span>
+            Build
+          </h4>
           <div className="builder-review">
             {!previewBlob && !building && (
               <div className="builder-review__summary">
@@ -671,58 +703,82 @@ export default function BuildNewResume() {
               </div>
             )}
           </div>
-        )}
+        </section>
 
         {error && <p className="builder-error" role="alert">{error}</p>}
 
         <div className="form-cta form-cta--nav">
-          {step > 0 && (
-            <button type="button" className="btn btn--outline btn--xl" onClick={goBack} disabled={building}>
-              Back
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn btn--primary btn--xl"
+            onClick={handleBuild}
+            disabled={building}
+          >
+            {building ? (
+              <>
+                <span className="btn-spinner" />
+                {getBuildStepLabel(buildStep)}
+              </>
+            ) : (
+              <>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <line x1="9" y1="15" x2="15" y2="15" />
+                </svg>
+                {previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+              </>
+            )}
+          </button>
 
-          {step < STEPS.length - 1 && (
-            <button type="button" className="btn btn--primary btn--xl" onClick={goNext}>
-              Next
-            </button>
-          )}
-
-          {step === STEPS.length - 1 && (
-            <>
-              <button
-                type="button"
-                className="btn btn--primary btn--xl"
-                onClick={handleBuild}
-                disabled={building}
-              >
-                {building ? (
-                  <>
-                    <span className="btn-spinner" />
-                    {getBuildStepLabel(buildStep)}
-                  </>
-                ) : (
-                  <>
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                      <line x1="12" y1="18" x2="12" y2="12" />
-                      <line x1="9" y1="15" x2="15" y2="15" />
-                    </svg>
-                    {previewBlob ? 'Rebuild Resume' : 'Build Resume'}
-                  </>
-                )}
-              </button>
-
-              {previewBlob && sessionId && (
-                <a href={getDownloadUrl(sessionId)} className="btn btn--outline btn--xl" download>
-                  Download DOCX
-                </a>
-              )}
-            </>
+          {previewBlob && sessionId && (
+            <a href={getDownloadUrl(sessionId)} className="btn btn--outline btn--xl" download>
+              Download DOCX
+            </a>
           )}
         </div>
       </div>
+
+      {samplePreview && (
+        <div
+          className="sample-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Template sample preview"
+          onClick={() => setSamplePreview(null)}
+        >
+          <div className="sample-modal__panel" onClick={(e) => e.stopPropagation()}>
+            <div className="sample-modal__head">
+              <h3>
+                {RESUME_TEMPLATES.find((t) => t.id === samplePreview.templateId)?.name || 'Template'}{' '}
+                sample
+              </h3>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setSamplePreview(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="sample-modal__body">
+              {samplePreview.loading && <p className="admin-muted">Loading sample…</p>}
+              {samplePreview.error && <p className="builder-error">{samplePreview.error}</p>}
+              {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'pdf' && (
+                <iframe
+                  title="Sample PDF"
+                  className="sample-modal__pdf"
+                  src={getSampleFileUrl(samplePreview.templateId)}
+                />
+              )}
+              {!samplePreview.loading && !samplePreview.error && samplePreview.fileType === 'docx' && (
+                <DocxViewer blob={samplePreview.blob} emptyLabel="Sample unavailable" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -2231,8 +2231,16 @@ body:has(.service-block--enhancer) .footer__col h4 {
 }
 .ats-mini-card__ring-wrap {
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   padding: 2px 0 4px;
+}
+.ats-mini-card__format-meta {
+  margin: 2px 0 0;
+  font-size: 0.6875rem;
+  color: #64748b;
+  font-weight: 500;
 }
 .ats-mini-card__tabs {
   display: grid;
@@ -3328,6 +3336,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
   margin-top: 10px;
   font-size: 0.75rem;
 }
+.comparison-legend {
   display: flex;
   justify-content: center;
   gap: 16px;
@@ -3658,6 +3667,43 @@ body:has(.service-block--enhancer) .footer__col h4 {
   border-radius: var(--radius-lg);
   padding: 32px;
 }
+.form-card--single {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.builder-section {
+  scroll-margin-top: 140px;
+  padding-bottom: 28px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--gray-200);
+}
+.builder-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 8px;
+}
+.builder-section__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 20px;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+.builder-section__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--green-500);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -3704,6 +3750,44 @@ body:has(.service-block--enhancer) .footer__col h4 {
   flex-wrap: wrap;
   gap: 8px;
   margin: 0 0 20px;
+}
+.builder-steps--sticky {
+  position: sticky;
+  top: 72px;
+  z-index: 20;
+  padding: 12px 0;
+  background: linear-gradient(to bottom, var(--white) 70%, rgba(255,255,255,0));
+}
+.builder-steps--sticky {
+  position: sticky;
+  top: 12px;
+  z-index: 20;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+.form-card--one-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.jd-page-section {
+  scroll-margin-top: 88px;
+  padding: 8px 0 28px;
+  border-bottom: 1px solid var(--gray-100);
+}
+.jd-page-section:last-of-type {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+.jd-page-section__title {
+  margin: 0 0 16px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--gray-800);
 }
 .builder-steps__item {
   display: inline-flex;
@@ -3778,6 +3862,26 @@ body:has(.service-block--enhancer) .footer__col h4 {
   color: #b91c1c;
   font-size: 0.875rem;
   font-weight: 600;
+}
+.builder-hint {
+  margin: 0 0 16px;
+  font-size: 0.875rem;
+  color: var(--gray-500);
+  line-height: 1.45;
+}
+.jd-builder-jd-step .builder-hint {
+  margin-top: 10px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .skills-picker {

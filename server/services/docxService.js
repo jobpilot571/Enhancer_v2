@@ -163,7 +163,7 @@ function clampBulletLength(text, maxChars = 155) {
   return `${trimmed}.`
 }
 
-/** True short skill/tool names only — reject JD sentences, soft phrases, and dumps. */
+/** True short skill/tool names only — reject JD sentences, soft phrases, domain outcomes, and dumps. */
 function isValidSkillName(skill) {
   const s = (skill || '').trim()
   if (!s) return false
@@ -184,14 +184,50 @@ function isValidSkillName(skill) {
     'continuous delivery', 'continuous integration', 'exceptional',
     'operations experience', 'problem solving', 'cross-functional',
     'best practices', 'hands-on', 'self-starter', 'team player',
+    // Domain outcomes / soft phrases that must NEVER land in Technical Skills
+    'student success', 'learner behavior', 'learner behaviors', 'data-driven research',
+    'data driven research', 'business value', 'stakeholder alignment',
+    'operational collaboration', 'decision making', 'decision-making',
+    'communication skills', 'analytical thinking', 'critical thinking',
+    'leadership', 'teamwork', 'collaboration', 'creativity', 'judgment',
+    'payment integrity', 'hospital billing', 'claims editing',
+    'reimbursement methodologies', 'payer reimbursement',
+    'state and federal', 'years of experience', '4+ years', '5+ years',
   ]
   if (banned.some((b) => lower.includes(b))) return false
+  // Outcome / research / behavior phrasing is not a tool
+  if (/\b(success|behavior|behaviours?|research|initiative|outcomes?|alignment|engagement|culture|mindset)\b/i.test(lower)) {
+    return false
+  }
   // Soft/generic fluff that is not a concrete tool
   if (/^(cloud|software|hardware|systems?|applications?|platforms?|tools?|technologies|environments?|deployments?|services?|products?|dashboards?)$/i.test(s)) {
     return false
   }
   if (!/[a-z0-9]/i.test(s)) return false
+  // Prefer concrete tools: known tool, acronym, or short technical token
+  // Allow multi-word only when it looks technical (Power BI, Azure Data Factory, etc.)
+  const words = lower.split(/\s+/)
+  if (words.length >= 3 && !/\b(sql|api|aws|azure|bi|etl|dbt|qa|uat|ci|cd|ml|ai|data)\b/i.test(lower)) {
+    return false
+  }
   return true
+}
+
+/**
+ * Skills forced onto the resume must be missing HARD skills/tools only —
+ * never domain keywords or soft outcomes.
+ */
+function hardMissingSkillCandidates(comparison) {
+  const pool = [
+    ...(comparison?.missingHardSkills || []),
+    ...(comparison?.report?.missingRequiredSkills || []),
+    ...(comparison?.report?.missingTools || []),
+  ]
+  // Fall back to comparison.missing but still run isValidSkillName
+  if (!pool.length) {
+    return (comparison?.missing || [])
+  }
+  return pool
 }
 
 /** Expand a plan skill entry that may be a comma-dump into individual candidates. */
@@ -1618,10 +1654,26 @@ function isNearExactSummaryDuplicate(newBullet, existingSummaryBullets) {
       let overlap = 0
       for (const t of nbTokens) if (ebTokens.has(t)) overlap += 1
       const ratio = overlap / Math.min(nbTokens.size, ebTokens.size)
-      if (ratio >= 0.6) return true
+      if (ratio >= 0.55) return true
     }
   }
   return false
+}
+
+/** Reject summary lines that restate years-of-experience already present in the resume. */
+function repeatsYearsClaim(newBullet, resumeData) {
+  const yearsRe = /(\d+)\s*\+?\s*(?:\+\s*)?(?:years?|yrs)/i
+  const m = String(newBullet || '').match(yearsRe)
+  if (!m) return false
+  const existing = [
+    resumeData?.summary || '',
+    ...(resumeData?.summaryBullets || []),
+  ].join(' ')
+  if (!yearsRe.test(existing)) return false
+  // Same or similar tenure claim already stated
+  const existingMatch = existing.match(yearsRe)
+  if (existingMatch && existingMatch[1] === m[1]) return true
+  return /\d+\s*\+?\s*(?:years?|yrs)/i.test(existing) && yearsRe.test(newBullet)
 }
 
 /**
@@ -1639,6 +1691,7 @@ export function keepSummaryBullets(candidates, resumeData, limit = 2) {
     const cleaned = clampBulletLength(b)
     if (!cleaned) continue
     if (isNearExactSummaryDuplicate(cleaned, [...existingSummary, ...kept])) continue
+    if (repeatsYearsClaim(cleaned, resumeData)) continue
     if (isDuplicateBullet(cleaned, [...allExisting, ...kept])) continue
     kept.push(cleaned)
     if (kept.length >= limit) break
@@ -1679,10 +1732,14 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
     return [...existingSkills].some((e) => e.includes(lower) || lower.includes(e))
   }
 
-  const missingSet = new Set((comparison?.missing || []).map((s) => s.toLowerCase().trim()))
+  // Only hard skills / tools count as skill gaps — never domain keyword phrases
+  const missingSet = new Set(
+    hardMissingSkillCandidates(comparison).map((s) => s.toLowerCase().trim()),
+  )
 
   const isMissing = (skill) => {
     const lower = skill.toLowerCase().trim()
+    if (!missingSet.size) return false
     if (missingSet.has(lower)) return true
     return [...missingSet].some((m) => m.includes(lower) || lower.includes(m))
   }
@@ -1693,11 +1750,12 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
     ...(resumeData.experience || []).flatMap((e) => e.bullets || []),
   ]
 
-  // Summary: reject near-duplicates / paraphrases; clamp to ~2 lines
+  // Summary: reject near-duplicates, years restatements, paraphrases; clamp to ~2 lines
   let summaryBullets = (plan.summaryBullets || [])
     .map((b) => clampBulletLength(b))
     .filter((b) => b
       && !isNearExactSummaryDuplicate(b, existingSummary)
+      && !repeatsYearsClaim(b, resumeData)
       && !isDuplicateBullet(b, allExistingBullets))
     .slice(0, 2)
 
@@ -1750,8 +1808,8 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
     }
   }
 
-  // Force-add remaining short missing skills only (never JD sentences)
-  const stillMissing = (comparison?.missing || [])
+  // Force-add remaining missing HARD skills/tools only (never domain phrases)
+  const stillMissing = hardMissingSkillCandidates(comparison)
     .flatMap(expandSkillCandidates)
     .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s))
     .slice(0, 8)
@@ -1788,9 +1846,89 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
  * Ensure every skill in the plan also appears in at least one planned bullet.
  * Appends a natural "using X, Y" clause to the first experience/summary bullet when needed.
  */
-export function ensureSkillsInBullets(plan) {
-  const skills = [...(plan.skillsToAdd || [])].filter(isValidSkillName)
+/**
+ * Ensure planned (and partial-only) hard skills appear in experience bullets
+ * so After scoring can award full evidence credit — not skills-list stuffing.
+ */
+export function ensureSkillsInBullets(plan, comparison = null, resumeData = null) {
+  const fromPlan = [...(plan.skillsToAdd || [])].filter(isValidSkillName)
+  const fromPartial = [
+    ...(comparison?.weak || []),
+    ...(comparison?.report?.partiallyMatchedRequiredSkills || []),
+  ]
+    .map((s) => String(s || '').trim())
+    .filter(isValidSkillName)
+    .slice(0, 4)
+
+  const skills = [...new Set([...fromPlan, ...fromPartial])]
   if (!skills.length) return plan
+
+  const allText = [
+    ...(plan.summaryBullets || []),
+    ...(plan.experienceAdditions || []).flatMap((e) => e.bullets || []),
+    ...(plan.bulletRewrites || []).map((r) => r.replacement || ''),
+    ...(resumeData?.experience || []).flatMap((e) => e.bullets || []),
+  ].join(' ').toLowerCase()
+
+  const missingInBullets = skills.filter((s) => !allText.includes(String(s).toLowerCase()))
+  if (!missingInBullets.length) return plan
+
+  const clause = ` using ${missingInBullets.slice(0, 2).join(' and ')}`
+  const next = {
+    ...plan,
+    summaryBullets: [...(plan.summaryBullets || [])],
+    experienceAdditions: (plan.experienceAdditions || []).map((e) => ({
+      ...e,
+      bullets: [...(e.bullets || [])],
+    })),
+  }
+
+  // Prefer experience (full credit) over summary (partial credit)
+  if (next.experienceAdditions?.length && next.experienceAdditions[0].bullets?.length) {
+    const bullets = next.experienceAdditions[0].bullets
+    bullets[0] = clampBulletLength(`${bullets[0].replace(/\.$/, '')}${clause}.`)
+    return next
+  }
+
+  const firstCompany = resumeData?.experience?.[0]?.company
+  if (firstCompany) {
+    next.experienceAdditions = [
+      {
+        company: firstCompany,
+        bullets: [
+          clampBulletLength(
+            `Delivered analysis and reporting${clause} to support operational and stakeholder decisions.`,
+          ),
+        ],
+      },
+      ...next.experienceAdditions.filter(
+        (e) => e.company?.toLowerCase() !== firstCompany.toLowerCase(),
+      ),
+    ]
+    return next
+  }
+
+  if (next.summaryBullets?.length) {
+    next.summaryBullets[0] = clampBulletLength(`${next.summaryBullets[0].replace(/\.$/, '')}${clause}.`)
+  }
+
+  return next
+}
+
+/**
+ * Weave missing JD domain keywords into planned bullets so After keyword
+ * coverage can reach a strong match (without dumping a keyword list).
+ */
+export function ensureDomainKeywordsInBullets(plan, comparison, limit = 6) {
+  const missing = [
+    ...(comparison?.missingKeywords || []),
+    ...(comparison?.report?.missingKeywords || []),
+  ]
+    .map((k) => String(k || '').trim())
+    .filter((k) => k && k.length > 2 && k.length < 48)
+    .filter((k) => !/job title alignment/i.test(k))
+
+  if (!missing.length) return plan
 
   const allText = [
     ...(plan.summaryBullets || []),
@@ -1798,26 +1936,63 @@ export function ensureSkillsInBullets(plan) {
     ...(plan.bulletRewrites || []).map((r) => r.replacement || ''),
   ].join(' ').toLowerCase()
 
-  const missingInBullets = skills.filter((s) => !allText.includes(String(s).toLowerCase()))
-  if (!missingInBullets.length) return plan
+  const stillMissing = missing.filter((k) => !allText.includes(k.toLowerCase()))
+  if (!stillMissing.length) return plan
 
-  // Weave at most 2 short tools so bullets stay ≤ ~2 lines
-  const clause = ` using ${missingInBullets.slice(0, 2).join(' and ')}`
-  const next = { ...plan }
+  const toWeave = stillMissing.slice(0, limit)
+  const next = {
+    ...plan,
+    summaryBullets: [...(plan.summaryBullets || [])],
+    experienceAdditions: (plan.experienceAdditions || []).map((e) => ({
+      ...e,
+      bullets: [...(e.bullets || [])],
+    })),
+  }
 
-  if (next.summaryBullets?.length) {
-    next.summaryBullets = [...next.summaryBullets]
-    next.summaryBullets[0] = clampBulletLength(`${next.summaryBullets[0].replace(/\.$/, '')}${clause}.`)
+  // Distribute phrases across NEW experience bullets first (avoid restating summary tenure)
+  let idx = 0
+  const targets = []
+  for (let ei = 0; ei < next.experienceAdditions.length; ei++) {
+    for (let bi = 0; bi < (next.experienceAdditions[ei].bullets || []).length; bi++) {
+      targets.push({ kind: 'exp', ei, bi })
+    }
+  }
+  // Only weave into summary if we already have a new summary bullet (never invent years claims)
+  for (let i = 0; i < next.summaryBullets.length; i++) {
+    targets.push({ kind: 'summary', i })
+  }
+
+  if (!targets.length) {
+    // Prefer a clean keyword-aligned line without inventing tenure claims
+    const phrase = toWeave.slice(0, 3).join(', ')
+    next.summaryBullets = [
+      clampBulletLength(`Delivered reporting and analysis aligned with ${phrase} across stakeholder programs.`),
+    ]
     return next
   }
 
-  if (next.experienceAdditions?.length) {
-    next.experienceAdditions = next.experienceAdditions.map((entry, idx) => {
-      if (idx !== 0 || !entry.bullets?.length) return entry
-      const bullets = [...entry.bullets]
-      bullets[0] = clampBulletLength(`${bullets[0].replace(/\.$/, '')}${clause}.`)
-      return { ...entry, bullets }
-    })
+  for (const t of targets) {
+    if (idx >= toWeave.length) break
+    const chunk = toWeave.slice(idx, idx + 2)
+    idx += chunk.length
+    const clause = ` supporting ${chunk.join(' and ')}`
+    if (t.kind === 'summary') {
+      next.summaryBullets[t.i] = clampBulletLength(
+        `${next.summaryBullets[t.i].replace(/\.$/, '')}${clause}.`,
+      )
+    } else {
+      const bullets = next.experienceAdditions[t.ei].bullets
+      bullets[t.bi] = clampBulletLength(`${bullets[t.bi].replace(/\.$/, '')}${clause}.`)
+    }
+  }
+
+  // If phrases remain, append a focused summary line
+  if (idx < toWeave.length) {
+    const rest = toWeave.slice(idx, idx + 3).join(', ')
+    next.summaryBullets.push(
+      clampBulletLength(`Advanced ${rest} initiatives with clear requirements and measurable outcomes.`),
+    )
+    next.summaryBullets = next.summaryBullets.slice(0, 2)
   }
 
   return next
@@ -1827,10 +2002,31 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied, p
   const expAdded = Object.values(applied.experience || {}).reduce((n, e) => n + (e.added?.length || 0), 0)
   const expRewritten = Object.values(applied.experience || {}).reduce((n, e) => n + (e.rewritten?.length || 0), 0)
 
-  const beforePresent = new Set((beforeComparison.present || []).map((k) => k.toLowerCase().trim()))
-  const addedKeywords = (afterComparison.present || []).filter(
-    (k) => !beforePresent.has(k.toLowerCase().trim()),
+  const normKey = (s) => String(s || '').toLowerCase().replace(/[^\w+#./-]+/g, ' ').replace(/\s+/g, ' ').trim()
+
+  // "Added keywords" must not repeat newly added skills (same term in both sections)
+  const addedSkillKeys = new Set(
+    (applied.skills || [])
+      .map((s) => normKey(s.skill || s))
+      .filter(Boolean),
   )
+
+  const keywordListFrom = (comparison) => {
+    if (comparison?.matchedKeywords?.length) return comparison.matchedKeywords
+    if (comparison?.report?.matchedKeywords?.length) return comparison.report.matchedKeywords
+    const details = comparison?.scoreBreakdown?.details?.keywords || []
+    return details.filter((d) => d.matched).map((d) => d.item)
+  }
+
+  const beforeKw = new Set(keywordListFrom(beforeComparison).map(normKey).filter(Boolean))
+  const seen = new Set()
+  const addedKeywords = []
+  for (const k of keywordListFrom(afterComparison)) {
+    const key = normKey(k)
+    if (!key || beforeKw.has(key) || addedSkillKeys.has(key) || seen.has(key)) continue
+    seen.add(key)
+    addedKeywords.push(k)
+  }
 
   const addedBullets = [
     ...(applied.summary?.added || []).map((text) => ({ section: 'Summary', text })),
@@ -1862,50 +2058,41 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied, p
       const total = matched + missing
       const pct = total ? Math.round((matched / total) * 100) : 0
       return {
-        skills: { matched, total, pct, score: 0, max: 30 },
-        keywords: { matched, total, pct, score: 0, max: 15 },
-        bullets: { matched: 0, total: 0, pct: 0, score: 0, max: 25 },
-        tools: { matched: 0, total: 0, pct: 0, score: 0, max: 10 },
-        structure: { matched: 0, total: 0, pct: 0, score: 0, max: 10 },
-        summary: { matched: 0, total: 0, pct: 0, score: 0, max: 5 },
-        completeness: { matched: 0, total: 0, pct: 0, score: 0, max: 5 },
+        skills: { matched, total, pct, score: 0, max: 24 },
+        keywords: { matched, total, pct, score: 0, max: 16 },
+        bullets: { matched: 0, total: 0, pct: 0, score: 0, max: 40 },
+        format: { matched: 0, total: 0, pct: 0, score: 0, max: 20 },
         weights: {
-          requiredSkills: 30,
-          experience: 25,
-          keywords: 15,
-          tools: 10,
-          structure: 10,
-          summary: 5,
-          completeness: 5,
+          keywordPillar: 40,
+          experiencePillar: 40,
+          formatPillar: 20,
+          skills: 24,
+          keywords: 16,
+          experience: 40,
+          format: 20,
         },
-        details: { skills: [], keywords: [], bullets: [], tools: [], structure: [], summary: [], completeness: [] },
+        details: { skills: [], keywords: [], bullets: [], format: [] },
       }
     }
     return {
       skills: compactPillar(raw, 'skills'),
       keywords: compactPillar(raw, 'keywords'),
       bullets: compactPillar(raw, 'bullets'),
-      tools: compactPillar(raw, 'tools'),
-      structure: compactPillar(raw, 'structure'),
-      summary: compactPillar(raw, 'summary'),
-      completeness: compactPillar(raw, 'completeness'),
+      format: compactPillar(raw, 'format'),
       weights: raw.weights || {
-        requiredSkills: 30,
-        experience: 25,
-        keywords: 15,
-        tools: 10,
-        structure: 10,
-        summary: 5,
-        completeness: 5,
+        keywordPillar: 40,
+        experiencePillar: 40,
+        formatPillar: 20,
+        skills: 24,
+        keywords: 16,
+        experience: 40,
+        format: 20,
       },
       details: {
-        skills: (raw.details?.skills || []).slice(0, 40),
-        keywords: (raw.details?.keywords || []).slice(0, 40),
-        bullets: (raw.details?.bullets || []).slice(0, 25),
-        tools: (raw.details?.tools || []).slice(0, 25),
-        structure: (raw.details?.structure || []).slice(0, 20),
-        summary: (raw.details?.summary || []).slice(0, 15),
-        completeness: (raw.details?.completeness || []).slice(0, 10),
+        skills: raw.details?.skills || [],
+        keywords: raw.details?.keywords || [],
+        bullets: raw.details?.bullets || [],
+        format: raw.details?.format || [],
       },
     }
   }
@@ -1913,17 +2100,14 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied, p
   const beforeBreakdown = compactBreakdown(beforeComparison)
   const afterBreakdown = compactBreakdown(afterComparison)
 
-  const catKeys = [
-    ['requiredSkills', 'skills', 30],
-    ['experience', 'bullets', 25],
-    ['keywords', 'keywords', 15],
-    ['tools', 'tools', 10],
-    ['structure', 'structure', 10],
-    ['summary', 'summary', 5],
-    ['completeness', 'completeness', 5],
+  const pillarPairs = [
+    ['requiredSkills', 'skills', 24],
+    ['keywords', 'keywords', 16],
+    ['experience', 'bullets', 40],
+    ['format', 'format', 20],
   ]
   const breakdown = {}
-  for (const [reportKey, uiKey, max] of catKeys) {
+  for (const [reportKey, uiKey, max] of pillarPairs) {
     const before = beforeComparison.report?.categories?.[reportKey]?.score
       ?? beforeBreakdown[uiKey]?.score
       ?? 0

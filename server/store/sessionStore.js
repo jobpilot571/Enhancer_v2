@@ -72,6 +72,31 @@ export function createBuilderSession(formData) {
   return session
 }
 
+/** JD-Tailored Resume Builder session (from-scratch + JD). */
+export function createJdBuilderSession(formData) {
+  const sessionId = randomUUID()
+  const fileName = `${(formData?.name || 'resume').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'resume'}-jd-tailored.docx`
+  const session = {
+    sessionId,
+    kind: 'jd-builder',
+    fileName,
+    fileType: 'docx',
+    originalPath: null,
+    enhancedPath: null,
+    enhancedPreviewPath: null,
+    builderInput: formData || {},
+    resumeData: null,
+    jdText: String(formData?.jdText || '').trim(),
+    jdData: null,
+    comparison: null,
+    enhancementPlan: null,
+    atsScore: null,
+    createdAt: Date.now(),
+  }
+  sessions.set(sessionId, session)
+  return session
+}
+
 export function setGeneratedDocx(sessionId, downloadBuffer, previewBuffer = downloadBuffer) {
   const session = getSession(sessionId)
   if (!session) return null

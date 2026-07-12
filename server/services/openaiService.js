@@ -1,8 +1,18 @@
 import { structuredJSON } from './aiProvider.js'
+import { cleanJobDescription, getCachedJdAnalysis, setCachedJdAnalysis } from './jdCleaner.js'
 
-async function jsonCompletion(systemPrompt, userPrompt, schemaName, schema) {
-  const { result, provider } = await structuredJSON(systemPrompt, userPrompt, schemaName, schema)
-  console.log(`[AI] ${schemaName} handled by ${provider}`)
+/**
+ * @param {object} [options]
+ * @param {number} [options.maxTokens]
+ * @returns {Promise<object>} parsed JSON result (diagnostics stay on AI usage log)
+ */
+async function jsonCompletion(systemPrompt, userPrompt, schemaName, schema, options = {}) {
+  const { result, provider, model, promptTokens, completionTokens, durationMs, costUsd } =
+    await structuredJSON(systemPrompt, userPrompt, schemaName, schema, options)
+  console.log(
+    `[AI] ${schemaName} via ${provider}/${model} `
+    + `in=${promptTokens} out=${completionTokens} ${durationMs}ms $${costUsd}`,
+  )
   return result
 }
 
@@ -57,24 +67,36 @@ const JD_SCHEMA = {
   additionalProperties: false,
 }
 
-const PLAN_SCHEMA = {
+/** Compact enhancement output — maps to internal plan via normalizeEnhancementPlan */
+const COMPACT_PLAN_SCHEMA = {
   type: 'object',
   properties: {
-    strategy: { type: 'string' },
-    summaryBullets: { type: 'array', items: { type: 'string' } },
-    experienceAdditions: {
+    summaryRewrites: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          original: { type: 'string' },
+          replacement: { type: 'string' },
+        },
+        required: ['original', 'replacement'],
+        additionalProperties: false,
+      },
+    },
+    experienceRewrites: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           company: { type: 'string' },
-          bullets: { type: 'array', items: { type: 'string' } },
+          original: { type: 'string' },
+          replacement: { type: 'string' },
         },
-        required: ['company', 'bullets'],
+        required: ['company', 'original', 'replacement'],
         additionalProperties: false,
       },
     },
-    skillsByCategory: {
+    skillAdditions: {
       type: 'array',
       items: {
         type: 'object',
@@ -86,24 +108,8 @@ const PLAN_SCHEMA = {
         additionalProperties: false,
       },
     },
-    skillsToAdd: { type: 'array', items: { type: 'string' } },
-    bulletRewrites: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          original: { type: 'string' },
-          replacement: { type: 'string' },
-          company: { type: 'string' },
-        },
-        required: ['original', 'replacement', 'company'],
-        additionalProperties: false,
-      },
-    },
-    keywordsAdded: { type: 'array', items: { type: 'string' } },
-    rationale: { type: 'string' },
   },
-  required: ['strategy', 'summaryBullets', 'experienceAdditions', 'skillsByCategory', 'skillsToAdd', 'bulletRewrites', 'keywordsAdded', 'rationale'],
+  required: ['summaryRewrites', 'experienceRewrites', 'skillAdditions'],
   additionalProperties: false,
 }
 
@@ -119,6 +125,99 @@ const BULLET_RULES = `Bullet writing rules (strict — every bullet MUST follow 
 - Do NOT start bullets with a bullet character (•). Plain sentence text only.
 - Sound like a confident professional, not a job description copy.`
 
+/**
+ * Normalize compact LLM plan into the shape expected by filterEnhancementPlan / patchDocx.
+ * Empty original + non-empty replacement => new addition (summary or experience).
+ */
+export function normalizeEnhancementPlan(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      strategy: '',
+      summaryBullets: [],
+      experienceAdditions: [],
+      skillsByCategory: [],
+      skillsToAdd: [],
+      bulletRewrites: [],
+      keywordsAdded: [],
+      rationale: '',
+    }
+  }
+
+  // Already in legacy / internal shape
+  if (
+    Array.isArray(raw.summaryBullets)
+    || Array.isArray(raw.experienceAdditions)
+    || Array.isArray(raw.skillsByCategory)
+  ) {
+    return {
+      strategy: raw.strategy || '',
+      summaryBullets: raw.summaryBullets || [],
+      experienceAdditions: raw.experienceAdditions || [],
+      skillsByCategory: raw.skillsByCategory || [],
+      skillsToAdd: raw.skillsToAdd || [],
+      bulletRewrites: raw.bulletRewrites || [],
+      keywordsAdded: raw.keywordsAdded || [],
+      rationale: raw.rationale || '',
+    }
+  }
+
+  const summaryBullets = []
+  const bulletRewrites = []
+  for (const r of raw.summaryRewrites || []) {
+    const original = String(r.original || '').trim()
+    const replacement = String(r.replacement || '').trim()
+    if (!replacement) continue
+    if (original) {
+      bulletRewrites.push({ company: 'Summary', original, replacement })
+    } else {
+      summaryBullets.push(replacement)
+    }
+  }
+
+  const byCompany = new Map()
+  for (const r of raw.experienceRewrites || []) {
+    const company = String(r.company || '').trim()
+    if (!company) continue
+    const original = String(r.original || '').trim()
+    const replacement = String(r.replacement || '').trim()
+    if (!replacement) continue
+    if (original) {
+      bulletRewrites.push({ company, original, replacement })
+    } else {
+      const list = byCompany.get(company) || []
+      list.push(replacement)
+      byCompany.set(company, list.slice(0, 2))
+    }
+  }
+
+  const experienceAdditions = [...byCompany.entries()].map(([company, bullets]) => ({
+    company,
+    bullets,
+  }))
+
+  return {
+    strategy: '',
+    summaryBullets: summaryBullets.slice(0, 2),
+    experienceAdditions,
+    skillsByCategory: raw.skillAdditions || [],
+    skillsToAdd: [],
+    bulletRewrites,
+    keywordsAdded: [],
+    rationale: '',
+  }
+}
+
+/** True when the plan object is structurally usable (empty arrays are OK). */
+export function isPlanTechnicallyValid(plan) {
+  if (!plan || typeof plan !== 'object') return false
+  const hasArrays =
+    Array.isArray(plan.summaryBullets)
+    && Array.isArray(plan.experienceAdditions)
+    && Array.isArray(plan.skillsByCategory)
+    && Array.isArray(plan.bulletRewrites)
+  return hasArrays
+}
+
 export async function parseResume(resumeText) {
   return jsonCompletion(
     `You are a resume parsing expert. Extract ALL structured data from the resume text. Include every section, heading, bullet, skill, company, title, and date. Return complete JSON.
@@ -126,202 +225,159 @@ For SUMMARY/PROFILE/OBJECTIVE:
 - If the summary is a prose paragraph (not a bullet list), put the full text in "summary" and leave summaryBullets as [].
 - If the summary is a bullet list, put each bullet in summaryBullets and put a short joined overview in "summary".
 Never invent bullets from a paragraph summary.`,
-    `Parse this resume:\n\n${resumeText}`,
+    `Parse this resume:\n\n${String(resumeText || '').slice(0, 12000)}`,
     'resume_parse',
     RESUME_SCHEMA,
+    { maxTokens: 2500 },
   )
 }
 
-export async function parseJD(jdText) {
-  return jsonCompletion(
-    'You are a job description parsing expert. Extract role title, required/preferred skills, responsibilities, tools, domain keywords, and must-have/highlighted keywords.',
-    `Parse this job description:\n\n${jdText}`,
-    'jd_parse',
-    JD_SCHEMA,
-  )
-}
-
-export async function createMissingExperienceBullets(missingCompanies, resumeData, jdData, comparison) {
-  const list = missingCompanies.map((c) => `${c.company} (${c.title || 'role'})`).join(' | ')
-  const result = await jsonCompletion(
-    `You write 1-2 impressive storytelling experience bullets per company. ${BULLET_RULES}`,
-    `These companies each need 1-2 NEW bullets: ${list}
-Use JD keywords once, no duplicates. Return experienceAdditions — each entry must have company matching exactly and bullets array with 1-2 items.
-
-Resume:\n${JSON.stringify(resumeData, null, 2)}
-JD:\n${JSON.stringify(jdData, null, 2)}
-Missing skills:\n${JSON.stringify(comparison.missing, null, 2)}`,
-    'missing_experience',
-    {
-      type: 'object',
-      properties: {
-        experienceAdditions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              company: { type: 'string' },
-              bullets: { type: 'array', items: { type: 'string' } },
-            },
-            required: ['company', 'bullets'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['experienceAdditions'],
-      additionalProperties: false,
-    },
-  )
-  return result.experienceAdditions || []
-}
-
-export async function createSummaryEnhancement(resumeData, jdData, comparison) {
-  const isParagraph = (resumeData.summaryFormat || '').toLowerCase() === 'paragraph'
-    || (!(resumeData.summaryBullets || []).length && !!(resumeData.summary || '').trim())
-
-  if (isParagraph) {
-    return jsonCompletion(
-      `Enhance a PARAGRAPH-style professional summary for JD alignment.
-CRITICAL FORMAT RULE: The original summary is a prose paragraph — return 1-2 NEW prose SENTENCES (not bullets, no leading • or dashes).
-These sentences will be woven into the existing paragraph. Keep each sentence under ~35 words.
-Do NOT rewrite the whole summary unless needed; prefer additive sentences that weave missing JD skills/tools naturally.
-Optionally return bulletRewrites with company="Summary" where original is EXACT existing summary text and replacement is the full enhanced paragraph.`,
-      `Existing paragraph summary:\n${resumeData.summary || ''}
-Existing summary bullets (should be empty for paragraph resumes):\n${JSON.stringify(resumeData.summaryBullets || [], null, 2)}
-Missing skills to weave in:\n${JSON.stringify((comparison.missing || []).slice(0, 12), null, 2)}
-JD:\n${JSON.stringify(jdData, null, 2)}
-Priority keywords:\n${JSON.stringify([...(jdData.mustHaveKeywords || []), ...(comparison.missing || [])].slice(0, 12), null, 2)}`,
-      'summary_enhancement',
-      {
-        type: 'object',
-        properties: {
-          summaryBullets: { type: 'array', items: { type: 'string' } },
-          bulletRewrites: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                original: { type: 'string' },
-                replacement: { type: 'string' },
-                company: { type: 'string' },
-              },
-              required: ['original', 'replacement', 'company'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['summaryBullets', 'bulletRewrites'],
-        additionalProperties: false,
-      },
-    )
+/**
+ * Analyze a cleaned JD (or raw — will clean). Uses disk/memory cache by content hash.
+ * @returns {{ data: object, cached: boolean, cacheKey: string, source: string|null }}
+ */
+export async function analyzeJd(jdText) {
+  const cleaned = cleanJobDescription(jdText)
+  const cached = getCachedJdAnalysis(jdText)
+  if (cached.data) {
+    console.log(`[AI] jd_analysis cache hit (${cached.source}) key=${cached.key.slice(0, 12)}`)
+    return { data: cached.data, cached: true, cacheKey: cached.key, source: cached.source }
   }
 
-  return jsonCompletion(
-    `Create 1-2 NEW summary bullets for 99% JD alignment. ${BULLET_RULES}
-ALWAYS return summaryBullets with 1-2 brand-new bullets (preferred).
-Do NOT paraphrase, extend, or lightly rewrite any existing summary bullet — invent a different achievement angle.
-Optionally also return bulletRewrites with company="Summary" if rewriting existing text helps.
-bulletRewrites.original must be EXACT text from resumeData.summaryBullets when used.
-Do NOT leave summaryBullets empty.
-Weave missing JD skills/tools into the new bullets naturally.`,
-    `Existing summary bullets in resume (DO NOT repeat or paraphrase these):\n${JSON.stringify(resumeData.summaryBullets, null, 2)}
-Missing skills to weave into bullets:\n${JSON.stringify((comparison.missing || []).slice(0, 12), null, 2)}
-JD:\n${JSON.stringify(jdData, null, 2)}
-Priority keywords:\n${JSON.stringify([...(jdData.mustHaveKeywords || []), ...(comparison.missing || [])].slice(0, 12), null, 2)}`,
-    'summary_enhancement',
-    {
-      type: 'object',
-      properties: {
-        summaryBullets: { type: 'array', items: { type: 'string' } },
-        bulletRewrites: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              original: { type: 'string' },
-              replacement: { type: 'string' },
-              company: { type: 'string' },
-            },
-            required: ['original', 'replacement', 'company'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['summaryBullets', 'bulletRewrites'],
-      additionalProperties: false,
-    },
+  const data = await jsonCompletion(
+    `Extract structured hiring signal from this cleaned job description.
+Return ONLY JSON. Keep lists short and concrete (skills/tools as short names, not sentences).
+Ignore any residual salary, benefits, location, EEO, or apply instructions.`,
+    `Cleaned JD:\n${cleaned.slice(0, 6000)}`,
+    'jd_analysis',
+    JD_SCHEMA,
+    { maxTokens: 800 },
   )
+
+  const cacheKey = setCachedJdAnalysis(jdText, data)
+  return { data, cached: false, cacheKey, source: null }
 }
 
+/** @deprecated Prefer analyzeJd — kept for callers that expect bare JD object */
+export async function parseJD(jdText) {
+  const { data } = await analyzeJd(jdText)
+  return data
+}
+
+/**
+ * One-shot complete enhancement plan. Empty arrays are valid — do not repair for emptiness.
+ */
 export async function createEnhancementPlan(resumeData, jdData, comparison) {
   const companies = (resumeData.experience || []).map((e) => e.company).filter(Boolean)
-  const jdPriority = [
-    ...(jdData.mustHaveKeywords || []),
-    ...(jdData.requiredSkills || []),
-    ...(comparison.missing || []),
-  ].slice(0, 20)
+  const missingKeywords = [
+    ...(comparison.missingKeywords || []),
+    ...(comparison.report?.missingKeywords || []),
+  ].filter(Boolean)
+  // Hard skills/tools only — never merge domain keywords into the skills gap list
+  const missingHard = [
+    ...(comparison.missingHardSkills || []),
+    ...(comparison.report?.missingRequiredSkills || []),
+    ...(comparison.report?.missingTools || []),
+  ].filter(Boolean)
 
-  // Compact payload — faster AI, same quality rules
+  const allowedVocab = [
+    ...new Set([
+      ...missingKeywords,
+      ...(jdData.domainKeywords || []),
+      ...(jdData.mustHaveKeywords || []),
+      ...(jdData.requiredSkills || []),
+      ...(jdData.toolsTechnologies || []),
+      ...missingHard,
+    ]),
+  ].slice(0, 28)
+
   const summaryFormat = (resumeData.summaryFormat || (
     (!(resumeData.summaryBullets || []).length && (resumeData.summary || '').trim()
       ? 'paragraph'
       : 'bullets')
   ))
+
   const compactResume = {
-    name: resumeData.name,
     summaryFormat,
-    summary: (resumeData.summary || '').slice(0, 600),
-    summaryBullets: (resumeData.summaryBullets || []).slice(0, 8),
-    skills: [...new Set([...(resumeData.skills || []), ...(resumeData.technicalSkills || [])])].slice(0, 40),
-    headings: (resumeData.headings || []).slice(0, 20),
+    summary: (resumeData.summary || '').slice(0, 400),
+    summaryBullets: (resumeData.summaryBullets || []).slice(0, 6),
+    skills: [...new Set([
+      ...(resumeData.skills || []),
+      ...(resumeData.technicalSkills || []),
+    ])].slice(0, 30),
+    skillCategories: (resumeData.skillCategories || []).slice(0, 8).map((c) => ({
+      category: c.category,
+      skills: (c.skills || []).slice(0, 12),
+    })),
     experience: (resumeData.experience || []).map((e) => ({
       company: e.company,
       title: e.title,
-      bullets: (e.bullets || []).slice(0, 6),
+      bullets: (e.bullets || []).slice(0, 5),
     })),
   }
-  const compactJd = {
-    roleTitle: jdData.roleTitle,
-    requiredSkills: (jdData.requiredSkills || []).slice(0, 20),
-    preferredSkills: (jdData.preferredSkills || []).slice(0, 12),
-    toolsTechnologies: (jdData.toolsTechnologies || []).slice(0, 20),
-    mustHaveKeywords: (jdData.mustHaveKeywords || []).slice(0, 20),
+
+  const gaps = {
+    missingSkills: [...new Set(missingHard)].slice(0, 14),
+    missingDomainKeywords: [...new Set(missingKeywords)].slice(0, 12),
+    presentSkills: (comparison.present || []).slice(0, 12),
+    roleTitle: jdData.roleTitle || '',
+    requiredSkills: (jdData.requiredSkills || []).slice(0, 15),
+    preferredSkills: (jdData.preferredSkills || []).slice(0, 8),
+    tools: (jdData.toolsTechnologies || []).slice(0, 15),
     domainKeywords: (jdData.domainKeywords || []).slice(0, 12),
-    responsibilities: (jdData.responsibilities || []).slice(0, 12),
-  }
-  const compactComparison = {
-    missing: (comparison.missing || []).slice(0, 25),
-    present: (comparison.present || []).slice(0, 20),
-    atsScore: comparison.atsScore,
+    responsibilities: (jdData.responsibilities || []).slice(0, 8),
   }
 
-  return jsonCompletion(
-    `You are an expert resume writer. Create an enhancement plan to achieve 99% alignment with the job description.
+  const limits = {
+    maxSummaryItems: 2,
+    maxNewBulletsPerCompany: 2,
+    companiesMustCover: companies,
+    maxSkillNames: 12,
+    // Aim for strong JD keyword coverage after enhancement
+    minDomainKeywordsToWeave: Math.min(6, gaps.missingDomainKeywords.length || 0),
+  }
+
+  const raw = await jsonCompletion(
+    `You are an expert resume writer. Return ONE complete enhancement plan as JSON only.
 
 ${BULLET_RULES}
 
-Enhancement rules (ALL mandatory):
-- Preserve original section order, fonts, and resume structure exactly.
-- SUMMARY FORMAT RULE (critical): resumeData.summaryFormat is "${summaryFormat}".
-  ${summaryFormat === 'paragraph'
-    ? '- Paragraph summary: return 1-2 NEW prose SENTENCES in summaryBullets (no bullet glyphs). They will be woven into the existing paragraph. Do NOT convert the summary into a bullet list.'
-    : '- Bullet summary: Always return 1-2 NEW summaryBullets that are NOT paraphrases of existing summary bullets. Prefer brand-new JD-aligned achievements.'}
-- NEVER return a summary item that repeats or lightly rewords an existing resume summary.
-- MANDATORY PER COMPANY: experienceAdditions MUST include EVERY company listed below, each with 1-2 bullets. Prefer experienceAdditions over rewrites for coverage. No company may be skipped.
-- Companies in resume (include ALL of these in experienceAdditions): ${companies.join(' | ') || 'none'}
-- JD priority keywords (use each ONCE across the whole resume — never repeat the same keyword in multiple bullets): ${jdPriority.join(', ') || 'see comparison.missing'}
-- MANDATORY SKILLS LIST: skillsByCategory MUST add SHORT tool/skill names only (e.g. "Jira", "Fiber optics", "AWS") under EXISTING resume category lines (e.g. "Tools & Platforms:", "Cloud & DevOps:"). NEVER invent a new "Technical Skills" heading. NEVER paste JD sentences, soft skills paragraphs, benefits, PTO, equipment, or multi-clause phrases into skills.
-- MANDATORY SKILLS IN BULLETS: Missing JD tools that are added to skillsByCategory MUST also appear naturally in at least one new summary or experience bullet (weave 1–2 tools into storytelling — do not dump a skill list into a bullet).
-- Never create underlined headings. Never duplicate the Technical Skills section.
-- New bullets go in the MIDDLE of lists — never first or last bullet in any section or company.
-- bulletRewrites.original must be copied EXACTLY from resumeData summaryBullets or experience bullets.
-- experienceAdditions.company must match resume experience company names exactly.
-- strategy: brief plan covering summary, each company, and skills.
-- Completeness check before answering: summary present and unique? every company in experienceAdditions? every missing skill in skillsByCategory AND mentioned in a bullet? If not, fix before returning.`,
-    `Resume:\n${JSON.stringify(compactResume)}\n\nJD:\n${JSON.stringify(compactJd)}\n\nComparison:\n${JSON.stringify(compactComparison)}`,
+Output fields:
+- summaryRewrites: 0–2 items. For NEW summary text set original="" and replacement=new sentence/bullet. For rewrite set original to EXACT existing text. summaryFormat="${summaryFormat}".
+- experienceRewrites: cover companies when useful. For NEW bullets set original="" and replacement=new bullet (1–2 per company). For rewrite set original to EXACT existing bullet. company must match resume exactly.
+- skillAdditions: ONLY concrete tools/hard skills from gaps.missingSkills (e.g. SQL, Tableau, DBT, Power BI). Never put domain phrases, soft outcomes, or years claims in skills (forbidden: "student success", "learner behaviors", "data-driven research", "4+ years"). Use EXISTING category labels only. Never invent "Technical Skills".
+
+Rules:
+- Prefer additions (empty original) over rewrites.
+- Compare resume vs gaps line-by-line: add what is missing; do not restate what already exists.
+- SUMMARY: Do NOT repeat years-of-experience ("4+ years", "X years") if the resume summary already states tenure. Add JD-aligned impact/tools only.
+- DOMAIN KEYWORDS go ONLY into summary/experience bullets — NEVER into skillAdditions. Weave gaps.missingDomainKeywords naturally (target limits.minDomainKeywordsToWeave). Each phrase once.
+- When missingSkills is non-empty: put those tools in skillAdditions AND mention 1–2 of them in new experience bullets so they earn full evidence credit.
+- Cover gaps.responsibilities with new experience bullets where the resume is thin.
+- Do not send education/contact changes.
+- Use allowed vocabulary naturally.
+- Empty arrays are allowed only when gaps are already covered.
+- Stay within change limits.`,
+    JSON.stringify({
+      resume: compactResume,
+      gaps,
+      allowedVocabulary: allowedVocab,
+      limits,
+    }),
     'enhancement_plan',
-    PLAN_SCHEMA,
+    COMPACT_PLAN_SCHEMA,
+    { maxTokens: 1800 },
   )
+
+  return normalizeEnhancementPlan(raw)
+}
+
+/**
+ * Technical-failure repair only — not used when plan arrays are merely empty.
+ */
+export async function repairEnhancementPlan(resumeData, jdData, comparison, reason) {
+  console.warn(`[AI] enhancement_plan repair: ${reason}`)
+  return createEnhancementPlan(resumeData, jdData, comparison)
 }
 
 const BUILD_RESUME_SCHEMA = {
@@ -455,5 +511,91 @@ Education:
 Generate the complete resume JSON.`,
     'build_resume',
     BUILD_RESUME_SCHEMA,
+    { maxTokens: 4096 },
+  )
+}
+
+/** Summary bullet count by years of experience (JD-Tailored builder). */
+export function summaryBulletCountForYears(years) {
+  const y = Number(years) || 0
+  if (y <= 4) return 5
+  if (y <= 6) return 7
+  if (y <= 10) return 10
+  return 12
+}
+
+/**
+ * Generate a JD-tailored resume from scratch (no existing resume).
+ * Resume title/role must match the JD role. Skills must cover JD + related skills.
+ */
+export async function generateResumeFromJd(formData, jdData) {
+  const companies = Array.isArray(formData.companies) ? formData.companies : []
+  const years = Number(formData.yearsOfExperience) || 0
+  const summaryCount = summaryBulletCountForYears(years)
+  const roleTitle = String(jdData?.roleTitle || formData.role || '').trim()
+
+  const jdSkills = [
+    ...new Set([
+      ...(jdData?.requiredSkills || []),
+      ...(jdData?.preferredSkills || []),
+      ...(jdData?.toolsTechnologies || []),
+      ...(jdData?.mustHaveKeywords || []),
+      ...(jdData?.domainKeywords || []),
+    ].map((s) => String(s || '').trim()).filter(Boolean)),
+  ]
+
+  const companyLines = companies.map((c, i) => {
+    const loc = [c.city, c.state].filter(Boolean).join(', ')
+    const n = Math.min(15, Math.max(3, Number(c.bulletCount) || 8))
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | City/State="${loc || 'N/A'}" | BulletCount=${n} | OptionalSummaryGuidance="${String(c.summary || '').trim() || '(none)'}"`
+  }).join('\n')
+
+  return jsonCompletion(
+    `You are an expert resume writer building a brand-new resume from scratch that is STRONGLY tailored to a specific job description.
+
+${BULLET_RULES}
+
+Hard rules:
+- The candidate has NO existing resume — invent believable, JD-aligned content from their facts + the JD.
+- Resume target role / title MUST be exactly: "${roleTitle}" (the JD role). Do not use a different title.
+- Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
+- For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
+- Align every bullet to JD responsibilities, tools, and keywords — sound like someone who already does this job.
+- If a company has OptionalSummaryGuidance, use it as soft guidance for that company's bullets (do not copy it verbatim into bullets unless it fits).
+- summaryBullets: return EXACTLY ${summaryCount} strong, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
+- skillCategories: return 5–7 category headings. Include ALL JD skills/tools and closely related skills. Category examples: Languages, Frontend, Backend, Cloud, Databases, DevOps, Tools, Methodologies.
+- skills + technicalSkills: flat list of the same skill names (short names only). Prefer JD vocabulary.
+- email/phone/location: copy from user input.
+- education: return [] (empty array) unless the user provided education (they did not).
+- Return experience entries in the SAME order as the companies listed.`,
+    `Candidate:
+- Name: ${formData.name}
+- Email: ${formData.email || ''}
+- Phone: ${formData.phone || ''}
+- City/State: ${[formData.city, formData.state].filter(Boolean).join(', ') || formData.location || ''}
+- User role hint: ${formData.role || '(use JD role)'}
+- Years of experience: ${years}
+- Required summary bullet count: ${summaryCount}
+
+JD analysis (tailor heavily to this):
+- Role title: ${roleTitle}
+- Required skills: ${(jdData?.requiredSkills || []).join(', ') || '(see JD text)'}
+- Preferred skills: ${(jdData?.preferredSkills || []).join(', ') || ''}
+- Tools/technologies: ${(jdData?.toolsTechnologies || []).join(', ') || ''}
+- Must-have keywords: ${(jdData?.mustHaveKeywords || []).join(', ') || ''}
+- Domain keywords: ${(jdData?.domainKeywords || []).join(', ') || ''}
+- Key responsibilities: ${(jdData?.responsibilities || []).slice(0, 12).join(' | ') || ''}
+- All JD skills to cover: ${jdSkills.join(', ') || '(extract from JD text)'}
+
+Companies (present→past order already applied by caller):
+${companyLines || '(none)'}
+
+Raw JD excerpt (for extra context):
+${String(formData.jdText || '').slice(0, 4500)}
+
+Generate the complete resume JSON.`,
+    'build_jd_resume',
+    BUILD_RESUME_SCHEMA,
+    { maxTokens: 5096 },
   )
 }

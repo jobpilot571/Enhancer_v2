@@ -1,10 +1,14 @@
 import { getSession, updateSession, readFile } from '../store/sessionStore.js'
 import { extractResumeText } from './resumeExtract.js'
-import { parseResume, parseJD } from './openaiService.js'
+import { parseResume, analyzeJd } from './openaiService.js'
+import { parseResumeLocally } from './localResumeParse.js'
+import { saveResumeParseSnapshot } from './resumeParseCache.js'
 
 /** In-flight promises so concurrent callers share one parse. */
 const resumeParseInflight = new Map()
 const jdParseInflight = new Map()
+
+const LOCAL_CONFIDENCE_THRESHOLD = 0.8
 
 export async function ensureResumeData(sessionOrId) {
   const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId?.sessionId
@@ -19,8 +23,48 @@ export async function ensureResumeData(sessionOrId) {
   const promise = (async () => {
     const buffer = readFile(session.originalPath)
     const resumeText = session.resumeText || await extractResumeText(buffer, session.fileType)
-    const resumeData = await parseResume(resumeText)
-    updateSession(sessionId, { resumeText, resumeData, resumeParseError: null })
+
+    const local = parseResumeLocally(resumeText)
+    let resumeData
+    let resumeParseMethod
+    let resumeParseConfidence = local.confidence
+
+    if (local.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+      resumeData = local.data
+      resumeParseMethod = 'local'
+      console.log(
+        `[parse] resume session=${sessionId} method=local confidence=${local.confidence}`,
+      )
+    } else {
+      console.log(
+        `[parse] resume session=${sessionId} method=AI fallback `
+        + `localConfidence=${local.confidence} (<${LOCAL_CONFIDENCE_THRESHOLD})`,
+      )
+      resumeData = await parseResume(resumeText)
+      resumeParseMethod = 'AI fallback'
+      // Prefer local skillCategories if AI omitted them
+      if (!resumeData.skillCategories?.length && local.data.skillCategories?.length) {
+        resumeData.skillCategories = local.data.skillCategories
+      }
+    }
+
+    updateSession(sessionId, {
+      resumeText,
+      resumeData,
+      resumeParseError: null,
+      resumeParseMethod,
+      resumeParseConfidence,
+    })
+
+    saveResumeParseSnapshot({
+      sessionId,
+      fileName: session.fileName,
+      method: resumeParseMethod,
+      confidence: resumeParseConfidence,
+      resumeData,
+      resumeTextPreview: resumeText,
+    })
+
     return resumeData
   })()
     .catch((err) => {
@@ -48,13 +92,19 @@ export async function ensureJdData(sessionOrId) {
 
   const textSnapshot = session.jdText.trim()
   const promise = (async () => {
-    const jdData = await parseJD(textSnapshot)
+    const { data: jdData, cached, cacheKey, source } = await analyzeJd(textSnapshot)
     const latest = getSession(sessionId)
     // Ignore stale result if JD changed while parsing
     if (!latest || latest.jdText?.trim() !== textSnapshot) {
       return latest?.jdData || jdData
     }
-    updateSession(sessionId, { jdData, jdParseError: null })
+    updateSession(sessionId, {
+      jdData,
+      jdParseError: null,
+      jdAnalysisCached: cached,
+      jdCacheKey: cacheKey,
+      jdCacheSource: source,
+    })
     return jdData
   })()
     .catch((err) => {

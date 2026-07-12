@@ -28,19 +28,25 @@ function formatCityState(city, state) {
   return [clean(city), clean(state)].filter(Boolean).join(', ')
 }
 
-function sectionHeading(text, accent, compact) {
+function sectionHeading(text, accent, compact, style = {}) {
+  const isClassic = style.headingStyle === 'underline-colon'
+  const label = isClassic ? `${text.toUpperCase()}:` : text.toUpperCase()
+
   return new Paragraph({
     spacing: { before: compact ? 160 : 240, after: compact ? 60 : 80 },
-    border: {
-      bottom: { style: BorderStyle.SINGLE, size: 12, color: accent, space: 4 },
-    },
+    border: isClassic
+      ? undefined
+      : {
+          bottom: { style: BorderStyle.SINGLE, size: 12, color: accent, space: 4 },
+        },
     children: [
       new TextRun({
-        text: text.toUpperCase(),
+        text: label,
         bold: true,
         size: 22,
         font: 'Calibri',
         color: accent,
+        underline: isClassic ? {} : undefined,
       }),
     ],
   })
@@ -76,7 +82,10 @@ function bulletPara(text, compact) {
   })
 }
 
-function contactLine(resume) {
+function contactLine(resume, style = {}) {
+  if (style.contactStyle === 'phone-email') {
+    return [clean(resume.phone), clean(resume.email)].filter(Boolean).join('  |  ')
+  }
   const bits = [
     clean(resume.location),
     clean(resume.phone),
@@ -88,10 +97,11 @@ function contactLine(resume) {
 
 function buildHeader(resume, style) {
   const accent = style.accent || '1E40AF'
+  const nameColor = style.nameColor || accent
   const children = []
   const name = clean(resume.name) || 'Resume'
   const title = clean(resume.title || resume.role)
-  const contact = contactLine(resume)
+  const contact = contactLine(resume, style)
 
   if (style.headerStyle === 'banner') {
     children.push(
@@ -158,7 +168,7 @@ function buildHeader(resume, style) {
           bold: true,
           size: 36,
           font: 'Calibri',
-          color: accent,
+          color: nameColor,
         }),
       ],
     }),
@@ -173,9 +183,9 @@ function buildHeader(resume, style) {
           new TextRun({
             text: title,
             bold: true,
-            size: 20,
+            size: 22,
             font: 'Calibri',
-            color: '374151',
+            color: '000000',
           }),
         ],
       }),
@@ -186,13 +196,13 @@ function buildHeader(resume, style) {
     children.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { after: style.titleBelowContact ? 40 : 160 },
+        spacing: { after: style.titleBelowContact ? 40 : (style.headingStyle === 'underline-colon' ? 80 : 160) },
         children: [
           new TextRun({
             text: contact,
             size: 18,
             font: 'Calibri',
-            color: '4B5563',
+            color: '000000',
           }),
         ],
       }),
@@ -213,6 +223,19 @@ function buildHeader(resume, style) {
             color: '374151',
           }),
         ],
+      }),
+    )
+  }
+
+  // Full-width rule under header (JD Classic / similar)
+  if (style.headingStyle === 'underline-colon') {
+    children.push(
+      new Paragraph({
+        spacing: { after: 120 },
+        border: {
+          bottom: { style: BorderStyle.SINGLE, size: 18, color: '000000', space: 1 },
+        },
+        children: [],
       }),
     )
   }
@@ -244,9 +267,32 @@ function buildExperienceEntry(job, style, compact) {
     if (title) {
       paras.push(
         new Paragraph({
+          spacing: { after: style.showResponsibilitiesLabel ? 20 : 40 },
+          children: [
+            new TextRun({
+              text: title,
+              italics: !style.showResponsibilitiesLabel,
+              bold: true,
+              size: 20,
+              font: 'Calibri',
+              color: '000000',
+            }),
+          ],
+        }),
+      )
+    }
+    if (style.showResponsibilitiesLabel) {
+      paras.push(
+        new Paragraph({
           spacing: { after: 40 },
           children: [
-            new TextRun({ text: title, italics: true, bold: true, size: 20, font: 'Calibri', color: '374151' }),
+            new TextRun({
+              text: 'Responsibilities:',
+              bold: true,
+              size: 20,
+              font: 'Calibri',
+              color: '000000',
+            }),
           ],
         }),
       )
@@ -344,14 +390,11 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
     : []
 
   if (summaryText || summaryBullets.length) {
-    children.push(sectionHeading('Professional Summary', accent, compact))
+    children.push(sectionHeading('Professional Summary', accent, compact, style))
     if (summaryText && !summaryBullets.length) {
       children.push(bodyPara(summaryText, { after: 80 }))
     }
     for (const b of summaryBullets) children.push(bulletPara(b, compact))
-    if (summaryText && summaryBullets.length) {
-      // prefer bullets when both present
-    }
   }
 
   // Categorized skills if provided, else flat list
@@ -364,21 +407,35 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
   ]
 
   if (skillCategories.length || flatSkills.length) {
-    children.push(sectionHeading('Technical Skills', accent, compact))
+    children.push(sectionHeading('Technical Skills', accent, compact, style))
     if (skillCategories.length) {
       for (const cat of skillCategories) {
         const label = clean(cat.category)
         const items = (cat.skills || []).map(clean).filter(Boolean)
         if (!label || !items.length) continue
-        children.push(
-          new Paragraph({
-            spacing: { after: 40 },
-            children: [
-              new TextRun({ text: `${label}: `, bold: true, size: 20, font: 'Calibri', color: accent }),
-              new TextRun({ text: items.join(', '), size: 20, font: 'Calibri', color: '1F2937' }),
-            ],
-          }),
-        )
+        if (style.skillsAsBullets) {
+          children.push(
+            new Paragraph({
+              spacing: { after: compact ? 24 : 40 },
+              indent: { left: convertInchesToTwip(0.15) },
+              children: [
+                new TextRun({ text: '• ', size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
+                new TextRun({ text: `${label}: `, bold: true, size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
+                new TextRun({ text: items.join(', '), size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
+              ],
+            }),
+          )
+        } else {
+          children.push(
+            new Paragraph({
+              spacing: { after: 40 },
+              children: [
+                new TextRun({ text: `${label}: `, bold: true, size: 20, font: 'Calibri', color: accent }),
+                new TextRun({ text: items.join(', '), size: 20, font: 'Calibri', color: '1F2937' }),
+              ],
+            }),
+          )
+        }
       }
     } else {
       children.push(bodyPara(flatSkills.join(' · '), { after: 80 }))
@@ -387,7 +444,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
 
   const experience = Array.isArray(resume.experience) ? resume.experience : []
   if (experience.length) {
-    children.push(sectionHeading('Professional Experience', accent, compact))
+    children.push(sectionHeading('Professional Experience', accent, compact, style))
     for (const job of experience) {
       children.push(...buildExperienceEntry(job, style, compact))
     }
@@ -395,7 +452,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
 
   const education = Array.isArray(resume.education) ? resume.education : []
   if (education.length) {
-    children.push(sectionHeading('Education', accent, compact))
+    children.push(sectionHeading('Education', accent, compact, style))
     for (const edu of education) {
       if (typeof edu === 'string') {
         children.push(bodyPara(edu, { after: 60 }))
@@ -424,7 +481,18 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
     }
   }
 
-  const margin = compact ? 0.55 : 0.7
+  const margin = style.pageBorder ? 0.75 : (compact ? 0.55 : 0.7)
+  const pageBorders = style.pageBorder
+    ? {
+        pageBorders: {
+          pageBorderTop: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
+          pageBorderRight: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
+          pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
+          pageBorderLeft: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
+        },
+      }
+    : {}
+
   const doc = new Document({
     sections: [
       {
@@ -436,6 +504,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
               left: convertInchesToTwip(0.7),
               right: convertInchesToTwip(0.7),
             },
+            ...pageBorders,
           },
         },
         children,

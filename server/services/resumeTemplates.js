@@ -76,6 +76,18 @@ export const TEMPLATE_STYLES = {
     showTitle: true,
     experienceLayout: 'company-first',
   },
+  'jd-classic': {
+    accent: '000000',
+    headerStyle: 'centered',
+    showTitle: true,
+    experienceLayout: 'company-first',
+    contactStyle: 'phone-email',
+    headingStyle: 'underline-colon',
+    skillsAsBullets: true,
+    showResponsibilitiesLabel: true,
+    pageBorder: true,
+    nameColor: '000000',
+  },
 }
 
 export function getTemplateStyle(templateId) {

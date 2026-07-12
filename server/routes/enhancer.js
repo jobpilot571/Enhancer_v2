@@ -12,6 +12,7 @@ import { createEnhanceJob, getEnhanceJob } from '../store/enhanceJobStore.js'
 import { runEnhanceJob } from '../services/enhanceWorker.js'
 import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
 import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
+import { getLastResumeParseSnapshot } from '../services/resumeParseCache.js'
 
 const router = Router()
 
@@ -201,6 +202,35 @@ router.get('/download/:sessionId', (req, res, next) => {
   } catch (err) {
     next(err)
   }
+})
+
+// Debug: latest resume extract written to disk (also open server/.cache/last-resume-parse.json)
+router.get('/debug/last-resume-parse', (_req, res) => {
+  const snapshot = getLastResumeParseSnapshot()
+  if (!snapshot) {
+    return res.status(404).json({
+      error: 'No resume parse yet — upload a resume first, then refresh this URL.',
+    })
+  }
+  res.json(snapshot)
+})
+
+// Debug: live session extract + JD + compare (while server still has the session)
+router.get('/debug/session/:sessionId', (req, res) => {
+  const session = getSession(req.params.sessionId)
+  if (!session) return res.status(404).json({ error: 'Session not found (server may have restarted)' })
+  res.json({
+    sessionId: session.sessionId,
+    fileName: session.fileName,
+    resumeParseMethod: session.resumeParseMethod || null,
+    resumeParseConfidence: session.resumeParseConfidence ?? null,
+    resumeData: session.resumeData || null,
+    jdData: session.jdData || null,
+    comparisonBefore: session.comparisonBefore || null,
+    comparison: session.comparison || null,
+    enhancementPlan: session.enhancementPlan || null,
+    processingMeta: session.processingMeta || null,
+  })
 })
 
 router.get('/score-report/:sessionId', async (req, res, next) => {

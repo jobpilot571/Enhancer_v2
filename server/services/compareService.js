@@ -1,15 +1,12 @@
 /**
- * Deterministic Resume-to-JD scoring (0–100).
+ * Deterministic Resume-to-JD scoring (0–100) — ATS-style 40 / 40 / 20.
  *
- * Categories:
- *   1. Required Skills Match ............ 30
- *   2. Experience & Responsibilities .... 25
- *   3. JD Keywords Match ................ 15
- *   4. Tools & Technologies ............. 10
- *   5. Structure & Readability .......... 10
- *   6. Professional Summary Match .......  5
- *   7. Resume Completeness ..............  5
+ * Pillars:
+ *   1. Keyword & Skills Match ........... 40  (Hard skills/tools 24 + Title/domain 16)
+ *   2. Experience & Impact .............. 40
+ *   3. Format & Readability ............. 20
  *
+ * Skills and Keywords lists are disjoint — one concept never appears twice.
  * Same function for before and after. Score rises only when coverage improves.
  */
 
@@ -18,17 +15,24 @@ import {
   RESPONSIBILITY_ALIASES,
   KNOWN_TOOLS,
   STOP_WORDS,
-  JD_NOISE_PATTERNS,
+  SOFT_SKILLS,
+  ACTION_VERBS,
+  QUANTIFIER_RE,
+  TITLE_FAMILIES,
+  DOMAIN_KEYWORD_EVIDENCE,
 } from './scoringDictionary.js'
 
 const WEIGHTS = {
-  requiredSkills: 30,
-  experience: 25,
-  keywords: 15,
-  tools: 10,
-  structure: 10,
-  summary: 5,
-  completeness: 5,
+  skills: 24,
+  keywords: 16,
+  experience: 40,
+  format: 20,
+  keywordPillar: 40,
+  experiencePillar: 40,
+  formatPillar: 20,
+  // Report aliases (PDF / buildScoreComparison)
+  requiredSkills: 24,
+  structure: 20, // format maps here for legacy key in some callers
 }
 
 /** In-memory cache: same (requirement, evidence) → same match result */
@@ -269,12 +273,59 @@ function isShortSkill(s) {
   return true
 }
 
+function isSoftSkill(term) {
+  const n = normalize(term)
+  const c = canonical(term)
+  if (!n) return false
+  if (SOFT_SKILLS.has(n) || SOFT_SKILLS.has(c)) return true
+  // Phrase patterns: "X skills", soft traits — not tools/hard methods
+  if (KNOWN_TOOLS.has(c)) return false
+  const softRoots = [
+    'communication', 'analytical', 'critical thinking', 'problem.sol',
+    'leadership', 'creativity', 'judgment', 'teamwork', 'collaborat',
+    'interpersonal', 'organizational', 'self.motivat', 'work ethic',
+  ]
+  return softRoots.some((r) => new RegExp(r, 'i').test(n))
+}
+
+/**
+ * True when a keyword is the same concept as a skill already shown/scored
+ * (exact, alias, or multi-word overlap like "financial reporting" ⊂ skill).
+ */
+function keywordCoveredBySkills(term, skillCanons) {
+  const c = canonical(term)
+  if (!c) return false
+  if (skillCanons.has(c)) return true
+
+  const termTokens = c.split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+  for (const skill of skillCanons) {
+    if (!skill) continue
+    if (skill === c) return true
+    // Containment for longer phrases
+    if (c.length >= 8 && skill.includes(c)) return true
+    if (skill.length >= 8 && c.includes(skill)) return true
+    const skillTokens = skill.split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+    if (termTokens.length >= 2 && skillTokens.length >= 2) {
+      const set = new Set(skillTokens)
+      const shared = termTokens.filter((t) => set.has(t))
+      if (shared.length >= 2) return true
+    }
+  }
+  return false
+}
+
 function extractRequiredSkills(jdData) {
-  return uniqueNormalized(jdData.requiredSkills || []).filter(isShortSkill)
+  // Hard skills only — soft traits are excluded so they don't clutter Skills
+  // and then reappear under Keywords.
+  return uniqueNormalized(jdData.requiredSkills || [])
+    .filter(isShortSkill)
+    .filter((s) => !isSoftSkill(s))
 }
 
 function extractPreferredSkills(jdData) {
-  return uniqueNormalized(jdData.preferredSkills || []).filter(isShortSkill)
+  return uniqueNormalized(jdData.preferredSkills || [])
+    .filter(isShortSkill)
+    .filter((s) => !isSoftSkill(s))
 }
 
 function extractTools(jdData) {
@@ -319,33 +370,43 @@ function extractResponsibilities(jdData) {
 }
 
 function extractKeywords(jdData) {
-  let blob = [
-    ...(jdData.mustHaveKeywords || []),
-    ...(jdData.domainKeywords || []),
-    ...(jdData.niceToHaveKeywords || []),
-    ...(jdData.responsibilities || []).flatMap((r) => normalize(r).split(' ').filter((w) => w.length > 4)),
-  ].join(' ')
-
-  for (const pat of JD_NOISE_PATTERNS) blob = blob.replace(pat, ' ')
+  // Keywords = domain / industry phrases only.
+  // Never repeat required skills, tools, soft traits, or near-duplicate skill phrases.
+  // Preferred hard items (e.g. KPI, regulatory reporting) may appear here once.
+  const ownedBySkillsOrTools = new Set([
+    ...extractRequiredSkills(jdData).map(canonical),
+    ...extractTools(jdData).map((t) => t.canonical),
+  ].filter(Boolean))
 
   const must = new Set((jdData.mustHaveKeywords || []).map(canonical))
   const domain = new Set((jdData.domainKeywords || []).map(canonical))
   const nice = new Set((jdData.niceToHaveKeywords || []).map(canonical))
 
   const candidates = uniqueNormalized([
-    ...(jdData.mustHaveKeywords || []),
     ...(jdData.domainKeywords || []),
+    ...(jdData.mustHaveKeywords || []),
     ...(jdData.niceToHaveKeywords || []),
   ]).filter((k) => {
     const n = normalize(k)
     if (!n || n.length < 3) return false
     if (STOP_WORDS.has(n)) return false
     if (n.split(' ').every((w) => STOP_WORDS.has(w))) return false
+    if (isSoftSkill(k)) return false
+    const c = canonical(k)
+    if (c && KNOWN_TOOLS.has(c)) return false
+    if (keywordCoveredBySkills(k, ownedBySkillsOrTools)) return false
     return true
   })
 
-  return candidates.map((k) => {
+  // Prefer shorter display labels when aliases collide (KPI over "key performance indicators")
+  const byCanon = new Map()
+  for (const k of candidates) {
     const c = canonical(k)
+    const prev = byCanon.get(c)
+    if (!prev || k.length < prev.length) byCanon.set(c, k)
+  }
+
+  return [...byCanon.entries()].map(([c, k]) => {
     let weight = 1
     let tier = 'optional'
     if (must.has(c)) {
@@ -362,955 +423,1774 @@ function extractKeywords(jdData) {
   })
 }
 
-/* ---------- Category scorers ---------- */
+/* ---------- Partitioned term sets (never twice) ---------- */
 
-function scoreRequiredSkills(resumeData, jdData) {
+
+
+/**
+
+ * Hard skills + tools owned by the Skills tab (max 24 pts).
+
+ * Soft traits excluded. Preferred tools included when listed on JD.
+
+ */
+
+function partitionHardSkills(jdData) {
+
   const required = extractRequiredSkills(jdData)
-  const maxPts = WEIGHTS.requiredSkills
+
+  const tools = extractTools(jdData).map((t) => t.term)
+
+  return uniqueNormalized([...required, ...tools])
+
+}
+
+
+
+/**
+
+ * Domain / title keywords for Keywords tab (max 16 pts).
+
+ * Never includes anything already in the hard-skills partition.
+
+ */
+
+function partitionDomainKeywords(jdData, hardSkills) {
+
+  const skillCanons = new Set(hardSkills.map(canonical).filter(Boolean))
+
+  const fromExtract = extractKeywords(jdData).map((k) => k.term)
+
+  return uniqueNormalized(fromExtract).filter((k) => !keywordCoveredBySkills(k, skillCanons))
+
+}
+
+
+
+/* ---------- Pillar 1: Keyword & Skills Match (40) ---------- */
+
+
+
+function scoreHardSkills(resumeData, jdData, options = {}) {
+
+  const maxPts = WEIGHTS.skills
+
+  const hardSkills = partitionHardSkills(jdData)
+
   const evidence = []
+
   const matched = []
+
   const partial = []
+
   const missing = []
 
-  if (!required.length) {
-    return {
-      score: maxPts,
-      matched: 0,
-      total: 0,
-      pct: 100,
-      details: [],
-      matchedItems: [],
-      partialItems: [],
-      missingItems: [],
-      evidence,
+  const details = []
+
+  const penalties = []
+
+
+
+  // Unsupported tools added during enhancement
+
+  const appliedSkills = (options.applied?.skills || []).map((s) => canonical(s.skill || s))
+
+  const jdToolSet = new Set(hardSkills.map(canonical))
+
+  for (const added of appliedSkills) {
+
+    if (!added) continue
+
+    if (KNOWN_TOOLS.has(added) && !jdToolSet.has(added)) {
+
+      penalties.push({
+
+        type: 'unsupported_tool',
+
+        item: added,
+
+        detail: `Tool "${added}" added during enhancement but not required by JD`,
+
+        amount: 1,
+
+      })
+
     }
+
   }
 
-  let earnedWeight = 0
-  const totalWeight = required.length // equal weight per required skill
 
-  for (const skill of required) {
-    const ev = findEvidence(skill, resumeData)
-    let credit = 0
-    let matchType = 'none'
 
-    if (ev?.location === 'skills' || (ev?.location === 'experience' && ev.matchType !== 'semantic')) {
-      credit = 1.0
-      matchType = ev.matchType
-    } else if (ev?.location === 'experience' && ev.matchType === 'semantic') {
-      credit = 0.75
-      matchType = 'semantic'
-    } else if (ev?.location === 'summary') {
-      credit = 0.4
-      matchType = ev.matchType
+  if (!hardSkills.length) {
+
+    return {
+
+      score: maxPts,
+
+      matched: 0,
+
+      total: 0,
+
+      pct: 100,
+
+      details: [],
+
+      matchedItems: [],
+
+      partialItems: [],
+
+      missingItems: [],
+
+      evidence,
+
+      penalties,
+
+      hardSkills,
+
     }
+
+  }
+
+
+
+  let earnedWeight = 0
+
+  const totalWeight = hardSkills.length
+
+
+
+  for (const skill of hardSkills) {
+
+    const ev = findEvidence(skill, resumeData)
+
+    let credit = 0
+
+
+
+    if (ev?.location === 'experience') {
+
+      credit = 1.0
+
+    } else if (ev?.location === 'skills') {
+
+      // Skills-list only = stuffing risk → partial credit
+
+      credit = 0.55
+
+    } else if (ev?.location === 'summary') {
+
+      credit = 0.4
+
+    }
+
+
 
     const points = round1((credit / totalWeight) * maxPts)
-    const row = {
-      item: skill,
-      matched: credit > 0,
-      strong: credit >= 1,
-      credit,
-      coverage: Math.round(credit * 100),
+
+    if (credit >= 0.9) {
+
+      matched.push(skill)
+
+      details.push({ item: skill, matched: true, strong: true, credit })
+
+    } else if (credit > 0) {
+
+      partial.push(skill)
+
+      details.push({ item: skill, matched: true, strong: false, credit })
+
+    } else {
+
+      missing.push(skill)
+
+      details.push({ item: skill, matched: false, strong: false, credit: 0 })
+
     }
 
-    if (credit >= 1) {
-      matched.push(skill)
-    } else if (credit > 0) {
-      partial.push(skill)
-    } else {
-      missing.push(skill)
-    }
+
 
     if (ev && credit > 0) {
+
       evidence.push({
+
         requirement: skill,
+
         resumeEvidence: ev.resumeEvidence,
+
         section: ev.section,
+
         company: ev.company || '',
-        matchType,
+
+        matchType: ev.matchType,
+
         weight: 1,
+
         pointsAwarded: points,
+
         credit,
+
       })
+
     }
 
     earnedWeight += credit
+
   }
+
+
 
   const score = round1((earnedWeight / totalWeight) * maxPts)
+
   return {
+
     score,
-    matched: matched.length,
-    total: required.length,
+
+    // Count any positive credit (full + partial) so the UI fraction matches the detail list
+    matched: matched.length + partial.length,
+
+    total: hardSkills.length,
+
     pct: Math.round((earnedWeight / totalWeight) * 100),
-    details: [
-      ...matched.map((s) => ({ item: s, matched: true, strong: true })),
-      ...partial.map((s) => ({ item: s, matched: true, strong: false })),
-      ...missing.map((s) => ({ item: s, matched: false, strong: false })),
-    ],
+
+    details,
+
     matchedItems: matched,
+
     partialItems: partial,
+
     missingItems: missing,
+
     evidence,
+
+    penalties,
+
+    hardSkills,
+
   }
+
 }
 
-function scoreExperience(resumeData, jdData) {
-  const responsibilities = extractResponsibilities(jdData)
-  const maxPts = WEIGHTS.experience
-  const bullets = collectExperienceBullets(resumeData)
-  const evidence = []
-  const covered = []
-  const partial = []
-  const missing = []
-  const details = []
 
-  if (!responsibilities.length) {
-    return {
-      score: maxPts,
-      matched: 0,
-      total: 0,
-      pct: 100,
-      coveragePct: 100,
-      details: [],
-      coveredItems: [],
-      partialItems: [],
-      missingItems: [],
-      evidence,
-    }
+
+function titleFamilyMatch(resumeData, jdData) {
+
+  const role = normalize(jdData.roleTitle || jdData.title || '')
+
+  if (!role) return { hit: false, score: 0 }
+
+
+
+  const resumeTitles = [
+
+    resumeData.title,
+
+    resumeData.role,
+
+    ...(resumeData.experience || []).map((e) => e.title || e.role || ''),
+
+    collectSummaryText(resumeData),
+
+  ].map(normalize).filter(Boolean)
+
+
+
+  // Direct overlap
+
+  if (resumeTitles.some((t) => t.includes(role) || role.includes(t) || tokenOverlap(t, role) >= 0.5)) {
+
+    return { hit: true, score: 1 }
+
   }
 
-  const totalWeight = responsibilities.reduce((s, r) => s + r.weight, 0)
-  let earned = 0
 
-  for (const resp of responsibilities) {
-    let best = 0
-    let bestBullet = null
 
-    for (const b of bullets) {
-      // Must be demonstrated in experience/project — not skills section alone
-      const sem = semanticMatch(resp.text, b.text)
-      const overlap = tokenOverlap(resp.text, b.text)
-      const score = Math.max(sem.score, overlap)
-      if (score > best) {
-        best = score
-        bestBullet = b
+  for (const family of TITLE_FAMILIES) {
+
+    const jdInFamily = family.some((f) => role.includes(f))
+
+    if (!jdInFamily) continue
+
+    const resumeInFamily = resumeTitles.some((t) => family.some((f) => t.includes(f)))
+
+    if (resumeInFamily) return { hit: true, score: 0.85 }
+
+  }
+
+
+
+  return { hit: false, score: 0 }
+
+}
+
+
+
+
+/**
+ * Credit for a domain keyword against resume text.
+ * Exact phrase = 1.0; related evidence / token coverage = 0.75–1.0; weak = 0.5.
+ */
+function domainKeywordCredit(term, bulletText, summaryText, fullText) {
+  const c = canonical(term)
+  const n = normalize(term)
+  if (!c && !n) return { credit: 0, where: null, matchType: 'none' }
+
+  const hayBullet = bulletText || ''
+  const haySummary = summaryText || ''
+  const hayAll = fullText || ''
+
+  const hasPhrase = (hay, phrase) => {
+    if (!phrase || phrase.length < 2) return false
+    return hay.includes(phrase) || countOccurrences(hay, phrase) > 0
+  }
+
+  if (hasPhrase(hayBullet, c) || hasPhrase(hayBullet, n)) {
+    return { credit: 1, where: 'experience', matchType: 'exact' }
+  }
+  if (hasPhrase(haySummary, c) || hasPhrase(haySummary, n)) {
+    return { credit: 0.85, where: 'summary', matchType: 'exact' }
+  }
+
+  const evidence = DOMAIN_KEYWORD_EVIDENCE[c] || DOMAIN_KEYWORD_EVIDENCE[n] || []
+  const tokens = (c || n).split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+  const stems = [...new Set([...evidence.map((e) => normalize(e)), ...tokens])].filter((st) => st.length >= 3)
+
+  let bulletHits = 0
+  let summaryHits = 0
+  let allHits = 0
+  for (const stem of stems) {
+    if (hayBullet.includes(stem)) bulletHits += 1
+    if (haySummary.includes(stem)) summaryHits += 1
+    if (hayAll.includes(stem)) allHits += 1
+  }
+
+  const need = Math.max(1, Math.ceil(tokens.length * 0.5))
+  const evidenceInBullets = evidence.filter((e) => hayBullet.includes(normalize(e))).length
+
+  if (bulletHits >= Math.max(2, need) || (tokens.length <= 2 && bulletHits >= 1 && evidenceInBullets >= 1)) {
+    return { credit: 1, where: 'experience', matchType: 'semantic' }
+  }
+  if (bulletHits >= 1 && tokens.length >= 2) {
+    return { credit: 0.8, where: 'experience', matchType: 'partial' }
+  }
+  if (summaryHits >= Math.max(1, need) || evidence.filter((e) => haySummary.includes(normalize(e))).length >= 1) {
+    return { credit: 0.75, where: 'summary', matchType: 'semantic' }
+  }
+  if (allHits >= Math.max(2, need)) {
+    return { credit: 0.55, where: 'resume', matchType: 'partial' }
+  }
+  if (tokens.length === 1 && (hayBullet.includes(tokens[0]) || haySummary.includes(tokens[0]))) {
+    return {
+      credit: 1,
+      where: hayBullet.includes(tokens[0]) ? 'experience' : 'summary',
+      matchType: 'exact',
+    }
+  }
+  return { credit: 0, where: null, matchType: 'none' }
+}
+
+function scoreTitleAndDomainKeywords(resumeData, jdData, hardSkills) {
+
+  const maxPts = WEIGHTS.keywords
+
+  const titleMax = 6
+
+  const domainMax = 10
+
+  const evidence = []
+
+  const details = []
+
+  const matched = []
+
+  const missing = []
+
+  const penalties = []
+
+
+
+  const title = titleFamilyMatch(resumeData, jdData)
+
+  const titlePts = round1(title.score * titleMax)
+
+  details.push({
+
+    item: `Job title alignment (${jdData.roleTitle || 'role'})`,
+
+    matched: title.hit,
+
+    strong: title.score >= 0.85,
+
+  })
+
+  if (title.hit) {
+
+    matched.push(jdData.roleTitle || 'role title')
+
+    evidence.push({
+
+      requirement: 'Job title alignment',
+
+      resumeEvidence: (resumeData.experience || [])[0]?.title || collectSummaryText(resumeData).slice(0, 120),
+
+      section: 'Title',
+
+      company: '',
+
+      matchType: 'semantic',
+
+      weight: titleMax,
+
+      pointsAwarded: titlePts,
+
+      credit: title.score,
+
+    })
+
+  }
+
+
+
+  const domainTerms = partitionDomainKeywords(jdData, hardSkills)
+
+  const text = resumeFullText(resumeData)
+
+  const bulletText = normalize(collectExperienceBullets(resumeData).map((b) => b.text).join(' '))
+
+  const summaryText = normalize(collectSummaryText(resumeData))
+
+
+
+  let domainEarned = 0
+
+  const domainTotal = domainTerms.length || 1
+
+
+
+  if (!domainTerms.length) {
+
+    // Full domain sub-score when JD has no domain keywords
+
+    domainEarned = domainTotal
+
+  } else {
+
+    for (const term of domainTerms) {
+      const hit = domainKeywordCredit(term, bulletText, summaryText, text)
+      let credit = hit.credit
+
+      if (credit === 0) {
+        const ev = findEvidence(term, resumeData)
+        if (ev?.location === 'skills') credit = 0.35
+      }
+
+      const count = Math.max(
+        countOccurrences(text, canonical(term)),
+        countOccurrences(text, normalize(term)),
+      )
+      if (credit >= 1 && count >= 8) {
+        credit = 0.75
+        penalties.push({
+          type: 'keyword_stuffing',
+          item: term,
+          detail: '"' + term + '" repeated ' + count + ' times',
+          amount: 0.5,
+        })
+      }
+
+      domainEarned += credit
+      if (credit > 0) {
+        matched.push(term)
+        details.push({
+          item: term,
+          matched: true,
+          strong: credit >= 0.9,
+          count,
+          credit,
+        })
+        evidence.push({
+          requirement: term,
+          resumeEvidence: hit.where === 'experience'
+            ? 'Found in experience'
+            : hit.where === 'summary'
+              ? 'Found in summary'
+              : 'Matched (' + (hit.matchType || 'partial') + ')',
+          section: hit.where === 'experience' ? 'Experience' : hit.where === 'summary' ? 'Summary' : 'Resume',
+          company: '',
+          matchType: hit.matchType || 'normalized',
+          weight: 1,
+          pointsAwarded: round1((credit / domainTotal) * domainMax),
+          credit,
+        })
+      } else {
+        missing.push(term)
+        details.push({ item: term, matched: false, strong: false })
       }
     }
 
-    let coverage = 0
-    if (best >= 0.55) coverage = 1.0
-    else if (best >= 0.3) coverage = 0.5
-    else coverage = 0
-
-    earned += coverage * resp.weight
-    const points = round1(((coverage * resp.weight) / totalWeight) * maxPts)
-
-    details.push({
-      item: resp.text,
-      matched: coverage > 0,
-      coverage: Math.round(coverage * 100),
-      strong: coverage >= 1,
-    })
-
-    if (coverage >= 1) covered.push(resp.text)
-    else if (coverage > 0) partial.push(resp.text)
-    else missing.push(resp.text)
-
-    if (bestBullet && coverage > 0) {
-      evidence.push({
-        requirement: resp.text,
-        resumeEvidence: bestBullet.text,
-        section: bestBullet.section,
-        company: bestBullet.company || '',
-        matchType: best >= 0.7 ? 'semantic' : 'normalized',
-        weight: resp.weight,
-        pointsAwarded: points,
-        credit: coverage,
-      })
-    }
   }
 
-  const ratio = earned / totalWeight
+
+
+  const domainPts = domainTerms.length
+
+    ? round1((domainEarned / domainTotal) * domainMax)
+
+    : domainMax
+
+
+
+  const score = round1(titlePts + domainPts)
+
+  const matchedCount = details.filter((d) => d.matched).length
+
+  const totalCount = details.length
+
+
+
   return {
-    score: round1(ratio * maxPts),
-    matched: covered.length + partial.length,
-    total: responsibilities.length,
-    pct: Math.round(ratio * 100),
-    coveragePct: Math.round(ratio * 100),
+
+    score: clamp(score, 0, maxPts),
+
+    matched: matchedCount,
+
+    total: totalCount,
+
+    pct: totalCount ? Math.round((matchedCount / totalCount) * 100) : 100,
+
     details,
-    coveredItems: covered,
-    partialItems: partial,
-    missingItems: missing,
+
+    matchedItems: uniqueNormalized(matched),
+
+    missingItems: uniqueNormalized(missing),
+
     evidence,
-  }
-}
 
-function scoreKeywords(resumeData, jdData) {
-  const keywords = extractKeywords(jdData)
-  const maxPts = WEIGHTS.keywords
-  const text = resumeFullText(resumeData)
-  const evidence = []
-  const matched = []
-  const missing = []
-  const details = []
-  const penalties = []
-
-  if (!keywords.length) {
-    return {
-      score: maxPts,
-      matched: 0,
-      total: 0,
-      pct: 100,
-      details: [],
-      matchedItems: [],
-      missingItems: [],
-      evidence,
-      penalties,
-    }
-  }
-
-  const totalWeight = keywords.reduce((s, k) => s + k.weight, 0)
-  let earned = 0
-  const seenConcepts = new Set()
-
-  for (const kw of keywords) {
-    if (seenConcepts.has(kw.canonical)) continue
-    seenConcepts.add(kw.canonical)
-
-    const count = Math.max(
-      countOccurrences(text, kw.canonical),
-      countOccurrences(text, normalize(kw.term)),
-    )
-    const hit = count > 0
-    let credit = hit ? 1 : 0
-
-    // Keyword-stuffing penalty: same important keyword repeated unnaturally
-    if (hit && kw.weight >= 2 && count >= 6) {
-      credit = 0.7
-      penalties.push({
-        type: 'keyword_stuffing',
-        item: kw.term,
-        detail: `"${kw.term}" repeated ${count} times`,
-        amount: round1(((0.3 * kw.weight) / totalWeight) * maxPts),
-      })
-    }
-
-    earned += credit * kw.weight
-    const points = round1(((credit * kw.weight) / totalWeight) * maxPts)
-
-    details.push({
-      item: kw.term,
-      matched: hit,
-      strong: hit && count >= 2 && credit >= 1,
-      count,
-    })
-
-    if (hit) {
-      matched.push(kw.term)
-      const ev = findEvidence(kw.term, resumeData)
-      evidence.push({
-        requirement: kw.term,
-        resumeEvidence: ev?.resumeEvidence || `(found ${count}× in resume text)`,
-        section: ev?.section || 'Resume',
-        company: ev?.company || '',
-        matchType: ev?.matchType || 'exact',
-        weight: kw.weight,
-        pointsAwarded: points,
-        credit,
-      })
-    } else {
-      missing.push(kw.term)
-    }
-  }
-
-  const conceptWeight = [...seenConcepts].reduce((sum, c) => {
-    const kw = keywords.find((k) => k.canonical === c)
-    return sum + (kw?.weight || 1)
-  }, 0) || totalWeight
-
-  const ratio = earned / conceptWeight
-  return {
-    score: round1(ratio * maxPts),
-    matched: matched.length,
-    total: seenConcepts.size,
-    pct: Math.round(ratio * 100),
-    details,
-    matchedItems: matched,
-    missingItems: missing,
-    evidence,
     penalties,
+
+    domainTerms,
+
   }
+
 }
 
-function scoreTools(resumeData, jdData, options = {}) {
-  const tools = extractTools(jdData)
-  const maxPts = WEIGHTS.tools
-  const evidence = []
-  const matched = []
-  const missing = []
-  const details = []
-  const penalties = []
 
-  // Unsupported tools added during enhancement
-  const appliedSkills = (options.applied?.skills || []).map((s) => canonical(s.skill || s))
-  const jdToolSet = new Set(tools.map((t) => t.canonical))
-  for (const added of appliedSkills) {
-    if (!added) continue
-    if (KNOWN_TOOLS.has(added) && !jdToolSet.has(added)) {
-      penalties.push({
-        type: 'unsupported_tool',
-        item: added,
-        detail: `Tool "${added}" added during enhancement but not required by JD`,
-        amount: 1,
-      })
-    }
-  }
 
-  if (!tools.length) {
-    return {
-      score: maxPts,
-      matched: 0,
-      total: 0,
-      pct: 100,
-      details: [],
-      matchedItems: [],
-      missingItems: [],
-      evidence,
-      penalties,
-    }
-  }
+/* ---------- Pillar 2: Experience & Impact (40) ---------- */
 
-  const totalWeight = tools.reduce((s, t) => s + t.weight, 0)
-  let earned = 0
-  const seen = new Set()
 
-  for (const tool of tools) {
-    if (seen.has(tool.canonical)) continue
-    seen.add(tool.canonical)
 
-    const ev = findEvidence(tool.term, resumeData)
-    // Do not award for unsupported enhancement-only tools (already not in JD list)
-    const hit = Boolean(ev)
-    const credit = hit ? 1 : 0
-    earned += credit * tool.weight
-    const points = round1(((credit * tool.weight) / totalWeight) * maxPts)
+function scoreResponsibilityCoverage(resumeData, jdData) {
 
-    details.push({
-      item: tool.term,
-      matched: hit,
-      strong: hit && (ev.location === 'skills' || ev.location === 'experience'),
-    })
+  const maxPts = 20
 
-    if (hit) {
-      matched.push(tool.term)
-      evidence.push({
-        requirement: tool.term,
-        resumeEvidence: ev.resumeEvidence,
-        section: ev.section,
-        company: ev.company || '',
-        matchType: ev.matchType,
-        weight: tool.weight,
-        pointsAwarded: points,
-        credit,
-      })
-    } else {
-      missing.push(tool.term)
-    }
-  }
-
-  const ratio = earned / totalWeight
-  return {
-    score: round1(ratio * maxPts),
-    matched: matched.length,
-    total: seen.size,
-    pct: Math.round(ratio * 100),
-    details,
-    matchedItems: matched,
-    missingItems: missing,
-    evidence,
-    penalties,
-  }
-}
-
-function scoreStructure(resumeData) {
-  const maxPts = WEIGHTS.structure
-  const checks = []
-  let points = 0
-
-  const hasContact = Boolean(
-    resumeData.email || resumeData.phone || resumeData.location || resumeData.linkedin,
-  )
-  checks.push({ id: 'contact', ok: hasContact, pts: 1, label: 'Contact information present' })
-
-  const hasSummary = Boolean(
-    (resumeData.summary || '').trim() || (resumeData.summaryBullets || []).length,
-  )
-  checks.push({ id: 'summary', ok: hasSummary, pts: 1, label: 'Professional Summary present' })
-
-  const hasSkills = collectResumeSkills(resumeData).length > 0
-  checks.push({ id: 'skills', ok: hasSkills, pts: 1, label: 'Skills section present' })
-
-  const exps = resumeData.experience || []
-  const hasExperience = exps.length > 0
-  checks.push({ id: 'experience', ok: hasExperience, pts: 1, label: 'Experience section present' })
-
-  const hasEducation = (resumeData.education || []).length > 0
-    || Boolean(resumeData.degree || resumeData.university)
-  checks.push({ id: 'education', ok: hasEducation, pts: 1, label: 'Education section present' })
-
-  const hasCompanies = exps.some((e) => (e.company || '').trim())
-  checks.push({ id: 'companies', ok: hasCompanies, pts: 0.8, label: 'Company names present' })
-
-  const hasRoles = exps.some((e) => (e.title || e.role || '').trim())
-  checks.push({ id: 'roles', ok: hasRoles, pts: 0.8, label: 'Roles present' })
-
-  const hasDates = exps.some((e) => (e.startDate || e.endDate || e.dates || '').toString().trim())
-  checks.push({ id: 'dates', ok: hasDates, pts: 0.8, label: 'Dates present' })
+  const responsibilities = extractResponsibilities(jdData)
 
   const bullets = collectExperienceBullets(resumeData)
-  const hasBullets = bullets.length >= 2
-  checks.push({ id: 'bullets', ok: hasBullets, pts: 0.8, label: 'Bullet formatting present' })
 
-  const longParas = bullets.filter((b) => b.text.length > 350).length
-  const readable = longParas <= Math.max(1, Math.floor(bullets.length * 0.25))
-  checks.push({ id: 'readable', ok: readable, pts: 0.8, label: 'No excessively long paragraphs' })
-
-  // Duplicate content check
-  const norms = bullets.map((b) => normalize(b.text))
-  const dupes = norms.filter((n, i) => n && norms.indexOf(n) !== i).length
-  const noDupes = dupes === 0
-  checks.push({ id: 'duplicates', ok: noDupes, pts: 0.5, label: 'No excessive duplicate content' })
-
-  const parserOk = Boolean(resumeData.name || hasSkills || hasExperience)
-  checks.push({ id: 'parser', ok: parserOk, pts: 0.5, label: 'Resume readable by parser' })
-
-  for (const c of checks) {
-    if (c.ok) points += c.pts
-  }
-
-  // Scale to maxPts (sum of pts ≈ 10)
-  const rawMax = checks.reduce((s, c) => s + c.pts, 0)
-  const score = round1((points / rawMax) * maxPts)
-
-  return {
-    score,
-    matched: checks.filter((c) => c.ok).length,
-    total: checks.length,
-    pct: Math.round((points / rawMax) * 100),
-    details: checks.map((c) => ({
-      item: c.label,
-      matched: c.ok,
-      strong: c.ok,
-    })),
-    checks,
-    evidence: checks.filter((c) => c.ok).map((c) => ({
-      requirement: c.label,
-      resumeEvidence: 'Present in parsed resume',
-      section: 'Structure',
-      company: '',
-      matchType: 'exact',
-      weight: c.pts,
-      pointsAwarded: round1((c.pts / rawMax) * maxPts),
-    })),
-  }
-}
-
-function scoreSummary(resumeData, jdData) {
-  const maxPts = WEIGHTS.summary
-  const summary = collectSummaryText(resumeData)
-  if (!summary.trim()) {
-    return {
-      score: 0,
-      matched: 0,
-      total: 5,
-      pct: 0,
-      details: [{ item: 'Professional summary missing', matched: false }],
-      evidence: [],
-    }
-  }
-
-  const sn = normalize(summary)
-  const role = normalize(jdData.roleTitle || jdData.title || '')
-  const required = extractRequiredSkills(jdData).slice(0, 8)
-  const domain = (jdData.domainKeywords || []).slice(0, 6).map(normalize)
-
-  let points = 0
-  const details = []
   const evidence = []
 
-  // Target role (not full score for title alone)
-  const roleHit = role && (sn.includes(role) || tokenOverlap(sn, role) >= 0.5)
-  if (roleHit) {
-    points += 0.8
-    details.push({ item: 'Target role reflected', matched: true, strong: true })
-    evidence.push({
-      requirement: 'Target role',
-      resumeEvidence: summary.slice(0, 180),
-      section: 'Summary',
-      company: '',
-      matchType: 'semantic',
-      weight: 0.8,
-      pointsAwarded: 0.8,
+  const covered = []
+
+  const partial = []
+
+  const missing = []
+
+  const details = []
+
+
+
+  if (!responsibilities.length) {
+
+    return {
+
+      score: maxPts,
+
+      matched: 0,
+
+      total: 0,
+
+      pct: 100,
+
+      coveragePct: 100,
+
+      details: [],
+
+      coveredItems: [],
+
+      partialItems: [],
+
+      missingItems: [],
+
+      evidence,
+
+    }
+
+  }
+
+
+
+  const totalWeight = responsibilities.reduce((s, r) => s + r.weight, 0)
+
+  let earned = 0
+
+
+
+  for (const resp of responsibilities) {
+
+    let best = 0
+
+    let bestBullet = null
+
+    for (const b of bullets) {
+
+      const sem = semanticMatch(resp.text, b.text)
+
+      const overlap = tokenOverlap(resp.text, b.text)
+
+      const score = Math.max(sem.score, overlap)
+
+      if (score > best) {
+
+        best = score
+
+        bestBullet = b
+
+      }
+
+    }
+
+
+
+    let coverage = 0
+
+    if (best >= 0.55) coverage = 1.0
+
+    else if (best >= 0.3) coverage = 0.5
+
+
+
+    earned += coverage * resp.weight
+
+    const points = round1(((coverage * resp.weight) / totalWeight) * maxPts)
+
+
+
+    details.push({
+
+      item: resp.text,
+
+      matched: coverage > 0,
+
+      coverage: Math.round(coverage * 100),
+
+      strong: coverage >= 1,
+
     })
-  } else {
-    details.push({ item: 'Target role reflected', matched: false })
+
+
+
+    if (coverage >= 1) covered.push(resp.text)
+
+    else if (coverage > 0) partial.push(resp.text)
+
+    else missing.push(resp.text)
+
+
+
+    if (bestBullet && coverage > 0) {
+
+      evidence.push({
+
+        requirement: resp.text,
+
+        resumeEvidence: bestBullet.text,
+
+        section: bestBullet.section,
+
+        company: bestBullet.company || '',
+
+        matchType: best >= 0.7 ? 'semantic' : 'normalized',
+
+        weight: resp.weight,
+
+        pointsAwarded: points,
+
+        credit: coverage,
+
+      })
+
+    }
+
   }
 
-  // Years of experience
-  const yearsHit = /\b(\d+)\+?\s*(\+|years?|yrs?)\b/i.test(summary)
-  if (yearsHit) {
-    points += 0.8
-    details.push({ item: 'Years of experience stated', matched: true, strong: true })
-  } else {
-    details.push({ item: 'Years of experience stated', matched: false })
-  }
 
-  // Primary domain
-  const domainHit = domain.some((d) => d && sn.includes(d))
-    || tokenOverlap(sn, domain.join(' ')) >= 0.25
-  if (domainHit) {
-    points += 1
-    details.push({ item: 'Primary domain reflected', matched: true, strong: true })
-  } else {
-    details.push({ item: 'Primary domain reflected', matched: false })
-  }
 
-  // Important required skills in summary
-  let skillHits = 0
-  for (const sk of required) {
-    const c = canonical(sk)
-    if (c && (sn.includes(c) || sn.includes(normalize(sk)))) skillHits += 1
-  }
-  const skillRatio = required.length ? skillHits / Math.min(required.length, 5) : 0
-  const skillPts = round1(Math.min(1.6, skillRatio * 1.6))
-  points += skillPts
-  details.push({
-    item: `Required skills in summary (${skillHits})`,
-    matched: skillHits > 0,
-    strong: skillHits >= 2,
-  })
+  const ratio = earned / totalWeight
 
-  // Business/technical value language
-  const valueHit = /(deliver|improv|optimiz|reduc|increas|driv|enabl|streamlin|automat|stakeholder|outcome|impact)/i.test(summary)
-  if (valueHit) {
-    points += 0.8
-    details.push({ item: 'Business/technical value stated', matched: true, strong: true })
-  } else {
-    details.push({ item: 'Business/technical value stated', matched: false })
-  }
-
-  const score = round1(clamp(points, 0, maxPts))
   return {
-    score,
-    matched: details.filter((d) => d.matched).length,
-    total: details.length,
-    pct: Math.round((score / maxPts) * 100),
+
+    score: round1(ratio * maxPts),
+
+    matched: covered.length + partial.length,
+
+    total: responsibilities.length,
+
+    pct: Math.round(ratio * 100),
+
+    coveragePct: Math.round(ratio * 100),
+
     details,
+
+    coveredItems: covered,
+
+    partialItems: partial,
+
+    missingItems: missing,
+
     evidence,
+
   }
+
 }
 
-function scoreCompleteness(resumeData) {
-  const maxPts = WEIGHTS.completeness
-  const items = [
-    {
-      id: 'contact',
-      ok: Boolean(resumeData.email || resumeData.phone || resumeData.location),
-      label: 'Contact information',
-    },
-    {
-      id: 'summary',
-      ok: Boolean((resumeData.summary || '').trim() || (resumeData.summaryBullets || []).length),
-      label: 'Summary',
-    },
-    {
-      id: 'skills',
-      ok: collectResumeSkills(resumeData).length > 0,
-      label: 'Skills',
-    },
-    {
-      id: 'experience',
-      ok: (resumeData.experience || []).length > 0,
-      label: 'Experience',
-    },
-    {
-      id: 'education',
-      ok: (resumeData.education || []).length > 0 || Boolean(resumeData.degree),
-      label: 'Education',
-    },
+
+
+function scoreQuantifiableImpact(resumeData) {
+
+  const maxPts = 10
+
+  const bullets = collectExperienceBullets(resumeData)
+
+  if (!bullets.length) {
+
+    return { score: 0, matched: 0, total: 0, pct: 0, details: [{ item: 'No experience bullets to quantify', matched: false }] }
+
+  }
+
+  const withMetrics = bullets.filter((b) => QUANTIFIER_RE.test(b.text))
+
+  const ratio = withMetrics.length / bullets.length
+
+  const score = round1(ratio * maxPts)
+
+  return {
+
+    score,
+
+    matched: withMetrics.length,
+
+    total: bullets.length,
+
+    pct: Math.round(ratio * 100),
+
+    details: [{
+
+      item: `Bullets with metrics (${withMetrics.length}/${bullets.length})`,
+
+      matched: withMetrics.length > 0,
+
+      strong: ratio >= 0.4,
+
+    }],
+
+  }
+
+}
+
+
+
+function scoreActionVerbs(resumeData) {
+
+  const maxPts = 5
+
+  const bullets = collectExperienceBullets(resumeData)
+
+  if (!bullets.length) {
+
+    return { score: 0, matched: 0, total: 0, pct: 0, details: [{ item: 'No bullets for action-verb check', matched: false }] }
+
+  }
+
+  let strong = 0
+
+  for (const b of bullets) {
+
+    const first = normalize(b.text).split(/\s+/)[0] || ''
+
+    if (ACTION_VERBS.has(first)) strong += 1
+
+  }
+
+  const ratio = strong / bullets.length
+
+  return {
+
+    score: round1(ratio * maxPts),
+
+    matched: strong,
+
+    total: bullets.length,
+
+    pct: Math.round(ratio * 100),
+
+    details: [{
+
+      item: `Strong action verbs (${strong}/${bullets.length})`,
+
+      matched: strong > 0,
+
+      strong: ratio >= 0.5,
+
+    }],
+
+  }
+
+}
+
+
+
+function parseYearToken(raw) {
+
+  const m = String(raw || '').match(/(19|20)\d{2}/)
+
+  return m ? Number(m[0]) : null
+
+}
+
+
+
+function scoreRecencyAndScope(resumeData) {
+
+  const maxPts = 5
+
+  const exps = resumeData.experience || []
+
+  if (!exps.length) {
+
+    return { score: 0, matched: 0, total: 1, pct: 0, details: [{ item: 'No experience entries', matched: false }] }
+
+  }
+
+
+
+  const nowYear = new Date().getFullYear()
+
+  const windowStart = nowYear - 7
+
+  let recent = 0
+
+  for (const e of exps) {
+
+    const dates = String(e.dates || '')
+
+    const end = /present|current|now/i.test(dates)
+
+      ? nowYear
+
+      : parseYearToken(e.endDate) || parseYearToken(dates.split(/[-–—]/).pop())
+
+    const start = parseYearToken(e.startDate) || parseYearToken(dates)
+
+    if ((end && end >= windowStart) || (start && start >= windowStart)) recent += 1
+
+  }
+
+
+
+  const companies = new Set(exps.map((e) => normalize(e.company)).filter(Boolean))
+
+  const titles = exps.map((e) => normalize(e.title || e.role || '')).filter(Boolean)
+
+  const progressive = titles.length >= 2 && new Set(titles).size >= Math.min(2, titles.length)
+
+
+
+  let pts = 0
+
+  if (recent > 0) pts += 2.5 * Math.min(1, recent / Math.max(1, exps.length))
+
+  if (companies.size >= 2) pts += 1.5
+
+  else if (companies.size === 1) pts += 0.75
+
+  if (progressive) pts += 1
+
+  pts = clamp(pts, 0, maxPts)
+
+
+
+  return {
+
+    score: round1(pts),
+
+    matched: recent,
+
+    total: exps.length,
+
+    pct: Math.round((pts / maxPts) * 100),
+
+    details: [
+
+      { item: `Recent roles in last 7 years (${recent}/${exps.length})`, matched: recent > 0, strong: recent === exps.length },
+
+      { item: `Career scope (${companies.size} companies)`, matched: companies.size >= 1, strong: companies.size >= 2 },
+
+      { item: 'Progressive titles', matched: progressive, strong: progressive },
+
+    ],
+
+  }
+
+}
+
+
+
+function scoreExperienceImpact(resumeData, jdData) {
+
+  const coverage = scoreResponsibilityCoverage(resumeData, jdData)
+
+  const quant = scoreQuantifiableImpact(resumeData)
+
+  const verbs = scoreActionVerbs(resumeData)
+
+  const recency = scoreRecencyAndScope(resumeData)
+
+
+
+  const score = round1(coverage.score + quant.score + verbs.score + recency.score)
+
+  return {
+
+    score: clamp(score, 0, WEIGHTS.experience),
+
+    matched: coverage.matched,
+
+    total: coverage.total,
+
+    pct: coverage.pct,
+
+    coveragePct: coverage.coveragePct,
+
+    details: coverage.details,
+
+    coveredItems: coverage.coveredItems,
+
+    partialItems: coverage.partialItems,
+
+    missingItems: coverage.missingItems,
+
+    evidence: coverage.evidence,
+
+    subscores: { coverage, quant, verbs, recency },
+
+  }
+
+}
+
+
+
+/* ---------- Pillar 3: Format & Readability (20) ---------- */
+
+
+
+function scoreFormat(resumeData, jdData = {}) {
+
+  const maxPts = WEIGHTS.format
+
+  const checks = []
+
+  let points = 0
+
+
+
+  const hasSummary = Boolean((resumeData.summary || '').trim() || (resumeData.summaryBullets || []).length)
+
+  const hasSkills = collectResumeSkills(resumeData).length > 0
+
+  const exps = resumeData.experience || []
+
+  const hasExperience = exps.length > 0
+
+  const hasEducation = (resumeData.education || []).length > 0 || Boolean(resumeData.degree || resumeData.university)
+
+
+
+  // Standard sections — up to 8
+
+  const sectionPts = [
+
+    { ok: hasSummary, pts: 2, label: 'Summary section present' },
+
+    { ok: hasSkills, pts: 2, label: 'Skills section present' },
+
+    { ok: hasExperience, pts: 2, label: 'Experience section present' },
+
+    { ok: hasEducation, pts: 2, label: 'Education section present' },
+
   ]
 
-  const score = items.filter((i) => i.ok).length // 1 pt each, max 5
-  return {
-    score,
-    matched: score,
-    total: 5,
-    pct: Math.round((score / maxPts) * 100),
-    details: items.map((i) => ({ item: i.label, matched: i.ok, strong: i.ok })),
-    evidence: items.filter((i) => i.ok).map((i) => ({
-      requirement: i.label,
-      resumeEvidence: 'Present',
-      section: 'Completeness',
-      company: '',
-      matchType: 'exact',
-      weight: 1,
-      pointsAwarded: 1,
-    })),
+  for (const c of sectionPts) {
+
+    checks.push(c)
+
+    if (c.ok) points += c.pts
+
   }
+
+
+
+  // Contact + parseable structure — up to 6
+
+  const hasContact = Boolean(resumeData.email || resumeData.phone || resumeData.location || resumeData.linkedin)
+
+  const hasName = Boolean((resumeData.name || '').trim())
+
+  const hasCompanies = exps.some((e) => (e.company || '').trim())
+
+  const hasDates = exps.some((e) => (e.startDate || e.endDate || e.dates || '').toString().trim())
+
+  const bullets = collectExperienceBullets(resumeData)
+
+  const hasBullets = bullets.length >= 2
+
+  const structurePts = [
+
+    { ok: hasContact, pts: 1.5, label: 'Contact information present' },
+
+    { ok: hasName, pts: 1, label: 'Name present' },
+
+    { ok: hasCompanies && hasDates, pts: 1.5, label: 'Companies and dates present' },
+
+    { ok: hasBullets, pts: 2, label: 'Experience bullets present' },
+
+  ]
+
+  for (const c of structurePts) {
+
+    checks.push(c)
+
+    if (c.ok) points += c.pts
+
+  }
+
+
+
+  // Education / credentials — up to 4
+
+  const wantsCreds = /certif|license|degree|bachelor|master|phd/i.test(
+
+    JSON.stringify(jdData.requiredSkills || []) + JSON.stringify(jdData.responsibilities || []) + (jdData.roleTitle || ''),
+
+  )
+
+  const hasCerts = (resumeData.certifications || []).length > 0
+
+  const eduPts = [
+
+    { ok: hasEducation, pts: wantsCreds ? 2 : 2.5, label: 'Education listed' },
+
+    { ok: hasCerts || !wantsCreds, pts: wantsCreds ? 2 : 1.5, label: wantsCreds ? 'Credentials/certifications listed' : 'Credentials optional for JD' },
+
+  ]
+
+  for (const c of eduPts) {
+
+    checks.push(c)
+
+    if (c.ok) points += c.pts
+
+  }
+
+
+
+  // Layout risk deductions — up to −4
+
+  let deduction = 0
+
+  const long = bullets.filter((b) => b.text.length > 400)
+
+  if (long.length >= 3) {
+
+    deduction += 1
+
+    checks.push({ ok: false, pts: 0, label: 'Excessively long bullets (layout risk)', deduction: 1 })
+
+  }
+
+  const norms = bullets.map((b) => normalize(b.text))
+
+  const dupes = norms.filter((n, i) => n && norms.indexOf(n) !== i).length
+
+  if (dupes >= 2) {
+
+    deduction += 1
+
+    checks.push({ ok: false, pts: 0, label: 'Duplicate bullets (layout risk)', deduction: 1 })
+
+  }
+
+  if (exps.length >= 1 && bullets.length === 0) {
+
+    deduction += 2
+
+    checks.push({ ok: false, pts: 0, label: 'Experience headers without bullets', deduction: 2 })
+
+  }
+
+  deduction = Math.min(4, deduction)
+
+  points = Math.max(0, points - deduction)
+
+
+
+  // Scale raw points (max ~18 before scale) into 20
+
+  const rawMax = 8 + 6 + 4 // 18
+
+  const score = round1(clamp((points / rawMax) * maxPts, 0, maxPts))
+
+
+
+  return {
+
+    score,
+
+    matched: checks.filter((c) => c.ok).length,
+
+    total: checks.length,
+
+    pct: Math.round((score / maxPts) * 100),
+
+    details: checks.map((c) => ({
+
+      item: c.label,
+
+      matched: Boolean(c.ok),
+
+      strong: Boolean(c.ok),
+
+    })),
+
+    checks,
+
+    evidence: checks.filter((c) => c.ok).map((c) => ({
+
+      requirement: c.label,
+
+      resumeEvidence: 'Present in parsed resume',
+
+      section: 'Format',
+
+      company: '',
+
+      matchType: 'exact',
+
+      weight: c.pts || 1,
+
+      pointsAwarded: c.pts || 0,
+
+    })),
+
+    formatIssues: checks.filter((c) => !c.ok).map((c) => c.label),
+
+  }
+
 }
+
+
 
 function detectPenalties(resumeData, categoryPenalties = []) {
+
   const penalties = [...categoryPenalties]
+
   const skills = collectResumeSkills(resumeData).map(canonical)
+
   const skillCounts = {}
+
   for (const s of skills) {
+
     skillCounts[s] = (skillCounts[s] || 0) + 1
+
   }
+
   for (const [s, n] of Object.entries(skillCounts)) {
+
     if (n >= 3) {
+
       penalties.push({
+
         type: 'duplicate_skills',
+
         item: s,
+
         detail: `Skill "${s}" listed ${n} times`,
+
         amount: Math.min(2, n - 2),
+
       })
+
     }
+
   }
+
+
 
   const bullets = collectExperienceBullets(resumeData).map((b) => normalize(b.text))
+
   const seen = new Set()
+
   let dupBullets = 0
+
   for (const b of bullets) {
+
     if (!b) continue
+
     if (seen.has(b)) dupBullets += 1
+
     else seen.add(b)
-  }
-  if (dupBullets > 0) {
-    penalties.push({
-      type: 'duplicate_bullets',
-      item: 'experience',
-      detail: `${dupBullets} duplicate experience bullet(s)`,
-      amount: Math.min(3, dupBullets),
-    })
+
   }
 
-  const long = collectExperienceBullets(resumeData).filter((b) => b.text.length > 400)
-  if (long.length >= 3) {
+  if (dupBullets > 0) {
+
     penalties.push({
-      type: 'long_bullets',
-      item: 'readability',
-      detail: `${long.length} excessively long bullets`,
-      amount: 1,
+
+      type: 'duplicate_bullets',
+
+      item: 'experience',
+
+      detail: `${dupBullets} duplicate experience bullet(s)`,
+
+      amount: Math.min(3, dupBullets),
+
     })
+
   }
+
+
 
   return penalties
+
 }
 
+
+
 /**
+
  * Main scoring entry — identical formula for before and after.
+
  * @param {object} resumeData
+
  * @param {object} jdData
+
  * @param {{ applied?: object }} [options]
+
  */
+
 export function compareResumeToJD(resumeData, jdData, options = {}) {
-  const requiredSkills = scoreRequiredSkills(resumeData, jdData)
-  const experience = scoreExperience(resumeData, jdData)
-  const keywords = scoreKeywords(resumeData, jdData)
-  const tools = scoreTools(resumeData, jdData, options)
-  const structure = scoreStructure(resumeData)
-  const summary = scoreSummary(resumeData, jdData)
-  const completeness = scoreCompleteness(resumeData)
+
+  const hard = scoreHardSkills(resumeData, jdData, options)
+
+  const keywords = scoreTitleAndDomainKeywords(resumeData, jdData, hard.hardSkills || partitionHardSkills(jdData))
+
+  const experience = scoreExperienceImpact(resumeData, jdData)
+
+  const format = scoreFormat(resumeData, jdData)
+
+
+
+  // Enforce disjoint detail lists (defensive)
+
+  const skillCanon = new Set((hard.details || []).map((d) => canonical(d.item)))
+
+  keywords.details = (keywords.details || []).filter((d) => {
+
+    if (/job title alignment/i.test(d.item)) return true
+
+    return !keywordCoveredBySkills(d.item, skillCanon)
+
+  })
+
+
 
   const categoryPenalties = [
+
+    ...(hard.penalties || []),
+
     ...(keywords.penalties || []),
-    ...(tools.penalties || []),
+
   ]
+
   const penalties = detectPenalties(resumeData, categoryPenalties)
+
   const penaltyTotal = round1(penalties.reduce((s, p) => s + (p.amount || 0), 0))
 
-  const rawTotal = round1(
-    requiredSkills.score
-    + experience.score
-    + keywords.score
-    + tools.score
-    + structure.score
-    + summary.score
-    + completeness.score,
-  )
+
+
+  const rawTotal = round1(hard.score + keywords.score + experience.score + format.score)
 
   const atsScore = clamp(Math.round(rawTotal - penaltyTotal), 0, 100)
 
-  // Legacy-compatible present/missing for enhancement plan
+
+
+  const toolTerms = new Set(extractTools(jdData).map((t) => t.canonical))
+
+  const matchedTools = hard.matchedItems.filter((s) => toolTerms.has(canonical(s)))
+
+  const missingTools = (hard.hardSkills || [])
+
+    .filter((s) => toolTerms.has(canonical(s)))
+
+    .filter((s) => !matchedTools.some((m) => canonical(m) === canonical(s)))
+
+
+
+  // Enhancement plan should prioritize hard skills/tools (not soft fluff or domain dupes)
+
   const present = uniqueNormalized([
-    ...requiredSkills.matchedItems,
-    ...requiredSkills.partialItems,
-    ...tools.matchedItems,
+
+    ...hard.matchedItems,
+
+    ...hard.partialItems,
+
     ...keywords.matchedItems,
+
   ])
+
+  // Skills-force path uses missingHardSkills; keep `missing` hard-only so domain phrases
+  // are never treated as skill gaps. Domain gaps live in missingKeywords.
   const missing = uniqueNormalized([
-    ...requiredSkills.missingItems,
-    ...tools.missingItems,
-    ...keywords.missingItems,
+
+    ...hard.missingItems,
+
   ])
-  const strong = uniqueNormalized([
-    ...requiredSkills.matchedItems,
-    ...tools.matchedItems.filter((_, i) => tools.details[i]?.strong),
-  ])
-  const weak = uniqueNormalized(requiredSkills.partialItems)
+
+  const strong = uniqueNormalized(hard.matchedItems)
+
+  const weak = uniqueNormalized(hard.partialItems)
+
+
 
   const categories = {
+
     requiredSkills: {
-      before: requiredSkills.score,
-      score: requiredSkills.score,
-      max: WEIGHTS.requiredSkills,
-      ...pickPillar(requiredSkills),
+
+      before: hard.score,
+
+      score: hard.score,
+
+      max: WEIGHTS.skills,
+
+      ...pickPillar(hard),
+
     },
-    experience: {
-      score: experience.score,
-      max: WEIGHTS.experience,
-      ...pickPillar(experience),
-    },
+
     keywords: {
+
       score: keywords.score,
+
       max: WEIGHTS.keywords,
+
       ...pickPillar(keywords),
+
     },
-    tools: {
-      score: tools.score,
-      max: WEIGHTS.tools,
-      ...pickPillar(tools),
+
+    experience: {
+
+      score: experience.score,
+
+      max: WEIGHTS.experience,
+
+      ...pickPillar(experience),
+
     },
-    structure: {
-      score: structure.score,
-      max: WEIGHTS.structure,
-      ...pickPillar(structure),
+
+    format: {
+
+      score: format.score,
+
+      max: WEIGHTS.format,
+
+      ...pickPillar(format),
+
     },
-    summary: {
-      score: summary.score,
-      max: WEIGHTS.summary,
-      ...pickPillar(summary),
-    },
-    completeness: {
-      score: completeness.score,
-      max: WEIGHTS.completeness,
-      ...pickPillar(completeness),
-    },
+
   }
 
-  // UI cards still show Skills / Keywords / Bullets (mapped from new categories)
+
+
   const scoreBreakdown = {
+
     skills: {
-      matched: requiredSkills.matched,
-      total: requiredSkills.total,
-      pct: requiredSkills.pct,
-      score: requiredSkills.score,
-      max: WEIGHTS.requiredSkills,
-      label: 'Required Skills',
+
+      matched: hard.matched,
+
+      total: hard.total,
+
+      pct: hard.pct,
+
+      score: hard.score,
+
+      max: WEIGHTS.skills,
+
+      label: 'Hard Skills & Tools',
+
     },
+
     keywords: {
+
       matched: keywords.matched,
+
       total: keywords.total,
+
       pct: keywords.pct,
+
       score: keywords.score,
+
       max: WEIGHTS.keywords,
-      label: 'JD Keywords',
+
+      label: 'Title & Domain Keywords',
+
     },
+
     bullets: {
+
       matched: experience.matched,
+
       total: experience.total,
+
       pct: experience.pct,
+
       coveragePct: experience.coveragePct,
+
       score: experience.score,
+
       max: WEIGHTS.experience,
-      label: 'Experience',
+
+      label: 'Experience & Impact',
+
     },
-    tools: {
-      matched: tools.matched,
-      total: tools.total,
-      pct: tools.pct,
-      score: tools.score,
-      max: WEIGHTS.tools,
-      label: 'Tools',
+
+    format: {
+
+      matched: format.matched,
+
+      total: format.total,
+
+      pct: format.pct,
+
+      score: format.score,
+
+      max: WEIGHTS.format,
+
+      label: 'Format & Readability',
+
     },
-    structure: {
-      matched: structure.matched,
-      total: structure.total,
-      pct: structure.pct,
-      score: structure.score,
-      max: WEIGHTS.structure,
-      label: 'Structure',
+
+    weights: {
+
+      keywordPillar: WEIGHTS.keywordPillar,
+
+      experiencePillar: WEIGHTS.experiencePillar,
+
+      formatPillar: WEIGHTS.formatPillar,
+
+      skills: WEIGHTS.skills,
+
+      keywords: WEIGHTS.keywords,
+
+      experience: WEIGHTS.experience,
+
+      format: WEIGHTS.format,
+
     },
-    summary: {
-      matched: summary.matched,
-      total: summary.total,
-      pct: summary.pct,
-      score: summary.score,
-      max: WEIGHTS.summary,
-      label: 'Summary',
-    },
-    completeness: {
-      matched: completeness.matched,
-      total: completeness.total,
-      pct: completeness.pct,
-      score: completeness.score,
-      max: WEIGHTS.completeness,
-      label: 'Completeness',
-    },
-    weights: { ...WEIGHTS },
+
     details: {
-      skills: requiredSkills.details,
+
+      skills: hard.details,
+
       keywords: keywords.details,
+
       bullets: experience.details,
-      tools: tools.details,
-      structure: structure.details,
-      summary: summary.details,
-      completeness: completeness.details,
+
+      format: format.details,
+
     },
+
   }
+
+
 
   const report = {
+
     score: atsScore,
+
     rawTotal,
+
     penaltyTotal,
+
     categories: {
-      requiredSkills: { score: requiredSkills.score, max: WEIGHTS.requiredSkills },
-      experience: { score: experience.score, max: WEIGHTS.experience },
+
+      requiredSkills: { score: hard.score, max: WEIGHTS.skills },
+
       keywords: { score: keywords.score, max: WEIGHTS.keywords },
-      tools: { score: tools.score, max: WEIGHTS.tools },
-      structure: { score: structure.score, max: WEIGHTS.structure },
-      summary: { score: summary.score, max: WEIGHTS.summary },
-      completeness: { score: completeness.score, max: WEIGHTS.completeness },
+
+      experience: { score: experience.score, max: WEIGHTS.experience },
+
+      format: { score: format.score, max: WEIGHTS.format },
+
     },
-    matchedRequiredSkills: requiredSkills.matchedItems,
-    partiallyMatchedRequiredSkills: requiredSkills.partialItems,
-    missingRequiredSkills: requiredSkills.missingItems,
-    matchedTools: tools.matchedItems,
-    missingTools: tools.missingItems,
+
+    matchedRequiredSkills: hard.matchedItems,
+
+    partiallyMatchedRequiredSkills: hard.partialItems,
+
+    missingRequiredSkills: hard.missingItems,
+
+    missingHardSkills: hard.missingItems,
+
+    matchedTools,
+
+    missingTools,
+
     coveredResponsibilities: experience.coveredItems,
+
     partiallyCoveredResponsibilities: experience.partialItems,
+
     missingResponsibilities: experience.missingItems,
+
     matchedKeywords: keywords.matchedItems,
+
     missingKeywords: keywords.missingItems,
+
+    formatIssues: format.formatIssues || [],
+
     evidence: [
-      ...requiredSkills.evidence,
-      ...experience.evidence,
+
+      ...hard.evidence,
+
       ...keywords.evidence,
-      ...tools.evidence,
-      ...structure.evidence,
-      ...summary.evidence,
-      ...completeness.evidence,
+
+      ...experience.evidence,
+
+      ...format.evidence,
+
     ],
+
     penalties,
+
     scoringReasons: buildScoringReasons({
-      requiredSkills,
-      experience,
+
+      hard,
+
       keywords,
-      tools,
-      structure,
-      summary,
-      completeness,
+
+      experience,
+
+      format,
+
       atsScore,
+
       penaltyTotal,
+
     }),
+
   }
 
+
+
   return {
+
     present,
+
     missing,
+
     strong,
+
     weak,
+
     missingMustHave: (jdData.mustHaveKeywords || []).filter(
+
       (k) => !present.some((p) => canonical(p) === canonical(k) || normalize(p).includes(normalize(k))),
+
     ),
+
     missingResponsibilities: experience.missingItems,
+
+    missingHardSkills: hard.missingItems,
+
+    missingKeywords: keywords.missingItems,
+
     atsScore,
+
     scoreBreakdown,
+
     categories,
+
     report,
+
     penalties,
+
   }
+
 }
+
+
 
 function pickPillar(p) {
+
   return {
+
     matched: p.matched,
+
     total: p.total,
+
     pct: p.pct,
+
   }
+
 }
+
+
 
 function buildScoringReasons(parts) {
+
   const reasons = []
+
   reasons.push(
-    `Required skills: ${parts.requiredSkills.score}/${WEIGHTS.requiredSkills} `
-    + `(${parts.requiredSkills.matchedItems.length} full, ${parts.requiredSkills.partialItems.length} partial, `
-    + `${parts.requiredSkills.missingItems.length} missing)`,
+
+    `Hard skills & tools: ${parts.hard.score}/${WEIGHTS.skills} `
+
+    + `(${parts.hard.matchedItems.length} full, ${parts.hard.partialItems.length} partial, `
+
+    + `${parts.hard.missingItems.length} missing)`,
+
   )
+
   reasons.push(
-    `Experience coverage: ${parts.experience.score}/${WEIGHTS.experience} `
-    + `(${parts.experience.coveredItems.length} full, ${parts.experience.partialItems.length} partial, `
+
+    `Title & domain keywords: ${parts.keywords.score}/${WEIGHTS.keywords} `
+
+    + `(${parts.keywords.matchedItems.length} matched, ${parts.keywords.missingItems.length} missing)`,
+
+  )
+
+  reasons.push(
+
+    `Experience & impact: ${parts.experience.score}/${WEIGHTS.experience} `
+
+    + `(coverage ${parts.experience.coveredItems.length} full / ${parts.experience.partialItems.length} partial / `
+
     + `${parts.experience.missingItems.length} missing)`,
+
   )
-  reasons.push(
-    `Keywords: ${parts.keywords.score}/${WEIGHTS.keywords} `
-    + `(${parts.keywords.matchedItems.length}/${parts.keywords.total} concepts)`,
-  )
-  reasons.push(
-    `Tools: ${parts.tools.score}/${WEIGHTS.tools} `
-    + `(${parts.tools.matchedItems.length} matched, ${parts.tools.missingItems.length} missing)`,
-  )
-  reasons.push(`Structure: ${parts.structure.score}/${WEIGHTS.structure}`)
-  reasons.push(`Summary match: ${parts.summary.score}/${WEIGHTS.summary}`)
-  reasons.push(`Completeness: ${parts.completeness.score}/${WEIGHTS.completeness}`)
-  if (parts.penaltyTotal > 0) {
-    reasons.push(`Penalties applied: −${parts.penaltyTotal}`)
+
+  const sub = parts.experience.subscores
+
+  if (sub) {
+
+    reasons.push(
+
+      `Impact signals: metrics ${sub.quant.score}/10, verbs ${sub.verbs.score}/5, recency ${sub.recency.score}/5`,
+
+    )
+
   }
+
+  reasons.push(`Format & readability: ${parts.format.score}/${WEIGHTS.format}`)
+
+  if (parts.penaltyTotal > 0) {
+
+    reasons.push(`Penalties applied: −${parts.penaltyTotal}`)
+
+  }
+
   reasons.push(`Final score: ${parts.atsScore}/100`)
+
   return reasons
+
 }
+
+
 
 /**
+
  * Build before/after explanation object for the score report.
+
  */
+
 export function buildScoreComparison(beforeComparison, afterComparison) {
+
   const b = beforeComparison.report?.categories || {}
+
   const a = afterComparison.report?.categories || {}
 
-  const keys = [
-    'requiredSkills',
-    'experience',
-    'keywords',
-    'tools',
-    'structure',
-    'summary',
-    'completeness',
-  ]
+
+
+  const keys = ['requiredSkills', 'keywords', 'experience', 'format']
+
+
 
   const breakdown = {}
+
   for (const key of keys) {
-    const before = b[key]?.score ?? beforeComparison.scoreBreakdown?.[key === 'requiredSkills' ? 'skills' : key === 'experience' ? 'bullets' : key]?.score ?? 0
-    const after = a[key]?.score ?? afterComparison.scoreBreakdown?.[key === 'requiredSkills' ? 'skills' : key === 'experience' ? 'bullets' : key]?.score ?? 0
-    const max = WEIGHTS[key]
+
+    const uiKey = key === 'requiredSkills' ? 'skills' : key === 'experience' ? 'bullets' : key
+
+    const before = b[key]?.score
+
+      ?? beforeComparison.scoreBreakdown?.[uiKey]?.score
+
+      ?? 0
+
+    const after = a[key]?.score
+
+      ?? afterComparison.scoreBreakdown?.[uiKey]?.score
+
+      ?? 0
+
+    const max = key === 'requiredSkills' ? WEIGHTS.skills
+
+      : key === 'keywords' ? WEIGHTS.keywords
+
+        : key === 'experience' ? WEIGHTS.experience
+
+          : WEIGHTS.format
+
     breakdown[key] = {
+
       before: round1(before),
+
       after: round1(after),
+
       max,
+
       change: round1(after - before),
+
     }
+
   }
 
+
+
   return {
+
     beforeScore: beforeComparison.atsScore,
+
     afterScore: afterComparison.atsScore,
+
     improvement: afterComparison.atsScore - beforeComparison.atsScore,
+
     breakdown,
+
     beforeReport: beforeComparison.report,
+
     afterReport: afterComparison.report,
+
   }
+
 }
+
 
 /**
  * Merge applied DOCX changes into resumeData so After score reflects real inserts.

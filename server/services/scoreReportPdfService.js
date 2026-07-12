@@ -142,13 +142,10 @@ export function buildScoreReportPdf({
   const respCoveredScore = covered.length + partialResp.length * 0.5
 
   const catRows = [
-    ['Skills Match', 'requiredSkills', 30],
-    ['Experience Match', 'experience', 25],
-    ['Keywords Match', 'keywords', 15],
-    ['Tools & Technologies', 'tools', 10],
-    ['Summary Quality', 'summary', 5],
-    ['Resume Structure', 'structure', 10],
-    ['Completeness', 'completeness', 5],
+    ['Hard Skills & Tools', 'requiredSkills', 24],
+    ['Title & Domain Keywords', 'keywords', 16],
+    ['Experience & Impact', 'experience', 40],
+    ['Format & Readability', 'format', 20],
   ]
 
   const doc = new PDFDocument({
@@ -320,7 +317,7 @@ export function buildScoreReportPdf({
     ['AI Provider', provider],
     ['Model Used', model],
     ['Processing Time', duration],
-    ['Scoring Engine', 'Deterministic v2.0'],
+    ['Scoring Engine', 'ATS 40/40/20 v3.0'],
     ['AI used for', 'Parse + enhance plan'],
     ['Score calculated by', 'Local rules (no LLM)'],
   ]

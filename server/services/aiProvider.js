@@ -5,7 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 /*
  * Multi-provider AI layer with automatic fallback.
  * Order is controlled by AI_PROVIDER_ORDER (comma-separated).
- * Each provider returns parsed JSON matching the requested schema.
+ * Each provider returns { result, usage } where usage has token counts.
  */
 
 function stripCodeFences(text) {
@@ -33,15 +33,55 @@ function schemaInstruction(schema) {
   return `\n\nRespond with ONLY a valid JSON object (no markdown, no commentary) that strictly matches this JSON schema:\n${JSON.stringify(schema)}`
 }
 
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4)
+}
+
+function normalizeUsage(raw, system, user, content) {
+  const prompt = raw?.prompt_tokens ?? raw?.input_tokens ?? estimateTokens(`${system}\n${user}`)
+  const completion = raw?.completion_tokens ?? raw?.output_tokens ?? estimateTokens(content)
+  const cached = raw?.prompt_tokens_details?.cached_tokens
+    ?? raw?.input_tokens_details?.cached_tokens
+    ?? raw?.cache_read_input_tokens
+    ?? 0
+  return {
+    promptTokens: Number(prompt) || 0,
+    completionTokens: Number(completion) || 0,
+    cachedInputTokens: Number(cached) || 0,
+    totalTokens: (Number(prompt) || 0) + (Number(completion) || 0),
+  }
+}
+
+/* Approximate USD per 1M tokens — used for diagnostics only */
+const MODEL_PRICING = {
+  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-4o': { input: 2.5, output: 10 },
+  'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 },
+  'claude-3-5-sonnet-latest': { input: 3, output: 15 },
+  'gemini-1.5-flash': { input: 0.075, output: 0.3 },
+  'gemini-2.0-flash': { input: 0.1, output: 0.4 },
+}
+
+export function estimateCallCostUsd(model, usage) {
+  const key = Object.keys(MODEL_PRICING).find((k) => String(model || '').includes(k)) || model
+  const rates = MODEL_PRICING[key] || { input: 0.5, output: 1.5 }
+  const cached = usage.cachedInputTokens || 0
+  const billedInput = Math.max(0, (usage.promptTokens || 0) - cached) + cached * 0.5
+  const inputCost = (billedInput / 1e6) * rates.input
+  const outputCost = ((usage.completionTokens || 0) / 1e6) * rates.output
+  return Math.round((inputCost + outputCost) * 1e6) / 1e6
+}
+
 /* ---------- OpenAI-compatible (OpenAI, Groq, Ollama) ---------- */
 function makeOpenAICompatible({ apiKey, baseURL, model, useJsonSchema }) {
   const client = new OpenAI(baseURL ? { apiKey, baseURL, timeout: 120000 } : { apiKey, timeout: 120000 })
-  return async (system, user, schemaName, schema) => {
+  return async (system, user, schemaName, schema, options = {}) => {
+    const maxTokens = options.maxTokens || 8192
     const params = {
       model,
       temperature: 0.2,
-      // Avoid truncated JSON bodies on large resume/plan responses
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       messages: [
         { role: 'system', content: system + (useJsonSchema ? '' : schemaInstruction(schema)) },
         { role: 'user', content: user },
@@ -58,40 +98,57 @@ function makeOpenAICompatible({ apiKey, baseURL, model, useJsonSchema }) {
     const res = await client.chat.completions.create(params)
     const content = res.choices?.[0]?.message?.content
     if (!content) throw new Error('Empty response')
-    return extractJson(content)
+    return {
+      result: extractJson(content),
+      usage: normalizeUsage(res.usage, system, user, content),
+    }
   }
 }
 
 /* ---------- Anthropic Claude ---------- */
 function makeClaude({ apiKey, model }) {
   const client = new Anthropic({ apiKey })
-  return async (system, user, _schemaName, schema) => {
+  return async (system, user, _schemaName, schema, options = {}) => {
     const res = await client.messages.create({
       model,
-      max_tokens: 4096,
+      max_tokens: options.maxTokens || 4096,
       temperature: 0.2,
       system: system + schemaInstruction(schema),
       messages: [{ role: 'user', content: user }],
     })
     const text = res.content?.map((b) => (b.type === 'text' ? b.text : '')).join('')
     if (!text) throw new Error('Empty response')
-    return extractJson(text)
+    return {
+      result: extractJson(text),
+      usage: normalizeUsage(res.usage, system, user, text),
+    }
   }
 }
 
 /* ---------- Google Gemini ---------- */
 function makeGemini({ apiKey, model }) {
   const genAI = new GoogleGenerativeAI(apiKey)
-  return async (system, user, _schemaName, schema) => {
+  return async (system, user, _schemaName, schema, options = {}) => {
     const gModel = genAI.getGenerativeModel({
       model,
-      generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+        maxOutputTokens: options.maxTokens || 4096,
+      },
     })
     const prompt = `${system}${schemaInstruction(schema)}\n\n${user}`
     const res = await gModel.generateContent(prompt)
     const text = res.response.text()
     if (!text) throw new Error('Empty response')
-    return extractJson(text)
+    const meta = res.response.usageMetadata || {}
+    return {
+      result: extractJson(text),
+      usage: normalizeUsage({
+        prompt_tokens: meta.promptTokenCount,
+        completion_tokens: meta.candidatesTokenCount,
+      }, system, user, text),
+    }
   }
 }
 
@@ -178,7 +235,7 @@ function getOrder() {
   return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
 }
 
-/** Per-async-context usage log for score reports */
+/** Per-async-context usage log for score reports / diagnostics */
 let usageLog = null
 
 export function beginAiUsageTracking() {
@@ -190,6 +247,10 @@ export function endAiUsageTracking() {
   const log = usageLog || []
   usageLog = null
   const byProvider = {}
+  let totalPrompt = 0
+  let totalCompletion = 0
+  let totalCached = 0
+  let totalCost = 0
   for (const entry of log) {
     const key = `${entry.provider}::${entry.model}`
     if (!byProvider[key]) {
@@ -198,24 +259,46 @@ export function endAiUsageTracking() {
         model: entry.model,
         calls: 0,
         tasks: [],
+        promptTokens: 0,
+        completionTokens: 0,
+        cachedInputTokens: 0,
+        costUsd: 0,
       }
     }
     byProvider[key].calls += 1
     byProvider[key].tasks.push(entry.task)
+    byProvider[key].promptTokens += entry.promptTokens || 0
+    byProvider[key].completionTokens += entry.completionTokens || 0
+    byProvider[key].cachedInputTokens += entry.cachedInputTokens || 0
+    byProvider[key].costUsd += entry.costUsd || 0
+    totalPrompt += entry.promptTokens || 0
+    totalCompletion += entry.completionTokens || 0
+    totalCached += entry.cachedInputTokens || 0
+    totalCost += entry.costUsd || 0
   }
   return {
     calls: log,
     summary: Object.values(byProvider),
     primaryProvider: log[0]?.provider || null,
     primaryModel: log[0]?.model || null,
+    totals: {
+      llmCalls: log.length,
+      promptTokens: totalPrompt,
+      completionTokens: totalCompletion,
+      cachedInputTokens: totalCached,
+      costUsd: Math.round(totalCost * 1e6) / 1e6,
+    },
   }
 }
 
 /**
  * Run a structured JSON completion, trying each configured provider in order
  * until one succeeds. Throws only if all providers fail.
+ *
+ * @param {object} [options]
+ * @param {number} [options.maxTokens]
  */
-export async function structuredJSON(system, user, schemaName, schema) {
+export async function structuredJSON(system, user, schemaName, schema, options = {}) {
   const providers = getProviders()
   const order = getOrder().filter((name) => providers[name])
 
@@ -225,17 +308,27 @@ export async function structuredJSON(system, user, schemaName, schema) {
 
   const errors = []
   for (const name of order) {
+    const callStarted = Date.now()
     try {
-      const result = await providers[name].run(system, user, schemaName, schema)
+      const raw = await providers[name].run(system, user, schemaName, schema, options)
+      const durationMs = Date.now() - callStarted
+      const usage = raw.usage || normalizeUsage(null, system, user, '')
+      const costUsd = estimateCallCostUsd(providers[name].model, usage)
       const info = {
         provider: providers[name].label,
         model: providers[name].model,
         task: schemaName,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        cachedInputTokens: usage.cachedInputTokens,
+        totalTokens: usage.totalTokens,
+        durationMs,
+        costUsd,
       }
       if (usageLog) usageLog.push(info)
-      return { result, ...info }
+      return { result: raw.result, ...info }
     } catch (err) {
-      console.warn(`[AI] ${providers[name].label} failed: ${err.message}`)
+      console.warn(`[AI] ${providers[name].label} failed (${Date.now() - callStarted}ms): ${err.message}`)
       errors.push(`${providers[name].label}: ${err.message}`)
     }
   }
@@ -253,18 +346,20 @@ export function getConfiguredProviders() {
 
 export function getScoringEngineInfo() {
   return {
-    name: 'JoBPilot Deterministic Resume-to-JD Scorer',
-    version: '2.0',
-    method: 'Rule-based + synonym dictionary + cached semantic token matching',
-    note: 'Scoring does not use an LLM. AI providers are used only for resume/JD parsing and enhancement planning.',
+    name: 'JoBPilot Deterministic ATS Scorer',
+    version: '3.0',
+    method: 'Rule-based 40/40/20 (Keywords+Skills / Experience+Impact / Format) + synonym dictionary + cached semantic matching',
+    note: 'Scoring does not use an LLM. Skills and Keywords lists are disjoint. AI providers are used only for JD analysis and enhancement planning (resume parse is local-first).',
     categories: {
-      requiredSkills: 30,
-      experience: 25,
-      keywords: 15,
-      tools: 10,
-      structure: 10,
-      summary: 5,
-      completeness: 5,
+      skills: 24,
+      keywords: 16,
+      experience: 40,
+      format: 20,
+    },
+    pillars: {
+      keywordAndSkills: 40,
+      experienceAndImpact: 40,
+      formatAndReadability: 20,
     },
   }
 }
