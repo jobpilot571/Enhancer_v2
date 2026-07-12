@@ -14,15 +14,16 @@ const DEFAULT_PRICING = {
   plans: [
     {
       id: 'starter',
-      name: 'Starter',
+      name: 'Free',
       price: '0',
       period: 'forever',
-      desc: 'Perfect for trying out resume enhancement',
+      desc: 'Get started with monthly limits that cover most job searches',
       features: [
-        '1 resume enhancement per month',
-        'Basic ATS score report',
-        'PDF export',
-        'Email support',
+        '10 resume enhancements per month',
+        '5 resume builds per month',
+        '5 JD-tailored resumes per month',
+        'ATS score report',
+        'DOCX export',
       ],
       cta: 'Start Free',
       featured: false,
@@ -35,9 +36,9 @@ const DEFAULT_PRICING = {
       desc: 'For active job seekers who need more power',
       features: [
         'Unlimited resume enhancements',
+        'Unlimited resume builds',
+        'Unlimited JD-tailored resumes',
         'Full ATS analysis & suggestions',
-        'Build new resumes (3/month)',
-        'JD-based resume builder',
         'All premium templates',
         'Priority support',
       ],
@@ -52,7 +53,6 @@ const DEFAULT_PRICING = {
       desc: 'For career coaches and recruiting teams',
       features: [
         'Everything in Professional',
-        'Unlimited resume builds',
         'Team dashboard & analytics',
         'White-label exports',
         'API access',

@@ -5,5 +5,6 @@ server/.cache/
 server/admin-data/samples/
 server/admin-data/pricing.json
 server/admin-data/samples-meta.json
+server/user-data/
 .env
 *.log

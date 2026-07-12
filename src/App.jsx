@@ -6,6 +6,9 @@ import ResumeEnhancerPage from './pages/ResumeEnhancerPage'
 import ResumeBuilderPage from './pages/ResumeBuilderPage'
 import JDTailoredResumePage from './pages/JDTailoredResumePage'
 import AdminPage from './pages/AdminPage'
+import LoginPage from './pages/LoginPage'
+import SignupPage from './pages/SignupPage'
+import VerifyEmailPage from './pages/VerifyEmailPage'
 import useScrollReveal, { useScrollToHash } from './hooks/useScrollReveal'
 
 export default function App() {
@@ -13,11 +16,22 @@ export default function App() {
   useScrollToHash()
   const location = useLocation()
   const isAdmin = location.pathname.startsWith('/admin')
+  const isAuthPage = ['/login', '/signup', '/verify'].includes(location.pathname)
 
   if (isAdmin) {
     return (
       <Routes>
         <Route path="/admin" element={<AdminPage />} />
+      </Routes>
+    )
+  }
+
+  if (isAuthPage) {
+    return (
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/verify" element={<VerifyEmailPage />} />
       </Routes>
     )
   }

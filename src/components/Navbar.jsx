@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import BrandName from './BrandName'
 import Logo from './Logo'
+import { useAuth } from '../context/AuthContext'
 
 const navLinks = [
   { label: 'Home', to: '/' },
@@ -20,6 +21,7 @@ export default function Navbar() {
   const [open, setOpen] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const location = useLocation()
+  const { user, isAuthenticated, logout, loading } = useAuth()
 
   const closeMenu = () => {
     setOpen(false)
@@ -31,6 +33,17 @@ export default function Navbar() {
     if (to.startsWith('/#')) return location.pathname === '/' && location.hash === to.slice(1)
     return location.pathname === to
   }
+
+  async function handleLogout() {
+    closeMenu()
+    try {
+      await logout()
+    } catch {
+      /* storage already cleared */
+    }
+  }
+
+  const firstName = user?.name?.split(/\s+/)[0] || 'Account'
 
   return (
     <header className="navbar">
@@ -99,21 +112,39 @@ export default function Navbar() {
           ))}
 
           <div className="navbar__mobile-actions">
-            <Link to="/#contact" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={closeMenu}>
-              Sign In
-            </Link>
-            <Link to="/#services" className="btn btn--primary navbar__cta navbar__cta--mobile" onClick={closeMenu}>
-              Get Started
+            {!loading && isAuthenticated ? (
+              <>
+                <span className="navbar__user navbar__user--mobile">Hi, {firstName}</span>
+                <button type="button" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={handleLogout}>
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <Link to="/login" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={closeMenu}>
+                Sign In
+              </Link>
+            )}
+            <Link to={isAuthenticated ? '/#services' : '/signup'} className="btn btn--primary navbar__cta navbar__cta--mobile" onClick={closeMenu}>
+              {isAuthenticated ? 'Get Started' : 'Sign Up'}
             </Link>
           </div>
         </nav>
 
         <div className="navbar__actions">
-          <Link to="/#contact" className="btn btn--ghost navbar__signin">
-            Sign In
-          </Link>
-          <Link to="/#services" className="btn btn--primary navbar__cta">
-            Get Started
+          {!loading && isAuthenticated ? (
+            <>
+              <span className="navbar__user">Hi, {firstName}</span>
+              <button type="button" className="btn btn--ghost navbar__signin" onClick={handleLogout}>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <Link to="/login" className="btn btn--ghost navbar__signin">
+              Sign In
+            </Link>
+          )}
+          <Link to={isAuthenticated ? '/#services' : '/signup'} className="btn btn--primary navbar__cta">
+            {isAuthenticated ? 'Get Started' : 'Sign Up'}
           </Link>
           <button
             className="navbar__toggle"

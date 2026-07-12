@@ -8,6 +8,7 @@ import {
 } from '../store/sessionStore.js'
 import { createBuildJob, getBuildJob } from '../store/buildJobStore.js'
 import { runJdBuildJob } from '../services/jdBuildWorker.js'
+import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
 
 const router = Router()
 
@@ -58,7 +59,7 @@ function validateFormData(formData) {
   return null
 }
 
-router.post('/build', (req, res, next) => {
+router.post('/build', requireUser, checkUsage('jdBuilder'), (req, res, next) => {
   try {
     const { sessionId, formData } = req.body || {}
     let session = sessionId ? getSession(sessionId) : null
@@ -82,8 +83,9 @@ router.post('/build', (req, res, next) => {
       return res.status(404).json({ error: 'JD-builder session not found' })
     }
 
+    const usage = consumeUsage(req.user.id, req.user.plan || 'free', 'jdBuilder')
     const job = createBuildJob(session.sessionId)
-    console.log(`[jd-builder] job started jobId=${job.jobId} session=${session.sessionId}`)
+    console.log(`[jd-builder] job started jobId=${job.jobId} session=${session.sessionId} user=${req.user.id}`)
 
     setImmediate(() => {
       runJdBuildJob(job.jobId, session.sessionId).catch((err) => {
@@ -91,7 +93,7 @@ router.post('/build', (req, res, next) => {
       })
     })
 
-    res.json({ jobId: job.jobId, sessionId: session.sessionId, status: 'processing' })
+    res.json({ jobId: job.jobId, sessionId: session.sessionId, status: 'processing', usage })
   } catch (err) {
     next(err)
   }

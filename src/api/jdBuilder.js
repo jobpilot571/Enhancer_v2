@@ -1,3 +1,5 @@
+import { getAuthToken } from './auth'
+
 const API_BASE = (import.meta.env.VITE_JD_BUILDER_API_BASE || import.meta.env.VITE_API_BASE?.replace(/\/enhancer$/, '/jd-builder') || '/api/jd-builder').replace(/\/$/, '')
 
 export function getApiRoot() {
@@ -14,23 +16,30 @@ const BUILD_STEP_LABELS = {
   preparing_preview: 'Preparing preview…',
 }
 
-async function readErrorMessage(res) {
+async function readErrorPayload(res) {
   const contentType = res.headers.get('content-type') || ''
   if (contentType.includes('text/html')) {
-    return 'API route not configured — redeploy with API proxy, or set VITE_API_BASE to your backend URL.'
+    return { error: 'API route not configured — redeploy with API proxy, or set VITE_API_BASE to your backend URL.' }
   }
   try {
-    const data = await res.json()
-    return data.error || res.statusText
+    return await res.json()
   } catch {
+    if (res.status === 401) return { error: 'Sign in to use this service.', code: 'AUTH_REQUIRED' }
     if (res.status === 404) {
-      return 'API not found — deploy the backend and set VITE_API_BASE.'
+      return { error: 'API not found — deploy the backend and set VITE_API_BASE.' }
     }
     if (res.status >= 500) {
-      return 'Backend error — check API server logs and AI API keys.'
+      return { error: 'Backend error — check API server logs and AI API keys.' }
     }
-    return res.statusText || 'Request failed'
+    return { error: res.statusText || 'Request failed' }
   }
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra }
+  const token = getAuthToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
 }
 
 function networkError(err) {
@@ -46,18 +55,28 @@ function networkError(err) {
 async function request(url, options = {}) {
   let res
   try {
-    res = await fetch(`${API_BASE}${url}`, options)
+    const headers = authHeaders(options.headers || {})
+    res = await fetch(`${API_BASE}${url}`, { ...options, headers })
   } catch (err) {
     throw networkError(err)
   }
-  if (!res.ok) throw new Error(await readErrorMessage(res))
+  if (!res.ok) {
+    const data = await readErrorPayload(res)
+    const err = new Error(data.error || res.statusText || 'Request failed')
+    err.code = data.code
+    err.usage = data.usage
+    throw err
+  }
   return res
 }
 
 export async function checkApiHealth() {
   try {
     const res = await fetch(`${getApiRoot()}/health`, { signal: AbortSignal.timeout(8000) })
-    if (!res.ok) return { ok: false, error: await readErrorMessage(res) }
+    if (!res.ok) {
+      const data = await readErrorPayload(res)
+      return { ok: false, error: data.error }
+    }
     return { ok: true, ...(await res.json()) }
   } catch (err) {
     return { ok: false, error: networkError(err).message }
@@ -106,7 +125,6 @@ export function getDownloadUrl(sessionId) {
 }
 
 export async function fetchFileBlob(sessionId) {
-  const res = await fetch(getFileUrl(sessionId))
-  if (!res.ok) throw new Error(await readErrorMessage(res))
+  const res = await request(`/file/${sessionId}`)
   return res.blob()
 }

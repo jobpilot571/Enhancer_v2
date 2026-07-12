@@ -4,29 +4,32 @@ import { fetchPublicPricing } from '../api/admin'
 
 const FALLBACK_PLANS = [
   {
-    name: 'Starter',
+    id: 'starter',
+    name: 'Free',
     price: '0',
     period: 'forever',
-    desc: 'Perfect for trying out resume enhancement',
+    desc: 'Get started with monthly limits that cover most job searches',
     features: [
-      '1 resume enhancement per month',
-      'Basic ATS score report',
-      'PDF export',
-      'Email support',
+      '10 resume enhancements per month',
+      '5 resume builds per month',
+      '5 JD-tailored resumes per month',
+      'ATS score report',
+      'DOCX export',
     ],
     cta: 'Start Free',
     featured: false,
   },
   {
+    id: 'professional',
     name: 'Professional',
     price: '19',
     period: '/month',
     desc: 'For active job seekers who need more power',
     features: [
       'Unlimited resume enhancements',
+      'Unlimited resume builds',
+      'Unlimited JD-tailored resumes',
       'Full ATS analysis & suggestions',
-      'Build new resumes (3/month)',
-      'JD-based resume builder',
       'All premium templates',
       'Priority support',
     ],
@@ -34,13 +37,13 @@ const FALLBACK_PLANS = [
     featured: true,
   },
   {
+    id: 'enterprise',
     name: 'Enterprise',
     price: '49',
     period: '/month',
     desc: 'For career coaches and recruiting teams',
     features: [
       'Everything in Professional',
-      'Unlimited resume builds',
       'Team dashboard & analytics',
       'White-label exports',
       'API access',
@@ -106,7 +109,7 @@ export default function Pricing() {
                 ))}
               </ul>
               <Link
-                to="/#contact"
+                to={plan.id === 'starter' || plan.price === '0' ? '/signup' : '/#contact'}
                 className={`btn ${plan.featured ? 'btn--primary' : 'btn--outline'} btn--full`}
               >
                 {plan.cta}

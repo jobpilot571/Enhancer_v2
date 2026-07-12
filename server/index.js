@@ -5,8 +5,11 @@ import enhancerRoutes from './routes/enhancer.js'
 import builderRoutes from './routes/builder.js'
 import jdBuilderRoutes from './routes/jdBuilder.js'
 import adminRoutes from './routes/admin.js'
+import authRoutes from './routes/auth.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
+import { isGoogleAuthConfigured } from './services/googleAuth.js'
+import { isEmailConfigured } from './services/email.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -39,6 +42,7 @@ app.use('/api/enhancer', enhancerRoutes)
 app.use('/api/builder', builderRoutes)
 app.use('/api/jd-builder', jdBuilderRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/auth', authRoutes)
 
 app.get('/', (_req, res) => {
   res.json({
@@ -51,6 +55,7 @@ app.get('/', (_req, res) => {
       builder: '/api/builder',
       jdBuilder: '/api/jd-builder',
       admin: '/api/admin',
+      auth: '/api/auth',
     },
   })
 })
@@ -61,6 +66,8 @@ app.get('/api/health', (_req, res) => {
     service: 'jobpilot-ai',
     aiProviders: getConfiguredProviders(),
     adminConfigured: isAdminConfigured(),
+    emailConfigured: isEmailConfigured(),
+    googleAuthConfigured: isGoogleAuthConfigured(),
   })
 })
 

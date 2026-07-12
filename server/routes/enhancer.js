@@ -13,6 +13,7 @@ import { runEnhanceJob } from '../services/enhanceWorker.js'
 import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
 import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
 import { getLastResumeParseSnapshot } from '../services/resumeParseCache.js'
+import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
 
 const router = Router()
 
@@ -31,20 +32,21 @@ function mimeForType(fileType) {
 }
 
 // 1. Fast upload — save file, then precompute resume parse in background
-router.post('/upload', upload.single('resume'), (req, res, next) => {
+router.post('/upload', requireUser, checkUsage('enhancer'), upload.single('resume'), (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     const fileType = detectFileType(req.file.originalname, req.file.mimetype)
     const session = createSession(req.file.originalname, fileType, req.file.buffer)
 
-    console.log(`[upload] saved session=${session.sessionId} type=${fileType} file=${session.fileName}`)
+    console.log(`[upload] saved session=${session.sessionId} type=${fileType} file=${session.fileName} user=${req.user.id}`)
 
     res.json({
       sessionId: session.sessionId,
       fileName: session.fileName,
       fileType: session.fileType,
       uploadStatus: 'success',
+      usage: req.usagePreview,
     })
 
     // Warm cache while user pastes JD — does not block upload response
@@ -95,7 +97,7 @@ router.put('/jd', (req, res, next) => {
 })
 
 // 4. Start async enhance job — returns immediately
-router.post('/enhance', (req, res, next) => {
+router.post('/enhance', requireUser, checkUsage('enhancer'), (req, res, next) => {
   try {
     const { sessionId, jdText } = req.body
     const session = getSession(sessionId)
@@ -109,8 +111,9 @@ router.post('/enhance', (req, res, next) => {
       })
     }
 
+    const usage = consumeUsage(req.user.id, req.user.plan || 'free', 'enhancer')
     const job = createEnhanceJob(sessionId)
-    console.log(`[enhance] job started jobId=${job.jobId} session=${sessionId}`)
+    console.log(`[enhance] job started jobId=${job.jobId} session=${sessionId} user=${req.user.id}`)
 
     setImmediate(() => {
       runEnhanceJob(job.jobId, sessionId, jdText).catch((err) => {
@@ -118,7 +121,7 @@ router.post('/enhance', (req, res, next) => {
       })
     })
 
-    res.json({ jobId: job.jobId, status: 'processing' })
+    res.json({ jobId: job.jobId, status: 'processing', usage })
   } catch (err) {
     next(err)
   }
