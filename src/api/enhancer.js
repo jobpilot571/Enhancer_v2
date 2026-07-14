@@ -37,6 +37,12 @@ async function readErrorPayload(res) {
   }
 }
 
+/** Returns a string error message (used by fetch paths that don't go through request()). */
+async function readErrorMessage(res) {
+  const data = await readErrorPayload(res)
+  return data.error || res.statusText || 'Request failed'
+}
+
 function authHeaders(extra = {}) {
   const headers = { ...extra }
   const token = getAuthToken()
@@ -110,7 +116,7 @@ export async function startEnhance(sessionId, jdText) {
   try {
     res = await fetch(`${API_BASE}/enhance`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ sessionId, jdText }),
       signal: AbortSignal.timeout(60000),
     })
@@ -125,6 +131,7 @@ export async function getEnhanceStatus(jobId) {
   let res
   try {
     res = await fetch(`${API_BASE}/enhance-status/${jobId}`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(30000),
     })
   } catch (err) {
@@ -164,6 +171,7 @@ export function getScoreReportPdfUrl(sessionId) {
 
 export async function downloadScoreReportPdf(sessionId) {
   const res = await fetch(getScoreReportPdfUrl(sessionId), {
+    headers: authHeaders(),
     signal: AbortSignal.timeout(60000),
   })
   if (!res.ok) {
@@ -188,7 +196,9 @@ export async function downloadScoreReportPdf(sessionId) {
 }
 
 export async function fetchFileBlob(sessionId, type = 'original') {
-  const res = await fetch(getFileUrl(sessionId, type))
+  const res = await fetch(getFileUrl(sessionId, type), {
+    headers: authHeaders(),
+  })
   if (!res.ok) throw new Error(await readErrorMessage(res))
   return res.blob()
 }
