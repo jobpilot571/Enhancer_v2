@@ -83,10 +83,15 @@ export async function getAuthStatus() {
 }
 
 export async function signup({ name, email, password, confirmPassword }) {
-  return request('/signup', {
+  const data = await request('/signup', {
     method: 'POST',
     body: JSON.stringify({ name, email, password, confirmPassword }),
   })
+  if (data.token && data.user) {
+    setAuthToken(data.token)
+    setStoredUser(data.user)
+  }
+  return data
 }
 
 export async function login({ email, password }) {

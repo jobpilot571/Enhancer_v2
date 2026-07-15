@@ -111,11 +111,30 @@ router.post('/signup', async (req, res, next) => {
 
     const existing = findUserByEmail(email)
     if (existing?.emailVerifiedAt) {
-      return res.status(409).json({
-        error: 'An account with this email already exists. Sign in instead.',
-        code: 'ALREADY_REGISTERED',
-        email: existing.email,
-      })
+      // Existing verified account: sign in if password matches, else ask them to sign in
+      try {
+        const user = authenticateUser(email, password)
+        return res.json({
+          ...sessionResponse(user),
+          alreadyRegistered: true,
+          signedIn: true,
+          message: 'Welcome back — you already have an account, so we signed you in.',
+        })
+      } catch (authErr) {
+        if (authErr.code === 'GOOGLE_ONLY') {
+          return res.status(409).json({
+            error: 'An account with this email already exists and uses Google sign-in. Please sign in with Google.',
+            code: 'ALREADY_REGISTERED',
+            email: existing.email,
+            authProvider: 'google',
+          })
+        }
+        return res.status(409).json({
+          error: 'An account with this email already exists. Sign in with your password instead.',
+          code: 'ALREADY_REGISTERED',
+          email: existing.email,
+        })
+      }
     }
 
     const user = existing

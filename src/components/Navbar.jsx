@@ -44,6 +44,12 @@ export default function Navbar() {
   }
 
   const firstName = user?.name?.split(/\s+/)[0] || 'Account'
+  const enhancerLeft = user?.usage?.remaining?.enhancer
+  const enhancerLimit = user?.usage?.limits?.enhancer
+  const usageLabel =
+    enhancerLeft == null || !Number.isFinite(enhancerLimit)
+      ? 'Unlimited enhancements'
+      : `${enhancerLeft} of ${enhancerLimit} enhancements left`
 
   return (
     <header className="navbar">
@@ -115,6 +121,7 @@ export default function Navbar() {
             {!loading && isAuthenticated ? (
               <>
                 <span className="navbar__user navbar__user--mobile">Hi, {firstName}</span>
+                <span className="navbar__usage navbar__usage--mobile">{usageLabel}</span>
                 <button type="button" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={handleLogout}>
                   Sign out
                 </button>
@@ -133,6 +140,7 @@ export default function Navbar() {
         <div className="navbar__actions">
           {!loading && isAuthenticated ? (
             <>
+              <span className="navbar__usage" title="Free plan monthly limit">{usageLabel}</span>
               <span className="navbar__user">Hi, {firstName}</span>
               <button type="button" className="btn btn--ghost navbar__signin" onClick={handleLogout}>
                 Sign out

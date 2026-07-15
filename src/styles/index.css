@@ -328,6 +328,21 @@ input, select, textarea { font-family: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.navbar__usage {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--green-700);
+  background: var(--green-50);
+  border: 1px solid var(--green-200);
+  border-radius: 999px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+.navbar__usage--mobile {
+  text-align: center;
+  width: 100%;
+  box-sizing: border-box;
+}
 .navbar__user--mobile {
   text-align: center;
   width: 100%;
@@ -1618,6 +1633,16 @@ body:has(.service-block--enhancer) .footer__col h4 {
   font-size: 0.6875rem;
   line-height: 1.3;
   margin: 0;
+}
+.enhancer-usage-chip {
+  margin-top: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--green-700);
+}
+.enhancer-usage-chip a {
+  color: var(--green-700);
+  text-decoration: underline;
 }
 .enhancer-topbar__cta {
   flex-shrink: 0;
@@ -3718,6 +3743,54 @@ body:has(.service-block--enhancer) .footer__col h4 {
   font-size: 0.8125rem;
   font-weight: 700;
 }
+.builder-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding: 16px 18px;
+  border: 1px dashed var(--gray-300);
+  border-radius: 10px;
+  background: var(--gray-50, #f8fafb);
+}
+.builder-ref--memory {
+  border-style: solid;
+  border-color: rgba(22, 199, 132, 0.35);
+  background: rgba(22, 199, 132, 0.06);
+}
+.builder-ref__copy strong {
+  display: block;
+  font-size: 0.9375rem;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+}
+.builder-ref__copy p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--gray-600);
+}
+.builder-ref__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.builder-ref__status {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--gray-700);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(22, 199, 132, 0.1);
+  border: 1px solid rgba(22, 199, 132, 0.28);
+}
+.builder-ref__hint {
+  margin: -8px 0 0;
+  font-size: 0.8125rem;
+  color: var(--gray-600);
+  line-height: 1.4;
+}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -4661,7 +4734,8 @@ body:has(.service-block--enhancer) .footer__col h4 {
   }
   .navbar__actions .navbar__cta,
   .navbar__actions .navbar__signin,
-  .navbar__actions .navbar__user { display: none; }
+  .navbar__actions .navbar__user,
+  .navbar__actions .navbar__usage { display: none; }
   .navbar__mobile-actions { display: flex; }
   .navbar__signin--mobile,
   .navbar__cta--mobile { display: inline-flex; width: 100%; }

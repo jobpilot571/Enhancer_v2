@@ -31,6 +31,10 @@ export default function SignupPage() {
     setLoading(true)
     try {
       const data = await signup({ name, email, password, confirmPassword })
+      if (data.signedIn || (data.token && data.user && !data.needsVerification)) {
+        navigate('/', { replace: true })
+        return
+      }
       stashOtpHint(data)
       navigate(`/verify?email=${encodeURIComponent(data.email)}`, { replace: true })
     } catch (err) {
@@ -138,8 +142,8 @@ export default function SignupPage() {
           {error && (
             <div className="auth-error-block">
               <p className="auth-error">{error}</p>
-              {error.toLowerCase().includes('already exists') && (
-                <Link to={`/login?email=${encodeURIComponent(email)}`} className="btn btn--ghost btn--full">
+              {(error.toLowerCase().includes('already exists') || error.toLowerCase().includes('sign in')) && (
+                <Link to={`/login?email=${encodeURIComponent(email)}`} className="btn btn--primary btn--full">
                   Go to sign in
                 </Link>
               )}

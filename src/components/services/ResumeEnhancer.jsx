@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import DocumentPreview from './DocumentPreview'
 import {
   uploadResume,
@@ -11,6 +12,7 @@ import {
   checkApiHealth,
   setJD,
 } from '../../api/enhancer'
+import { useAuth } from '../../context/AuthContext'
 
 function ScoreRing({ score, label = '/ 100', gradId = 'scoreGrad', size = 'sm' }) {
   const pct = Math.min(100, Math.max(0, Number(score) || 0))
@@ -422,6 +424,16 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
 }
 
 export default function ResumeEnhancer() {
+  const { user, isAuthenticated, refreshUser } = useAuth()
+  const enhancerLeft = user?.usage?.remaining?.enhancer
+  const enhancerLimit = user?.usage?.limits?.enhancer
+  const enhancerUsed = user?.usage?.used?.enhancer
+  const usageText =
+    !isAuthenticated
+      ? null
+      : enhancerLeft == null || !Number.isFinite(enhancerLimit)
+        ? 'Unlimited enhancements on your plan'
+        : `${enhancerLeft} of ${enhancerLimit} enhancements left this month`
   const [sessionId, setSessionId] = useState(null)
   const [fileName, setFileName] = useState('')
   const [fileType, setFileType] = useState(null)
@@ -577,6 +589,11 @@ export default function ResumeEnhancer() {
       }
 
       const { jobId } = await startEnhance(sessionId, jdText)
+      try {
+        await refreshUser?.()
+      } catch {
+        /* usage chip can refresh on next page load */
+      }
       const result = await waitForEnhance(jobId, (status) => {
         if (status.step) setEnhanceStep(status.step)
       })
@@ -668,6 +685,19 @@ export default function ResumeEnhancer() {
           <div>
             <h3 className="service-block__title">AI Resume Enhancer</h3>
             <p className="service-block__desc">Upload resume + JD, then enhance. Preview appears below.</p>
+            {usageText && (
+              <p className="enhancer-usage-chip">
+                Free plan · {usageText}
+                {Number.isFinite(enhancerLimit) && enhancerLeft === 0 && (
+                  <> · <Link to="/#pricing">Upgrade for more</Link></>
+                )}
+              </p>
+            )}
+            {!isAuthenticated && (
+              <p className="enhancer-usage-chip">
+                <Link to="/login">Sign in</Link> to use your free plan (10 enhancements / month).
+              </p>
+            )}
           </div>
         </div>
 

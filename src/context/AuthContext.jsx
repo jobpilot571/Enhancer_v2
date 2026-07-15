@@ -50,7 +50,14 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const signup = useCallback(async (payload) => apiSignup(payload), [])
+  const signup = useCallback(async (payload) => {
+    const data = await apiSignup(payload)
+    if (data.user && data.token && !data.needsVerification) {
+      setUser(data.user)
+      setStoredUser(data.user)
+    }
+    return data
+  }, [])
 
   const login = useCallback(async (payload) => {
     const data = await apiLogin(payload)
