@@ -471,6 +471,24 @@ export async function generateResumeFromForm(formData) {
     companies.flatMap((c) => (c.skills || []).map((s) => String(s).trim()).filter(Boolean)),
   )]
 
+  const ref = formData.referenceMaterial || null
+  const refExperience = Array.isArray(ref?.experience) ? ref.experience : []
+  const refSummary = Array.isArray(ref?.summaryBullets) ? ref.summaryBullets : []
+  const refBlock = ref
+    ? [
+      'Reference document material (PREFERRED facts / bullet themes — strengthen, do not invent conflicting employers):',
+      ref.fileName ? `- Source file: ${ref.fileName}` : '',
+      refSummary.length
+        ? `- Summary lines to reuse/adapt:\n${refSummary.slice(0, 10).map((b) => `  • ${b}`).join('\n')}`
+        : '',
+      ...refExperience.map((exp, i) => {
+        const bullets = (exp.bullets || []).slice(0, 12)
+        if (!bullets.length) return ''
+        return `- Ref job ${i + 1}: "${exp.company || '?'}" / "${exp.title || '?'}"\n${bullets.map((b) => `  • ${b}`).join('\n')}`
+      }),
+    ].filter(Boolean).join('\n')
+    : ''
+
   return jsonCompletion(
     `You are an expert resume writer creating a professional resume from scratch for someone who does not have one yet.
 
@@ -482,6 +500,8 @@ Hard rules:
 - Weave the user-selected skills for each company naturally into that company's bullets.
 - Bullets must be role-appropriate for "${formData.role}" with about ${years} years of experience.
 - Make bullets sound human and specific — tools, projects, outcomes — never generic filler.
+- When reference document material is provided: reuse and polish those bullets for the matching company (same company name or closest match). Keep real achievements, metrics, and tools from the reference. You may rewrite for clarity and ATS impact, but do not invent fake employers or unrelated claims.
+- Prefer reference summary lines when writing summaryBullets (polish them; fill remaining slots if needed).
 - summaryBullets: return 4–8 strong summary bullets (leave summary as a short 1–2 sentence overview).
 - skillCategories: group ALL user-selected skills (plus closely related tools) into 4–8 categories like "Tools", "Data & Reporting", "Methodologies". Prefer the user's selected skills as the core list.
 - skills + technicalSkills: flat list of the same skills (short names only).
@@ -507,6 +527,8 @@ Education:
 - Degree: ${education.degree || ''}
 - Start: ${education.startDate || ''}
 - End: ${education.endDate || ''}
+
+${refBlock || '(No reference document — invent strong, role-appropriate bullets.)'}
 
 Generate the complete resume JSON.`,
     'build_resume',

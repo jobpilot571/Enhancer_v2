@@ -1,7 +1,9 @@
 import { Router } from 'express'
 import fs from 'fs'
+import multer from 'multer'
 import {
   createBuilderSession,
+  detectFileType,
   getSession,
   updateSession,
   readFile,
@@ -9,10 +11,29 @@ import {
 import { createBuildJob, getBuildJob } from '../store/buildJobStore.js'
 import { runBuildJob } from '../services/buildWorker.js'
 import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
+import {
+  getBuilderMemory,
+  saveBuilderMemory,
+  clearBuilderMemory,
+} from '../store/userStore.js'
+import { extractResumeText } from '../services/resumeExtract.js'
+import { parseResumeLocally } from '../services/localResumeParse.js'
+import { parseResume } from '../services/openaiService.js'
+import { mapResumeToBuilderSuggestions } from '../services/builderReferenceMap.js'
 
 const router = Router()
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+const LOCAL_CONFIDENCE_THRESHOLD = 0.8
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const type = detectFileType(file.originalname, file.mimetype)
+    cb(type ? null : new Error('Only .docx and .pdf files are allowed'), !!type)
+  },
+})
 
 function validateFormData(formData) {
   if (!formData || typeof formData !== 'object') {
@@ -59,6 +80,92 @@ function validateFormData(formData) {
 
   return null
 }
+
+/** Long-lived saved builder form for the signed-in user (account memory). */
+router.get('/memory', requireUser, (req, res, next) => {
+  try {
+    const memory = getBuilderMemory(req.user.id)
+    res.json({
+      ok: true,
+      hasMemory: Boolean(memory?.formData),
+      updatedAt: memory?.updatedAt || null,
+      formData: memory?.formData || null,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/memory', requireUser, (req, res, next) => {
+  try {
+    const formData = req.body?.formData ?? req.body
+    const memory = saveBuilderMemory(req.user.id, formData)
+    console.log(`[builder] memory saved user=${req.user.id}`)
+    res.json({ ok: true, updatedAt: memory.updatedAt, formData: memory.formData })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+router.delete('/memory', requireUser, (req, res, next) => {
+  try {
+    clearBuilderMemory(req.user.id)
+    console.log(`[builder] memory cleared user=${req.user.id}`)
+    res.json({ ok: true })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
+ * Upload a reference resume/doc. Extracts bullets + basics so the form
+ * (and later AI generation) can produce a stronger DOCX. Does not consume
+ * a builder usage credit.
+ */
+router.post('/reference-upload', requireUser, upload.single('reference'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+
+    const fileType = detectFileType(req.file.originalname, req.file.mimetype)
+    if (!fileType) return res.status(400).json({ error: 'Only .docx and .pdf files are allowed' })
+
+    const resumeText = await extractResumeText(req.file.buffer, fileType)
+    if (!String(resumeText || '').trim()) {
+      return res.status(400).json({ error: 'Could not read text from that document. Try a .docx resume.' })
+    }
+
+    const local = parseResumeLocally(resumeText)
+    let resumeData = local.data
+    let method = 'local'
+    if (local.confidence < LOCAL_CONFIDENCE_THRESHOLD) {
+      resumeData = await parseResume(resumeText)
+      method = 'AI fallback'
+      if (!resumeData.skillCategories?.length && local.data.skillCategories?.length) {
+        resumeData.skillCategories = local.data.skillCategories
+      }
+    }
+
+    const suggestions = mapResumeToBuilderSuggestions(resumeData, {
+      fileName: req.file.originalname,
+    })
+
+    console.log(
+      `[builder] reference-upload user=${req.user.id} file=${req.file.originalname} `
+      + `method=${method} companies=${suggestions.stats.companies} bullets=${suggestions.stats.bullets}`,
+    )
+
+    res.json({
+      ok: true,
+      method,
+      confidence: local.confidence,
+      suggestions,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // Create builder session from full form payload
 router.post('/session', (req, res, next) => {

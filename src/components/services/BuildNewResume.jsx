@@ -12,8 +12,81 @@ import {
   getBuildStepLabel,
   fetchFileBlob,
   getDownloadUrl,
+  uploadReferenceDocument,
+  getBuilderMemory,
+  saveBuilderMemory,
+  clearBuilderMemory,
 } from '../../api/builder'
+import { getAuthToken, getStoredUser } from '../../api/auth'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
+
+const LOCAL_MEMORY_KEY = 'jobpilot_builder_memory'
+
+function localMemoryKey(userId) {
+  return userId ? `${LOCAL_MEMORY_KEY}:${userId}` : LOCAL_MEMORY_KEY
+}
+
+function readLocalMemory(userId) {
+  try {
+    const raw = localStorage.getItem(localMemoryKey(userId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed?.formData) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeLocalMemory(userId, formData) {
+  try {
+    localStorage.setItem(
+      localMemoryKey(userId),
+      JSON.stringify({ formData, updatedAt: new Date().toISOString() }),
+    )
+  } catch {
+    // quota / private mode — ignore
+  }
+}
+
+function removeLocalMemory(userId) {
+  try {
+    localStorage.removeItem(localMemoryKey(userId))
+  } catch {
+    /* ignore */
+  }
+}
+
+function hydrateFormFromMemory(saved) {
+  if (!saved || typeof saved !== 'object') return null
+  const count = Math.min(6, Math.max(1, Number(saved.companyCount) || (saved.companies || []).length || 1))
+  return {
+    ...initialForm,
+    ...saved,
+    companyCount: String(count),
+    companies: syncCompanies(
+      Array.isArray(saved.companies) ? saved.companies.map((c) => ({ ...emptyCompany(), ...c })) : [],
+      count,
+    ),
+    education: { ...initialForm.education, ...(saved.education || {}) },
+    referenceMaterial: saved.referenceMaterial || null,
+  }
+}
+
+function formatMemoryTime(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
 
 const SECTIONS = [
   { id: 'basics', label: 'Basics' },
@@ -65,6 +138,73 @@ const initialForm = {
     startDate: '',
     endDate: '',
   },
+  referenceMaterial: null,
+}
+
+function fillBlank(cur, next) {
+  return String(cur || '').trim() ? cur : (next || '')
+}
+
+/** Merge extracted reference suggestions into the builder form. */
+function applyReferenceSuggestions(form, suggestions, { overwriteCompanies = true } = {}) {
+  const patch = suggestions?.formPatch || {}
+  const companyCount = Math.min(
+    6,
+    Math.max(
+      1,
+      Number(patch.companyCount)
+        || (patch.companies || []).length
+        || Number(form.companyCount)
+        || 1,
+    ),
+  )
+
+  let companies = syncCompanies(form.companies || [], companyCount)
+  if (patch.companies?.length && overwriteCompanies) {
+    companies = syncCompanies(
+      patch.companies.map((incoming, i) => {
+        const existing = form.companies[i] || emptyCompany()
+        return {
+          name: fillBlank(existing.name, incoming.name),
+          role: fillBlank(existing.role, incoming.role),
+          startDate: fillBlank(existing.startDate, incoming.startDate),
+          endDate: fillBlank(existing.endDate, incoming.endDate),
+          city: fillBlank(existing.city, incoming.city),
+          state: fillBlank(existing.state, incoming.state),
+          skills: (existing.skills?.length ? existing.skills : (incoming.skills || [])),
+        }
+      }),
+      companyCount,
+    )
+  }
+
+  const edu = form.education || {}
+  const pedu = patch.education || {}
+  const incomingNotes = String(patch.summaryNotes || '').trim()
+  const existingNotes = String(form.summaryNotes || '').trim()
+
+  return {
+    ...form,
+    name: fillBlank(form.name, patch.name),
+    email: fillBlank(form.email, patch.email),
+    phone: fillBlank(form.phone, patch.phone),
+    linkedin: fillBlank(form.linkedin, patch.linkedin),
+    role: fillBlank(form.role, patch.role),
+    yearsOfExperience: fillBlank(form.yearsOfExperience, patch.yearsOfExperience),
+    companyCount: String(companyCount),
+    companies,
+    summaryNotes: !incomingNotes
+      ? form.summaryNotes
+      : (!existingNotes ? incomingNotes : `${existingNotes}\n\n${incomingNotes}`),
+    education: {
+      school: fillBlank(edu.school, pedu.school),
+      course: fillBlank(edu.course, pedu.course),
+      degree: fillBlank(edu.degree, pedu.degree),
+      startDate: fillBlank(edu.startDate, pedu.startDate),
+      endDate: fillBlank(edu.endDate, pedu.endDate),
+    },
+    referenceMaterial: suggestions.referenceMaterial || form.referenceMaterial || null,
+  }
 }
 
 function syncCompanies(companies, count) {
@@ -85,12 +225,75 @@ export default function BuildNewResume() {
   const [templateSamples, setTemplateSamples] = useState({})
   const [sampleBlobs, setSampleBlobs] = useState({})
   const [samplePreview, setSamplePreview] = useState(null)
+  const [refUploading, setRefUploading] = useState(false)
+  const [refSuggestions, setRefSuggestions] = useState(null)
+  const [memoryInfo, setMemoryInfo] = useState({ hasMemory: false, updatedAt: null })
+  const [memoryBusy, setMemoryBusy] = useState(false)
+  const [memoryNotice, setMemoryNotice] = useState('')
+  const refInputRef = useRef(null)
   const buildingRef = useRef(false)
   const scrollingRef = useRef(false)
   const sectionRefs = useRef({})
+  const signedIn = Boolean(getAuthToken() && getStoredUser())
 
   useEffect(() => {
     let cancelled = false
+    const user = getStoredUser()
+    const token = getAuthToken()
+
+    // Instant restore from local backup
+    const local = readLocalMemory(user?.id)
+    if (local?.formData) {
+      const hydrated = hydrateFormFromMemory(local.formData)
+      if (hydrated) {
+        setForm(hydrated)
+        setRefSuggestions(hydrated.referenceMaterial
+          ? {
+            fileName: hydrated.referenceMaterial.fileName || 'Saved reference',
+            stats: {
+              companies: hydrated.referenceMaterial.experience?.length || 0,
+              bullets: (hydrated.referenceMaterial.experience || []).reduce((n, e) => n + (e.bullets?.length || 0), 0),
+              summaryLines: hydrated.referenceMaterial.summaryBullets?.length || 0,
+            },
+          }
+          : null)
+        setMemoryInfo({ hasMemory: true, updatedAt: local.updatedAt || null })
+        setMemoryNotice('Restored your saved details from this device.')
+      }
+    }
+
+    // Account memory wins if available
+    if (token && user) {
+      getBuilderMemory()
+        .then((data) => {
+          if (cancelled || !data?.formData) {
+            if (!cancelled && data) {
+              setMemoryInfo({ hasMemory: Boolean(data.hasMemory), updatedAt: data.updatedAt })
+            }
+            return
+          }
+          const hydrated = hydrateFormFromMemory(data.formData)
+          if (!hydrated) return
+          setForm(hydrated)
+          writeLocalMemory(user.id, data.formData)
+          setMemoryInfo({ hasMemory: true, updatedAt: data.updatedAt })
+          setRefSuggestions(hydrated.referenceMaterial
+            ? {
+              fileName: hydrated.referenceMaterial.fileName || 'Saved reference',
+              stats: {
+                companies: hydrated.referenceMaterial.experience?.length || 0,
+                bullets: (hydrated.referenceMaterial.experience || []).reduce((n, e) => n + (e.bullets?.length || 0), 0),
+                summaryLines: hydrated.referenceMaterial.summaryBullets?.length || 0,
+              },
+            }
+            : null)
+          setMemoryNotice('Loaded your saved memory from your account.')
+        })
+        .catch(() => {
+          /* keep local restore */
+        })
+    }
+
     checkApiHealth().then((h) => {
       if (!cancelled) setApiOk(h.ok)
     })
@@ -212,6 +415,110 @@ export default function BuildNewResume() {
     setError('')
   }
 
+  async function handleReferenceUpload(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith('.docx') && !lower.endsWith('.pdf')) {
+      setError('Reference document must be a .docx or .pdf file.')
+      return
+    }
+
+    setRefUploading(true)
+    setError('')
+    try {
+      const result = await uploadReferenceDocument(file)
+      setRefSuggestions(result.suggestions)
+      setForm((f) => applyReferenceSuggestions(f, result.suggestions))
+    } catch (err) {
+      setError(err.message || 'Could not read that reference document.')
+    } finally {
+      setRefUploading(false)
+    }
+  }
+
+  function clearReference() {
+    setRefSuggestions(null)
+    setForm((f) => ({ ...f, referenceMaterial: null }))
+    setError('')
+  }
+
+  async function handleSaveMemory() {
+    const user = getStoredUser()
+    if (!getAuthToken() || !user) {
+      setError('Sign in to save your details for next time.')
+      return
+    }
+    setMemoryBusy(true)
+    setError('')
+    setMemoryNotice('')
+    try {
+      const payload = buildPayload()
+      const result = await saveBuilderMemory(payload)
+      writeLocalMemory(user.id, result.formData || payload)
+      setMemoryInfo({ hasMemory: true, updatedAt: result.updatedAt || new Date().toISOString() })
+      setMemoryNotice('Saved. Next visit, these details will load automatically.')
+    } catch (err) {
+      setError(err.message || 'Could not save memory.')
+    } finally {
+      setMemoryBusy(false)
+    }
+  }
+
+  async function handleLoadMemory() {
+    const user = getStoredUser()
+    setMemoryBusy(true)
+    setError('')
+    setMemoryNotice('')
+    try {
+      let formData = null
+      let updatedAt = null
+      if (getAuthToken() && user) {
+        const data = await getBuilderMemory()
+        formData = data.formData
+        updatedAt = data.updatedAt
+      }
+      if (!formData) {
+        const local = readLocalMemory(user?.id)
+        formData = local?.formData || null
+        updatedAt = local?.updatedAt || null
+      }
+      if (!formData) {
+        setError('No saved memory yet. Fill the form and click Save my details.')
+        return
+      }
+      const hydrated = hydrateFormFromMemory(formData)
+      setForm(hydrated)
+      setMemoryInfo({ hasMemory: true, updatedAt })
+      setMemoryNotice('Loaded your saved details.')
+    } catch (err) {
+      setError(err.message || 'Could not load saved memory.')
+    } finally {
+      setMemoryBusy(false)
+    }
+  }
+
+  async function handleClearMemory() {
+    const user = getStoredUser()
+    setMemoryBusy(true)
+    setError('')
+    setMemoryNotice('')
+    try {
+      if (getAuthToken() && user) {
+        await clearBuilderMemory()
+      }
+      removeLocalMemory(user?.id)
+      setMemoryInfo({ hasMemory: false, updatedAt: null })
+      setMemoryNotice('Saved memory cleared.')
+    } catch (err) {
+      setError(err.message || 'Could not clear saved memory.')
+    } finally {
+      setMemoryBusy(false)
+    }
+  }
+
   function validateSection(index) {
     if (index === 0) {
       if (!form.name.trim()) return 'Please enter your name.'
@@ -281,6 +588,7 @@ export default function BuildNewResume() {
         startDate: form.education.startDate.trim(),
         endDate: form.education.endDate.trim(),
       },
+      referenceMaterial: form.referenceMaterial || null,
     }
   }
 
@@ -315,6 +623,21 @@ export default function BuildNewResume() {
       setPreviewBlob(blob)
       setSessionId(result.sessionId || sid)
       scrollToSection(SECTIONS.length - 1)
+
+      // Quietly keep account memory fresh after a successful build
+      const user = getStoredUser()
+      if (getAuthToken() && user) {
+        saveBuilderMemory(payload)
+          .then((mem) => {
+            writeLocalMemory(user.id, mem.formData || payload)
+            setMemoryInfo({ hasMemory: true, updatedAt: mem.updatedAt || new Date().toISOString() })
+          })
+          .catch(() => {
+            writeLocalMemory(user.id, payload)
+          })
+      } else {
+        writeLocalMemory(user?.id, payload)
+      }
     } catch (err) {
       setError(err.message || 'Failed to build resume')
     } finally {
@@ -338,7 +661,7 @@ export default function BuildNewResume() {
         <div>
           <h3 className="service-block__title">Professional Resume Builder</h3>
           <p className="service-block__desc">
-            No resume yet? Answer a few questions and we&apos;ll generate a polished DOCX for you.
+            Answer a few questions — or upload a reference document — and we&apos;ll generate a polished DOCX for you.
           </p>
         </div>
       </div>
@@ -373,6 +696,101 @@ export default function BuildNewResume() {
             <span className="builder-section__num">1</span>
             Basics
           </h4>
+
+          <div className="builder-ref builder-ref--memory">
+            <div className="builder-ref__copy">
+              <strong>Saved memory</strong>
+              <p>
+                Save your basics, experience, education, and summary once — we&apos;ll restore them
+                next time so you don&apos;t retype everything.
+                {!signedIn ? ' Sign in to keep this on your account across devices.' : ''}
+              </p>
+            </div>
+            <div className="builder-ref__actions">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={memoryBusy || building}
+                onClick={handleSaveMemory}
+              >
+                {memoryBusy ? 'Saving…' : 'Save my details'}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={memoryBusy || building}
+                onClick={handleLoadMemory}
+              >
+                Load saved
+              </button>
+              {memoryInfo.hasMemory && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={memoryBusy || building}
+                  onClick={handleClearMemory}
+                >
+                  Clear memory
+                </button>
+              )}
+            </div>
+            {(memoryNotice || memoryInfo.updatedAt) && (
+              <div className="builder-ref__status" role="status">
+                {memoryNotice || 'Saved memory ready.'}
+                {memoryInfo.updatedAt
+                  ? ` Last saved ${formatMemoryTime(memoryInfo.updatedAt)}.`
+                  : ''}
+              </div>
+            )}
+          </div>
+
+          <div className="builder-ref">
+            <div className="builder-ref__copy">
+              <strong>Optional: reference document</strong>
+              <p>
+                Upload an old resume or notes (DOCX/PDF). We&apos;ll pull companies, summary lines,
+                and bullets so the generated resume can reuse your real achievements.
+              </p>
+            </div>
+            <input
+              ref={refInputRef}
+              type="file"
+              accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              hidden
+              onChange={handleReferenceUpload}
+            />
+            <div className="builder-ref__actions">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={refUploading || building}
+                onClick={() => refInputRef.current?.click()}
+              >
+                {refUploading ? 'Reading document…' : (refSuggestions ? 'Replace document' : 'Upload reference')}
+              </button>
+              {(refSuggestions || form.referenceMaterial) && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={refUploading || building}
+                  onClick={clearReference}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {refSuggestions && (
+              <div className="builder-ref__status" role="status">
+                Applied from <strong>{refSuggestions.fileName}</strong>
+                {' — '}
+                {refSuggestions.stats?.companies || 0} companies,{' '}
+                {refSuggestions.stats?.bullets || 0} bullets,{' '}
+                {refSuggestions.stats?.summaryLines || 0} summary lines.
+                Review Experience and Summary next, then Build.
+              </div>
+            )}
+          </div>
+
           <div className="form-grid">
             <FormField
               label="Name"
@@ -533,11 +951,22 @@ export default function BuildNewResume() {
               label="Summary section"
               name="summaryNotes"
               rows={5}
-              placeholder="Optional: themes, strengths, or industries to highlight. Leave blank and we will write a strong summary for your role."
+              placeholder={
+                form.referenceMaterial
+                  ? 'Filled from your reference document — edit freely. These lines guide the summary bullets we generate.'
+                  : 'Optional: themes, strengths, or industries to highlight. Leave blank and we will write a strong summary for your role.'
+              }
               value={form.summaryNotes}
               onChange={updateField}
               className="form-field--full"
             />
+            {form.referenceMaterial?.experience?.length > 0 && (
+              <p className="builder-ref__hint form-field--full">
+                Reference bullets for{' '}
+                {form.referenceMaterial.experience.filter((e) => e.bullets?.length).length}{' '}
+                job(s) will be woven into Experience when you Build.
+              </p>
+            )}
           </div>
         </section>
 

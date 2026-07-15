@@ -82,6 +82,40 @@ export async function checkApiHealth() {
   }
 }
 
+export async function getBuilderMemory() {
+  const res = await request('/memory')
+  return res.json()
+}
+
+export async function saveBuilderMemory(formData) {
+  const res = await request('/memory', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ formData }),
+  })
+  return res.json()
+}
+
+export async function clearBuilderMemory() {
+  const res = await request('/memory', { method: 'DELETE' })
+  return res.json()
+}
+
+/**
+ * Upload a reference resume/docx/pdf. Returns parsed suggestions for the form
+ * and material the build AI will weave into bullets/summary.
+ */
+export async function uploadReferenceDocument(file) {
+  const form = new FormData()
+  form.append('reference', file)
+  const res = await request('/reference-upload', {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(90000),
+  })
+  return res.json()
+}
+
 export async function startBuild(formData, sessionId = null) {
   const res = await request('/build', {
     method: 'POST',
