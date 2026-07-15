@@ -1,15 +1,14 @@
 import crypto from 'crypto'
 
-/** @type {Map<string, number>} token -> expiry ms */
-const tokens = new Map()
-
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-function cleanExpired() {
-  const now = Date.now()
-  for (const [token, exp] of tokens) {
-    if (exp <= now) tokens.delete(token)
-  }
+/** Optional revoke list for explicit logout (survives only until process restart). */
+/** @type {Set<string>} */
+const revoked = new Set()
+
+function getSigningSecret() {
+  const fromEnv = process.env.ADMIN_SECRET?.trim() || process.env.ADMIN_PASSWORD?.trim()
+  return fromEnv || ''
 }
 
 export function isAdminConfigured() {
@@ -25,27 +24,57 @@ export function verifyAdminPassword(password) {
   return crypto.timingSafeEqual(a, b)
 }
 
+function sign(payloadB64) {
+  const secret = getSigningSecret()
+  return crypto.createHmac('sha256', secret).update(payloadB64).digest('hex')
+}
+
+/**
+ * Stateless admin token — survives Render restarts/redeploys.
+ * Format: base64url(json).hexHmac
+ */
 export function createAdminToken() {
-  cleanExpired()
-  const token = crypto.randomBytes(32).toString('hex')
-  tokens.set(token, Date.now() + TOKEN_TTL_MS)
-  return token
+  const secret = getSigningSecret()
+  if (!secret) throw Object.assign(new Error('ADMIN_PASSWORD is not configured'), { status: 503 })
+
+  const payload = {
+    role: 'admin',
+    exp: Date.now() + TOKEN_TTL_MS,
+    jti: crypto.randomBytes(8).toString('hex'),
+  }
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  return `${payloadB64}.${sign(payloadB64)}`
 }
 
 export function revokeAdminToken(token) {
-  if (token) tokens.delete(token)
+  if (token) revoked.add(token)
 }
 
 export function isValidAdminToken(token) {
-  if (!token) return false
-  cleanExpired()
-  const exp = tokens.get(token)
-  if (!exp) return false
-  if (exp <= Date.now()) {
-    tokens.delete(token)
+  if (!token || typeof token !== 'string') return false
+  if (revoked.has(token)) return false
+
+  const secret = getSigningSecret()
+  if (!secret) return false
+
+  const parts = token.split('.')
+  if (parts.length !== 2) return false
+  const [payloadB64, mac] = parts
+  if (!payloadB64 || !mac) return false
+
+  const expected = sign(payloadB64)
+  const a = Buffer.from(mac)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false
+
+  try {
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
+    if (payload.role !== 'admin') return false
+    if (!payload.exp || payload.exp <= Date.now()) return false
+    return true
+  } catch {
     return false
   }
-  return true
 }
 
 export function requireAdmin(req, res, next) {

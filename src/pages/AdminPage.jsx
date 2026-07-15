@@ -388,7 +388,7 @@ function PricingPanel({ initialPlans, onSaved }) {
   )
 }
 
-function ComplimentaryPanel({ entries, onChange }) {
+function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
   const [email, setEmail] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -412,6 +412,10 @@ function ComplimentaryPanel({ entries, onChange }) {
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])
     } catch (err) {
+      if (/session expired/i.test(err.message || '')) {
+        onSessionExpired?.()
+        return
+      }
       setError(err.message)
     } finally {
       setBusy(false)
@@ -429,6 +433,10 @@ function ComplimentaryPanel({ entries, onChange }) {
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])
     } catch (err) {
+      if (/session expired/i.test(err.message || '')) {
+        onSessionExpired?.()
+        return
+      }
       setError(err.message)
     } finally {
       setBusy(false)
@@ -546,6 +554,18 @@ export default function AdminPage() {
       fetchComplimentaryEmails(),
     ])
 
+    const errors = [tplRes, priceRes, accessRes]
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.reason?.message || 'Request failed')
+
+    if (errors.some((m) => /session expired/i.test(m))) {
+      setAuthed(false)
+      setTemplates([])
+      setPlans([])
+      setComplimentary([])
+      return
+    }
+
     if (tplRes.status === 'fulfilled') setTemplates(tplRes.value.templates || [])
     if (priceRes.status === 'fulfilled') setPlans(priceRes.value.plans || [])
     if (accessRes.status === 'fulfilled') {
@@ -554,9 +574,6 @@ export default function AdminPage() {
       setComplimentary([])
     }
 
-    const errors = [tplRes, priceRes, accessRes]
-      .filter((r) => r.status === 'rejected')
-      .map((r) => r.reason?.message || 'Request failed')
     if (errors.length) setLoadError(errors[0])
   }
 
@@ -670,7 +687,16 @@ export default function AdminPage() {
           <PricingPanel initialPlans={plans} onSaved={setPlans} />
         )}
         {tab === 'access' && (
-          <ComplimentaryPanel entries={complimentary} onChange={setComplimentary} />
+          <ComplimentaryPanel
+            entries={complimentary}
+            onChange={setComplimentary}
+            onSessionExpired={() => {
+              setAuthed(false)
+              setTemplates([])
+              setPlans([])
+              setComplimentary([])
+            }}
+          />
         )}
       </main>
     </div>
