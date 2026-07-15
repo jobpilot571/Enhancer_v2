@@ -540,14 +540,24 @@ export default function AdminPage() {
 
   async function loadData() {
     setLoadError('')
-    const [tplRes, priceRes, accessRes] = await Promise.all([
+    const [tplRes, priceRes, accessRes] = await Promise.allSettled([
       fetchAdminTemplates(),
       fetchAdminPricing(),
       fetchComplimentaryEmails(),
     ])
-    setTemplates(tplRes.templates || [])
-    setPlans(priceRes.plans || [])
-    setComplimentary(accessRes.entries || [])
+
+    if (tplRes.status === 'fulfilled') setTemplates(tplRes.value.templates || [])
+    if (priceRes.status === 'fulfilled') setPlans(priceRes.value.plans || [])
+    if (accessRes.status === 'fulfilled') {
+      setComplimentary(accessRes.value.entries || [])
+    } else {
+      setComplimentary([])
+    }
+
+    const errors = [tplRes, priceRes, accessRes]
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.reason?.message || 'Request failed')
+    if (errors.length) setLoadError(errors[0])
   }
 
   useEffect(() => {

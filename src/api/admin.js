@@ -16,11 +16,21 @@ export function setAdminToken(token) {
 }
 
 async function readErrorMessage(res) {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) {
+    if (res.status === 404) {
+      return 'Admin API route not found — redeploy the Render API so complimentary access is live.'
+    }
+    return 'Admin API returned HTML instead of JSON — check the Render deployment.'
+  }
   try {
     const data = await res.json()
-    return data.error || res.statusText
+    return data.error || res.statusText || 'Request failed'
   } catch {
-    return res.statusText || 'Request failed'
+    if (res.status === 404) {
+      return 'Admin API route not found — redeploy the Render API so complimentary access is live.'
+    }
+    return res.statusText || `Request failed (${res.status})`
   }
 }
 
