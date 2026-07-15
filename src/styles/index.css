@@ -5106,6 +5106,16 @@ body:has(.service-block--enhancer) .footer__col h4 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
+.admin-access-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-lg);
+}
 .admin-plan-card {
   display: flex;
   flex-direction: column;
@@ -5141,6 +5151,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 @media (max-width: 900px) {
   .admin-pricing-grid { grid-template-columns: 1fr; }
   .admin-field-row { grid-template-columns: 1fr; }
+  .admin-access-form { grid-template-columns: 1fr; }
 }
 
 /* ===== Auth pages (login / signup / verify) ===== */

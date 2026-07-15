@@ -9,6 +9,9 @@ const DATA_DIR = path.join(__dirname, '../admin-data')
 const SAMPLES_DIR = path.join(DATA_DIR, 'samples')
 const PRICING_PATH = path.join(DATA_DIR, 'pricing.json')
 const SAMPLES_META_PATH = path.join(DATA_DIR, 'samples-meta.json')
+const COMPLIMENTARY_PATH = path.join(DATA_DIR, 'complimentary-emails.json')
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const DEFAULT_PRICING = {
   plans: [
@@ -223,6 +226,78 @@ export function deleteSample(templateId) {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
   delete meta.samples[templateId]
   saveSamplesMeta(meta)
+  return { ok: true }
+}
+
+function normalizeComplimentaryEmail(email) {
+  return String(email || '').trim().toLowerCase()
+}
+
+function getComplimentaryData() {
+  return readJson(COMPLIMENTARY_PATH, { entries: [] })
+}
+
+function saveComplimentaryData(data) {
+  writeJson(COMPLIMENTARY_PATH, data)
+}
+
+/** Emails that receive free Professional (unlimited) access. */
+export function listComplimentaryEmails() {
+  const data = getComplimentaryData()
+  const entries = Array.isArray(data.entries) ? data.entries : []
+  return entries
+    .map((e) => ({
+      email: normalizeComplimentaryEmail(e.email),
+      note: String(e.note || '').trim(),
+      addedAt: e.addedAt || null,
+    }))
+    .filter((e) => e.email)
+    .sort((a, b) => a.email.localeCompare(b.email))
+}
+
+export function isComplimentaryEmail(email) {
+  const normalized = normalizeComplimentaryEmail(email)
+  if (!normalized) return false
+  return listComplimentaryEmails().some((e) => e.email === normalized)
+}
+
+export function addComplimentaryEmail(email, note = '') {
+  const normalized = normalizeComplimentaryEmail(email)
+  if (!normalized || !EMAIL_RE.test(normalized)) {
+    throw Object.assign(new Error('Enter a valid email address'), { status: 400 })
+  }
+  const data = getComplimentaryData()
+  const entries = Array.isArray(data.entries) ? data.entries : []
+  const existing = entries.find((e) => normalizeComplimentaryEmail(e.email) === normalized)
+  if (existing) {
+    existing.note = String(note || existing.note || '').trim()
+    saveComplimentaryData({ entries })
+    return {
+      email: normalized,
+      note: existing.note,
+      addedAt: existing.addedAt || null,
+      updated: true,
+    }
+  }
+  const entry = {
+    email: normalized,
+    note: String(note || '').trim(),
+    addedAt: new Date().toISOString(),
+  }
+  entries.push(entry)
+  saveComplimentaryData({ entries })
+  return { ...entry, updated: false }
+}
+
+export function removeComplimentaryEmail(email) {
+  const normalized = normalizeComplimentaryEmail(email)
+  const data = getComplimentaryData()
+  const entries = Array.isArray(data.entries) ? data.entries : []
+  const next = entries.filter((e) => normalizeComplimentaryEmail(e.email) !== normalized)
+  if (next.length === entries.length) {
+    throw Object.assign(new Error('Email is not on the complimentary list'), { status: 404 })
+  }
+  saveComplimentaryData({ entries: next })
   return { ok: true }
 }
 

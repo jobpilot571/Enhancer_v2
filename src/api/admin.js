@@ -104,6 +104,23 @@ export async function saveAdminPricing(plans) {
   })
 }
 
+export async function fetchComplimentaryEmails() {
+  return request('/complimentary')
+}
+
+export async function addComplimentaryEmail(email, note = '') {
+  return request('/complimentary', {
+    method: 'POST',
+    body: JSON.stringify({ email, note }),
+  })
+}
+
+export async function removeComplimentaryEmail(email) {
+  return request(`/complimentary/${encodeURIComponent(email)}`, {
+    method: 'DELETE',
+  })
+}
+
 /** Public — no auth */
 export async function fetchPublicPricing() {
   const res = await fetch(`${API_BASE}/public/pricing`, { signal: AbortSignal.timeout(8000) })

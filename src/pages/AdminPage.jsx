@@ -15,11 +15,15 @@ import {
   fetchAdminPricing,
   saveAdminPricing,
   getSampleFileUrl,
+  fetchComplimentaryEmails,
+  addComplimentaryEmail,
+  removeComplimentaryEmail,
 } from '../api/admin'
 
 const TABS = [
   { id: 'templates', label: 'Templates' },
   { id: 'pricing', label: 'Pricing' },
+  { id: 'access', label: 'Free access' },
 ]
 
 function formatBytes(n) {
@@ -384,21 +388,166 @@ function PricingPanel({ initialPlans, onSaved }) {
   )
 }
 
+function ComplimentaryPanel({ entries, onChange }) {
+  const [email, setEmail] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const res = await addComplimentaryEmail(email, note)
+      setEmail('')
+      setNote('')
+      setMessage(
+        res.entry?.updated
+          ? `Updated note for ${res.entry.email}`
+          : `${res.entry.email} now has free Professional access`,
+      )
+      const list = await fetchComplimentaryEmails()
+      onChange?.(list.entries || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRemove(targetEmail) {
+    if (!confirm(`Remove free paid access for ${targetEmail}?`)) return
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      await removeComplimentaryEmail(targetEmail)
+      setMessage(`Removed ${targetEmail}`)
+      const list = await fetchComplimentaryEmails()
+      onChange?.(list.entries || [])
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="admin-panel">
+      <div className="admin-panel__header">
+        <div>
+          <h2>Free paid access</h2>
+          <p>
+            Add emails for friends, employees, or relatives. They get unlimited Professional access
+            while signed in with that email — no charge.
+          </p>
+        </div>
+      </div>
+
+      {error && <p className="admin-error">{error}</p>}
+      {message && <p className="admin-banner admin-banner--ok">{message}</p>}
+
+      <form className="admin-access-form" onSubmit={handleAdd}>
+        <label className="admin-field">
+          <span>Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="friend@example.com"
+            required
+            disabled={busy}
+          />
+        </label>
+        <label className="admin-field">
+          <span>Note (optional)</span>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Friend, employee, relative…"
+            disabled={busy}
+          />
+        </label>
+        <button type="submit" className="btn btn--primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Grant access'}
+        </button>
+      </form>
+
+      <div className="admin-table-wrap" style={{ marginTop: 20 }}>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Note</th>
+              <th>Added</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.length === 0 && (
+              <tr>
+                <td colSpan={4}>
+                  <span className="admin-muted">No complimentary emails yet.</span>
+                </td>
+              </tr>
+            )}
+            {entries.map((entry) => (
+              <tr key={entry.email}>
+                <td>
+                  <strong>{entry.email}</strong>
+                </td>
+                <td>
+                  <span className="admin-muted">{entry.note || '—'}</span>
+                </td>
+                <td>
+                  <span className="admin-muted">
+                    {entry.addedAt ? new Date(entry.addedAt).toLocaleDateString() : '—'}
+                  </span>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={busy}
+                    onClick={() => handleRemove(entry.email)}
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false)
   const [checking, setChecking] = useState(true)
   const [tab, setTab] = useState('templates')
   const [templates, setTemplates] = useState([])
   const [plans, setPlans] = useState([])
+  const [complimentary, setComplimentary] = useState([])
   const [loadError, setLoadError] = useState('')
 
   const catalog = Object.fromEntries(RESUME_TEMPLATES.map((t) => [t.id, t]))
 
   async function loadData() {
     setLoadError('')
-    const [tplRes, priceRes] = await Promise.all([fetchAdminTemplates(), fetchAdminPricing()])
+    const [tplRes, priceRes, accessRes] = await Promise.all([
+      fetchAdminTemplates(),
+      fetchAdminPricing(),
+      fetchComplimentaryEmails(),
+    ])
     setTemplates(tplRes.templates || [])
     setPlans(priceRes.plans || [])
+    setComplimentary(accessRes.entries || [])
   }
 
   useEffect(() => {
@@ -445,6 +594,7 @@ export default function AdminPage() {
     setAuthed(false)
     setTemplates([])
     setPlans([])
+    setComplimentary([])
   }
 
   if (checking) {
@@ -508,6 +658,9 @@ export default function AdminPage() {
         )}
         {tab === 'pricing' && (
           <PricingPanel initialPlans={plans} onSaved={setPlans} />
+        )}
+        {tab === 'access' && (
+          <ComplimentaryPanel entries={complimentary} onChange={setComplimentary} />
         )}
       </main>
     </div>

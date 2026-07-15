@@ -15,6 +15,9 @@ import {
   saveSample,
   deleteSample,
   getTemplateIds,
+  listComplimentaryEmails,
+  addComplimentaryEmail,
+  removeComplimentaryEmail,
 } from '../store/adminStore.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
 import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
@@ -164,6 +167,30 @@ router.put('/pricing', requireAdmin, (req, res, next) => {
     const plans = req.body?.plans
     const saved = savePricing(plans)
     res.json(saved)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ——— Complimentary paid access (friends / employees / relatives) ———
+
+router.get('/complimentary', requireAdmin, (_req, res) => {
+  res.json({ entries: listComplimentaryEmails() })
+})
+
+router.post('/complimentary', requireAdmin, (req, res, next) => {
+  try {
+    const entry = addComplimentaryEmail(req.body?.email, req.body?.note)
+    res.status(entry.updated ? 200 : 201).json({ entry })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.delete('/complimentary/:email', requireAdmin, (req, res, next) => {
+  try {
+    const email = decodeURIComponent(req.params.email || '')
+    res.json(removeComplimentaryEmail(email))
   } catch (err) {
     next(err)
   }

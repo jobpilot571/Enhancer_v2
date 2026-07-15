@@ -17,13 +17,15 @@ import {
   publicUser,
 } from '../store/userStore.js'
 import { getBearerToken } from '../middleware/userAuth.js'
+import { withEntitlements } from '../services/entitlements.js'
 
 const router = Router()
 
 function withUsage(user) {
   if (!user) return null
-  const usage = getUserUsage(user.id, user.plan || 'free')
-  return { ...user, usage }
+  const entitled = withEntitlements(user)
+  const usage = getUserUsage(entitled.id, entitled.plan || 'free')
+  return { ...entitled, usage }
 }
 
 function sessionResponse(userRecord, extra = {}) {

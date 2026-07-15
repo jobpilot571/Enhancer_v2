@@ -1,5 +1,6 @@
 import { getSessionUser } from '../store/userStore.js'
 import { getUserUsage, consumeUsage } from '../store/usageStore.js'
+import { withEntitlements } from '../services/entitlements.js'
 
 export function getBearerToken(req) {
   const header = req.headers.authorization || ''
@@ -8,7 +9,7 @@ export function getBearerToken(req) {
 
 export function requireUser(req, res, next) {
   const token = getBearerToken(req)
-  const user = getSessionUser(token)
+  const user = withEntitlements(getSessionUser(token))
   if (!user) {
     return res.status(401).json({ error: 'Sign in to use this service.', code: 'AUTH_REQUIRED' })
   }
@@ -27,7 +28,7 @@ export function requireUser(req, res, next) {
 
 export function optionalUser(req, _res, next) {
   const token = getBearerToken(req)
-  req.user = getSessionUser(token)
+  req.user = withEntitlements(getSessionUser(token))
   req.userToken = token || null
   next()
 }
