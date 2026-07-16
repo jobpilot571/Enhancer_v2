@@ -594,12 +594,14 @@ Hard rules:
 - Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
 - For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
 - Align every bullet to JD responsibilities, tools, and keywords — sound like someone who already does this job.
+- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets. Almost every JD must-have skill should appear at least once in the present company's bullets.
+- Older companies: still JD-aligned but can emphasize adjacent/related skills — do not dump every JD keyword into every company.
 - If a company has OptionalSummaryGuidance, use it as soft guidance for that company's bullets (do not copy it verbatim into bullets unless it fits).
 - summaryBullets: return EXACTLY ${summaryCount} strong, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
-- skillCategories: return 5–7 category headings. Include ALL JD skills/tools and closely related skills. Category examples: Languages, Frontend, Backend, Cloud, Databases, DevOps, Tools, Methodologies.
-- skills + technicalSkills: flat list of the same skill names (short names only). Prefer JD vocabulary.
+- skillCategories: return 5–7 category headings. Include EVERY skill from the JD list below (required + preferred + tools + keywords) plus closely related skills. Do not omit JD skills.
+- skills + technicalSkills: flat list covering the SAME complete skill set (short names only). Prefer JD vocabulary.
 - email/phone/location: copy from user input.
-- education: return [] (empty array) unless the user provided education (they did not).
+- education: return [] (empty array) unless the user provided education below — then copy those entries.
 - Return experience entries in the SAME order as the companies listed.`,
     `Candidate:
 - Name: ${formData.name}
@@ -609,6 +611,7 @@ Hard rules:
 - User role hint: ${formData.role || '(use JD role)'}
 - Years of experience: ${years}
 - Required summary bullet count: ${summaryCount}
+- Education (use as-is if present): ${JSON.stringify(formData.education || [])}
 
 JD analysis (tailor heavily to this):
 - Role title: ${roleTitle}
@@ -618,9 +621,9 @@ JD analysis (tailor heavily to this):
 - Must-have keywords: ${(jdData?.mustHaveKeywords || []).join(', ') || ''}
 - Domain keywords: ${(jdData?.domainKeywords || []).join(', ') || ''}
 - Key responsibilities: ${(jdData?.responsibilities || []).slice(0, 12).join(' | ') || ''}
-- All JD skills to cover: ${jdSkills.join(', ') || '(extract from JD text)'}
+- All JD skills that MUST appear in skillCategories AND mostly in the PRESENT company bullets: ${jdSkills.join(', ') || '(extract from JD text)'}
 
-Companies (present→past order already applied by caller):
+Companies (present→past order already applied by caller — #1 is present/most recent):
 ${companyLines || '(none)'}
 
 Raw JD excerpt (for extra context):

@@ -37,15 +37,17 @@ export default function App() {
   }
 
   return (
-    <>
-      <Navbar />
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/services/resume-enhancer" element={<ResumeEnhancerPage />} />
-        <Route path="/services/resume-builder" element={<ResumeBuilderPage />} />
-        <Route path="/services/jd-tailored-resume" element={<JDTailoredResumePage />} />
-      </Routes>
-      <Footer />
-    </>
+    <div className="app">
+      <div className="app-shell">
+        <Navbar />
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/services/resume-enhancer" element={<ResumeEnhancerPage />} />
+          <Route path="/services/resume-builder" element={<ResumeBuilderPage />} />
+          <Route path="/services/jd-tailored-resume" element={<JDTailoredResumePage />} />
+        </Routes>
+        <Footer />
+      </div>
+    </div>
   )
 }

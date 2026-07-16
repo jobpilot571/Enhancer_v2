@@ -49,6 +49,100 @@ export function sortCompaniesPresentToPast(companies) {
   })
 }
 
+function collectJdSkills(jdData) {
+  return [...new Set([
+    ...(jdData?.requiredSkills || []),
+    ...(jdData?.preferredSkills || []),
+    ...(jdData?.toolsTechnologies || []),
+    ...(jdData?.mustHaveKeywords || []),
+    ...(jdData?.domainKeywords || []),
+  ].map((s) => String(s || '').trim()).filter(Boolean))]
+}
+
+function skillMentioned(text, skill) {
+  const t = String(text || '').toLowerCase()
+  const s = String(skill || '').toLowerCase().trim()
+  if (!s || s.length < 2) return false
+  return t.includes(s)
+}
+
+/** Ensure JD skills appear in skillCategories and mostly in present-company bullets. */
+function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
+  const jdSkills = collectJdSkills(jdData)
+  if (!jdSkills.length) return resumeData
+
+  let skillCategories = Array.isArray(resumeData.skillCategories)
+    ? resumeData.skillCategories.map((c) => ({
+        category: c.category,
+        skills: [...(c.skills || [])],
+      }))
+    : []
+
+  const covered = new Set(
+    skillCategories.flatMap((c) => c.skills.map((s) => s.toLowerCase())),
+  )
+  const missing = jdSkills.filter((s) => !covered.has(s.toLowerCase()))
+  if (missing.length) {
+    const existing = skillCategories.find((c) => /tool|skill|technolog|core/i.test(c.category))
+    if (existing) {
+      existing.skills = [...new Set([...existing.skills, ...missing])]
+    } else {
+      skillCategories.push({ category: 'Core Technologies', skills: missing })
+    }
+  }
+  skillCategories = skillCategories
+    .filter((c) => c.category && c.skills.length)
+    .slice(0, 7)
+
+  const flatSkills = [...new Set([
+    ...(resumeData.skills || []),
+    ...(resumeData.technicalSkills || []),
+    ...skillCategories.flatMap((c) => c.skills),
+    ...jdSkills,
+  ].map((s) => String(s || '').trim()).filter(Boolean))]
+
+  const experience = [...(resumeData.experience || [])]
+  if (experience.length) {
+    const maxBullets = Math.min(
+      15,
+      Math.max(3, Number(orderedCompanies[0]?.bulletCount) || experience[0].bullets?.length || 8),
+    )
+    const present = { ...experience[0], bullets: [...(experience[0].bullets || [])] }
+    let presentText = present.bullets.join(' ')
+    // Prefer ~70% of JD skills in the present (most recent) company
+    const targetCount = Math.max(1, Math.ceil(jdSkills.length * 0.7))
+    const missingInPresent = jdSkills.filter((s) => !skillMentioned(presentText, s))
+    const toPlace = missingInPresent.slice(0, Math.max(0, targetCount - (jdSkills.length - missingInPresent.length)))
+
+    let skillIdx = 0
+    // First: append short skill clauses onto existing bullets (keeps bullet count)
+    for (let i = 0; i < present.bullets.length && skillIdx < toPlace.length; i++) {
+      const skill = toPlace[skillIdx]
+      if (skillMentioned(present.bullets[i], skill)) continue
+      present.bullets[i] = `${present.bullets[i].replace(/\.$/, '')} using ${skill}.`
+      skillIdx += 1
+    }
+    // Then: fill remaining bullet slots if under budget
+    while (skillIdx < toPlace.length && present.bullets.length < maxBullets) {
+      const skill = toPlace[skillIdx]
+      present.bullets.push(
+        `Leveraged ${skill} to deliver measurable outcomes for stakeholders and production systems.`,
+      )
+      skillIdx += 1
+    }
+    presentText = present.bullets.join(' ')
+    experience[0] = { ...present, bullets: present.bullets.slice(0, maxBullets) }
+  }
+
+  return {
+    ...resumeData,
+    skillCategories,
+    skills: flatSkills,
+    technicalSkills: flatSkills,
+    experience,
+  }
+}
+
 function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
   const roleTitle = String(jdData?.roleTitle || formData.role || '').trim()
   const location = formatCityState(formData.city, formData.state)
@@ -92,19 +186,13 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
       .filter((c) => c.category && c.skills.length)
     : []
 
-  // Ensure at least 5 categories when JD skills exist
-  if (skillCategories.length < 5) {
-    const jdFlat = [
-      ...(jdData?.requiredSkills || []),
-      ...(jdData?.toolsTechnologies || []),
-      ...(jdData?.preferredSkills || []),
-    ].map((s) => String(s || '').trim()).filter(Boolean)
-
+  const jdFlat = collectJdSkills(jdData)
+  if (skillCategories.length < 5 || jdFlat.length) {
     const leftovers = jdFlat.filter(
       (s) => !skillCategories.some((c) => c.skills.some((x) => x.toLowerCase() === s.toLowerCase())),
     )
     if (leftovers.length) {
-      skillCategories.push({ category: 'Additional Tools', skills: leftovers.slice(0, 16) })
+      skillCategories.push({ category: 'Core Technologies', skills: leftovers.slice(0, 24) })
     }
   }
   skillCategories = skillCategories.slice(0, 7)
@@ -114,14 +202,15 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
     ...(aiResume.skills || []),
     ...(aiResume.technicalSkills || []),
     ...flatFromCats,
+    ...jdFlat,
   ].map((s) => String(s || '').trim()).filter(Boolean)
   const skills = [...new Set(aiSkills)]
 
-  return {
+  const merged = {
     name: String(formData.name || aiResume.name || '').trim(),
     email: String(formData.email || '').trim(),
     phone: String(formData.phone || '').trim(),
-    linkedin: '',
+    linkedin: String(formData.linkedin || '').trim(),
     title: roleTitle,
     role: roleTitle,
     location,
@@ -131,8 +220,12 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
     technicalSkills: skills,
     skillCategories,
     experience,
-    education: [],
+    education: Array.isArray(formData.education) && formData.education.length
+      ? formData.education
+      : [],
   }
+
+  return enforceJdSkills(merged, jdData, orderedCompanies)
 }
 
 export async function runJdBuildJob(jobId, sessionId) {
@@ -169,7 +262,7 @@ export async function runJdBuildJob(jobId, sessionId) {
     log(jobId, `content ready — ${resumeData.experience.length} jobs, ${resumeData.summaryBullets.length} summary bullets`)
 
     updateBuildJob(jobId, { step: 'building_docx' })
-    const templateId = formData.templateId || 'jd-classic'
+    const templateId = formData.templateId || 'compact-ats'
     log(jobId, `building DOCX template=${templateId}`)
     const buffer = await generateResumeDocx(resumeData, templateId)
 

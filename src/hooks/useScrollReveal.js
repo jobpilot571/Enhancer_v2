@@ -22,7 +22,9 @@ export default function useScrollReveal() {
 
   useEffect(() => {
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const els = Array.from(document.querySelectorAll(REVEAL_SELECTOR))
+    const els = Array.from(document.querySelectorAll(REVEAL_SELECTOR)).filter(
+      (el) => !el.closest('.jd-wizard') && !el.classList.contains('form-card--jd-step'),
+    )
 
     if (prefersReduced || !('IntersectionObserver' in window)) {
       els.forEach((el) => el.classList.add('reveal--visible'))

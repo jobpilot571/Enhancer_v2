@@ -1,0 +1,278 @@
+/** @typedef {'waiting'|'uploading'|'extracting'|'analyzing'|'ready'|'failed'} UploadStatus */
+/** @typedef {'high'|'medium'|'low'|'unrelated'} RelevanceLevel */
+
+export const JD_STEPS = [
+  { id: 'basic', label: 'Basic Information', short: 'Basics' },
+  { id: 'target', label: 'Target Role', short: 'Target' },
+  { id: 'jd', label: 'Job Description', short: 'JD' },
+  { id: 'references', label: 'Reference Documents', short: 'References' },
+  { id: 'templates', label: 'Templates', short: 'Templates' },
+  { id: 'preview', label: 'Preview', short: 'Preview' },
+]
+
+export const COMPANY_COUNT_OPTIONS = Array.from({ length: 6 }, (_, i) => ({
+  value: String(i + 1),
+  label: String(i + 1),
+}))
+
+export const BULLET_OPTIONS = Array.from({ length: 13 }, (_, i) => ({
+  value: String(i + 3),
+  label: `${i + 3} bullets`,
+}))
+
+export const JD_PRODUCT_TEMPLATES = [
+  {
+    id: 'modern-data',
+    productName: 'Modern Professional',
+    useCase: 'General professional roles',
+    columns: 1,
+    estimatedPages: '1–2',
+  },
+  {
+    id: 'compact-ats',
+    productName: 'Classic ATS',
+    useCase: 'ATS-heavy applications',
+    columns: 1,
+    estimatedPages: '1–2',
+  },
+  {
+    id: 'technical-black',
+    productName: 'Technical Resume',
+    useCase: 'Engineering & IT',
+    columns: 1,
+    estimatedPages: '1–2',
+  },
+  {
+    id: 'navy-executive',
+    productName: 'Executive Professional',
+    useCase: 'Senior / leadership',
+    columns: 1,
+    estimatedPages: '2',
+  },
+  {
+    id: 'minimal-gray',
+    productName: 'Minimal Clean',
+    useCase: 'Clean single-column',
+    columns: 1,
+    estimatedPages: '1–2',
+  },
+]
+
+export function newId(prefix = 'id') {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`
+}
+
+export function emptyEducation() {
+  return {
+    id: newId('edu'),
+    degree: '',
+    major: '',
+    school: '',
+    location: '',
+    graduationYear: '',
+    gpa: '',
+  }
+}
+
+export function emptyExperience() {
+  return {
+    id: newId('exp'),
+    companyName: '',
+    jobTitle: '',
+    city: '',
+    state: '',
+    startDate: '',
+    endDate: '',
+    bulletCount: '8',
+  }
+}
+
+export function syncExperiences(experiences, count) {
+  const n = Math.min(6, Math.max(1, Number(count) || 1))
+  const next = (experiences || []).slice(0, n)
+  while (next.length < n) next.push(emptyExperience())
+  return next
+}
+
+export function emptyCertification() {
+  return {
+    id: newId('cert'),
+    name: '',
+    organization: '',
+    date: '',
+    credentialId: '',
+  }
+}
+
+export function emptySkillCategories() {
+  return {
+    'Programming languages': [],
+    Frameworks: [],
+    Databases: [],
+    'Cloud platforms': [],
+    'DevOps tools': [],
+    'Reporting tools': [],
+    'Testing tools': [],
+    Methodologies: [],
+    'Domain knowledge': [],
+    'Other technologies': [],
+  }
+}
+
+export function createEmptyProject() {
+  return {
+    id: newId('project'),
+    currentStep: 0,
+    status: 'draft',
+    basicInformation: {
+      fullName: '',
+      email: '',
+      phone: '',
+      linkedin: '',
+      city: '',
+      state: '',
+      education: [emptyEducation()],
+      basicResumeFileName: '',
+      basicResumeExtracted: false,
+    },
+    targetRole: {
+      jobTitle: '',
+      yearsOfExperience: '',
+      companyCount: '3',
+      jobDescription: '',
+      jdFileName: '',
+    },
+    experiences: [emptyExperience(), emptyExperience(), emptyExperience()],
+    skills: emptySkillCategories(),
+    certifications: [],
+    referenceDocuments: [],
+    referenceItems: [],
+    selectedTemplateId: 'compact-ats',
+    generatedResume: null,
+    sessionId: null,
+    previewReady: false,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+/** Soft warnings for build review — do not block unless required fields missing. */
+export function collectWarnings(project) {
+  const w = []
+  const b = project.basicInformation || {}
+  const t = project.targetRole || {}
+  if (!String(t.jobDescription || '').trim()) w.push('No job description provided')
+  if (!(project.experiences || []).some((e) => String(e.companyName || '').trim())) {
+    w.push('No work experience entered')
+  }
+  for (const exp of project.experiences || []) {
+    if (String(exp.companyName || '').trim() && !String(exp.startDate || '').trim()) {
+      w.push(`Employment date missing for ${exp.companyName}`)
+    }
+  }
+  const edu = (b.education || [])[0]
+  if (!String(edu?.school || '').trim() && !String(edu?.degree || '').trim()) {
+    w.push('Education details incomplete')
+  }
+  const approved = (project.referenceItems || []).filter((i) => i.approved)
+  if ((project.referenceDocuments || []).length && approved.length === 0) {
+    w.push('No reference material approved')
+  }
+  return w
+}
+
+export function validateStep(project, stepIndex) {
+  const step = JD_STEPS[stepIndex]?.id
+  const b = project.basicInformation || {}
+  const t = project.targetRole || {}
+
+  if (step === 'basic') {
+    if (!String(b.fullName || '').trim()) return 'Please enter your full name.'
+    if (!String(b.email || '').trim()) return 'Please enter your email.'
+    if (!String(b.phone || '').trim()) return 'Please enter your phone number.'
+  }
+  if (step === 'target') {
+    if (!String(t.jobTitle || '').trim()) return 'Please enter the role.'
+    if (t.yearsOfExperience === '' || Number(t.yearsOfExperience) < 0) {
+      return 'Please enter total years of experience.'
+    }
+    if (!t.companyCount) return 'Select how many companies.'
+    const count = Number(t.companyCount) || (project.experiences || []).length
+    const list = (project.experiences || []).slice(0, count)
+    for (let i = 0; i < count; i++) {
+      const e = list[i] || {}
+      if (!String(e.companyName || '').trim()) return `Company ${i + 1}: enter the company name.`
+      if (!String(e.jobTitle || '').trim()) return `Company ${i + 1}: enter the role.`
+      if (!String(e.startDate || '').trim()) return `Company ${i + 1}: enter the start date.`
+      if (!String(e.city || '').trim()) return `Company ${i + 1}: enter the city.`
+      if (!String(e.state || '').trim()) return `Company ${i + 1}: enter the state.`
+      const bullets = Number(e.bulletCount)
+      if (!Number.isFinite(bullets) || bullets < 3 || bullets > 15) {
+        return `Company ${i + 1}: select required bullets (3–15).`
+      }
+    }
+  }
+  if (step === 'jd') {
+    if (!String(t.jobDescription || '').trim() || String(t.jobDescription).trim().length < 80) {
+      return 'Paste a fuller job description (at least a few sentences).'
+    }
+  }
+  if (step === 'templates') {
+    if (!project.selectedTemplateId) return 'Please select a resume template.'
+  }
+  return ''
+}
+
+/**
+ * Bridge to legacy /api/jd-builder/build payload until Phase 6 replaces generation.
+ */
+export function toLegacyBuildPayload(project) {
+  const b = project.basicInformation || {}
+  const t = project.targetRole || {}
+  const years = Number(t.yearsOfExperience) || 0
+  const count = Number(t.companyCount) || (project.experiences || []).length
+  const companies = (project.experiences || []).slice(0, count).map((e) => ({
+    name: String(e.companyName || '').trim(),
+    role: String(e.jobTitle || t.jobTitle || '').trim(),
+    startDate: String(e.startDate || '').trim(),
+    endDate: String(e.endDate || '').trim() || 'Present',
+    city: String(e.city || b.city || '').trim() || 'Remote',
+    state: String(e.state || b.state || '').trim() || 'N/A',
+    summary: '',
+    bulletCount: Number(e.bulletCount) || 8,
+  }))
+
+  return {
+    name: String(b.fullName || '').trim(),
+    email: String(b.email || '').trim(),
+    phone: String(b.phone || '').trim(),
+    linkedin: String(b.linkedin || '').trim(),
+    city: String(b.city || '').trim() || 'Remote',
+    state: String(b.state || '').trim() || 'N/A',
+    role: String(t.jobTitle || '').trim(),
+    yearsOfExperience: years,
+    companyCount: companies.length || 1,
+    templateId: project.selectedTemplateId || 'compact-ats',
+    jdText: String(t.jobDescription || '').trim(),
+    education: (b.education || [])
+      .filter((e) => String(e.school || e.degree || '').trim())
+      .map((e) => ({
+        school: String(e.school || '').trim(),
+        degree: [e.degree, e.major].filter(Boolean).join(' — '),
+        dates: String(e.graduationYear || '').trim(),
+        location: String(e.location || '').trim(),
+        gpa: String(e.gpa || '').trim(),
+      })),
+    companies: companies.length
+      ? companies
+      : [{
+          name: 'Experience',
+          role: String(t.jobTitle || '').trim(),
+          startDate: 'Jan 2020',
+          endDate: 'Present',
+          city: String(b.city || 'Remote').trim(),
+          state: String(b.state || 'N/A').trim(),
+          summary: '',
+          bulletCount: 8,
+        }],
+  }
+}
