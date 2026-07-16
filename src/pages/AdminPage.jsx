@@ -405,9 +405,10 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
       setEmail('')
       setNote('')
       setMessage(
-        res.entry?.updated
-          ? `Updated note for ${res.entry.email}`
-          : `${res.entry.email} now has free Professional access`,
+        res.message
+          || (res.entry?.updated
+            ? `Updated note for ${res.entry.email}`
+            : `${res.entry.email} now has free Professional access`),
       )
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])

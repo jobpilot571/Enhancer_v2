@@ -15,10 +15,13 @@ import {
   saveSample,
   deleteSample,
   getTemplateIds,
+} from '../store/adminStore.js'
+import {
   listComplimentaryEmails,
   addComplimentaryEmail,
   removeComplimentaryEmail,
-} from '../store/adminStore.js'
+} from '../store/complimentaryStore.js'
+import { setUserComplimentaryAccess } from '../store/userStore.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
 import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
 
@@ -175,13 +178,27 @@ router.put('/pricing', requireAdmin, (req, res, next) => {
 // ——— Complimentary paid access (friends / employees / relatives) ———
 
 router.get('/complimentary', requireAdmin, (_req, res) => {
-  res.json({ entries: listComplimentaryEmails() })
+  const entries = listComplimentaryEmails()
+  // Re-apply plan upgrades so existing accounts pick up unlimited access
+  let synced = 0
+  for (const e of entries) {
+    if (setUserComplimentaryAccess(e.email, true, e.note)) synced += 1
+  }
+  res.json({ entries, synced })
 })
 
 router.post('/complimentary', requireAdmin, (req, res, next) => {
   try {
     const entry = addComplimentaryEmail(req.body?.email, req.body?.note)
-    res.status(entry.updated ? 200 : 201).json({ entry })
+    // Also upgrade existing account plan so limits apply immediately
+    const user = setUserComplimentaryAccess(entry.email, true, entry.note)
+    res.status(entry.updated ? 200 : 201).json({
+      entry,
+      userUpdated: Boolean(user),
+      message: user
+        ? `${entry.email} upgraded to Professional (unlimited). They should refresh or sign in again.`
+        : `${entry.email} added. When they sign up / sign in, they get unlimited access.`,
+    })
   } catch (err) {
     next(err)
   }
@@ -190,7 +207,9 @@ router.post('/complimentary', requireAdmin, (req, res, next) => {
 router.delete('/complimentary/:email', requireAdmin, (req, res, next) => {
   try {
     const email = decodeURIComponent(req.params.email || '')
-    res.json(removeComplimentaryEmail(email))
+    removeComplimentaryEmail(email)
+    const user = setUserComplimentaryAccess(email, false)
+    res.json({ ok: true, userUpdated: Boolean(user) })
   } catch (err) {
     next(err)
   }

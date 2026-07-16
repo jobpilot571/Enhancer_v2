@@ -41,14 +41,17 @@ export function getUserUsage(userId, planId = FREE_PLAN) {
   const used = { ...emptyMonth(), ...(data.usage[key] || {}) }
   const limits = getPlanLimits(planId)
 
+  // JSON cannot represent Infinity — use null so clients treat it as unlimited
+  const jsonLimit = (n) => (Number.isFinite(n) ? n : null)
+
   return {
     month,
     plan: planId,
     used,
     limits: {
-      enhancer: limits.enhancer,
-      builder: limits.builder,
-      jdBuilder: limits.jdBuilder,
+      enhancer: jsonLimit(limits.enhancer),
+      builder: jsonLimit(limits.builder),
+      jdBuilder: jsonLimit(limits.jdBuilder),
     },
     remaining: {
       enhancer: Number.isFinite(limits.enhancer) ? Math.max(0, limits.enhancer - used.enhancer) : null,

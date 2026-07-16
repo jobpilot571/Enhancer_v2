@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
+import { isComplimentaryEmail } from './complimentaryStore.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../user-data')
@@ -67,12 +68,62 @@ function publicUser(user, usage = null) {
     email: user.email,
     emailVerified: Boolean(user.emailVerifiedAt),
     plan,
+    complimentary: Boolean(user.complimentary),
     hasPassword: Boolean(user.passwordHash),
     authProvider: user.googleId ? (user.passwordHash ? 'hybrid' : 'google') : 'email',
     createdAt: user.createdAt,
   }
   if (usage) base.usage = usage
   return base
+}
+
+function initialPlanForEmail(email) {
+  return isComplimentaryEmail(email) ? 'professional' : 'free'
+}
+
+/**
+ * Grant or revoke complimentary Professional access on an existing account.
+ * Returns public user or null if no account yet.
+ */
+export function setUserComplimentaryAccess(email, enabled, note = '') {
+  const normalized = normalizeEmail(email)
+  const data = getUsers()
+  const user = data.users.find((u) => u.email === normalized)
+  if (!user) return null
+
+  if (enabled) {
+    user.plan = 'professional'
+    user.complimentary = true
+    user.complimentaryNote = String(note || user.complimentaryNote || '').trim()
+    user.complimentaryAt = new Date().toISOString()
+  } else if (user.complimentary || user.plan === 'professional') {
+    // Only downgrade complimentary grants — leave real paid plans alone later
+    user.plan = 'free'
+    user.complimentary = false
+    user.complimentaryNote = ''
+    user.complimentaryAt = null
+  }
+  saveUsers(data)
+  console.log(`[complimentary] user ${normalized} → plan=${user.plan}`)
+  return publicUser(user)
+}
+
+/** Keep stored plan in sync with whitelist on every session load. */
+function syncComplimentaryPlan(user) {
+  if (!user?.email) return user
+  const complimentary = isComplimentaryEmail(user.email) || Boolean(user.complimentary)
+  if (complimentary && user.plan !== 'professional' && user.plan !== 'enterprise') {
+    user.plan = 'professional'
+    user.complimentary = true
+    const all = getUsers()
+    const idx = all.users.findIndex((u) => u.id === user.id)
+    if (idx >= 0) {
+      all.users[idx].plan = 'professional'
+      all.users[idx].complimentary = true
+      saveUsers(all)
+    }
+  }
+  return user
 }
 
 function getUsers() {
@@ -171,7 +222,8 @@ export function createUser({ name, email, password }) {
     passwordSalt: salt,
     passwordHash: hash,
     googleId: null,
-    plan: 'free',
+    plan: initialPlanForEmail(normalized),
+    complimentary: isComplimentaryEmail(normalized),
     emailVerifiedAt: null,
     createdAt: new Date().toISOString(),
   }
@@ -228,7 +280,8 @@ export function upsertGoogleUser({ googleId, email, name }) {
   if (user) {
     user.googleId = googleId
     // Do NOT auto-verify — email OTP is required for first-time / unverified accounts
-    if (!user.plan) user.plan = 'free'
+    if (!user.plan) user.plan = initialPlanForEmail(normalized)
+    syncComplimentaryPlan(user)
     if (name && (!user.name || user.name === normalized.split('@')[0])) {
       user.name = String(name).trim()
     }
@@ -243,7 +296,8 @@ export function upsertGoogleUser({ googleId, email, name }) {
     passwordSalt: null,
     passwordHash: null,
     googleId,
-    plan: 'free',
+    plan: initialPlanForEmail(normalized),
+    complimentary: isComplimentaryEmail(normalized),
     emailVerifiedAt: null,
     createdAt: new Date().toISOString(),
   }
@@ -404,6 +458,7 @@ export function getSessionUser(token) {
       saveUsers(all)
     }
   }
+  syncComplimentaryPlan(user)
   return publicUser(user)
 }
 

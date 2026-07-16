@@ -7,5 +7,6 @@ server/admin-data/pricing.json
 server/admin-data/samples-meta.json
 server/admin-data/complimentary-emails.json
 server/user-data/
+# complimentary list also lives under user-data (already ignored above)
 .env
 *.log

@@ -1,5 +1,5 @@
 import { FREE_PLAN } from './plans.js'
-import { isComplimentaryEmail } from '../store/adminStore.js'
+import { isComplimentaryEmail } from '../store/complimentaryStore.js'
 
 /**
  * Resolve the plan used for quotas.
@@ -14,10 +14,15 @@ export function resolveEffectivePlan(user) {
 /** Attach effective plan + complimentary flag to a public user object. */
 export function withEntitlements(user) {
   if (!user) return null
-  const complimentaryAccess = isComplimentaryEmail(user.email)
+  const complimentaryAccess =
+    isComplimentaryEmail(user.email) || Boolean(user.complimentary)
+  const storedPlan = user.plan || FREE_PLAN
+  const plan = complimentaryAccess
+    ? 'professional'
+    : (storedPlan === 'professional' || storedPlan === 'enterprise' ? storedPlan : FREE_PLAN)
   return {
     ...user,
-    plan: complimentaryAccess ? 'professional' : (user.plan || FREE_PLAN),
-    complimentaryAccess,
+    plan,
+    complimentaryAccess: complimentaryAccess || storedPlan === 'professional',
   }
 }
