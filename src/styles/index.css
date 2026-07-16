@@ -82,10 +82,12 @@ input, select, textarea { font-family: inherit; }
   min-height: 100vh;
   min-height: 100dvh;
 }
+/* Full-bleed shell — do not cap the whole app or wide screens get empty side gutters.
+   Constrain readable content with .container instead. */
 .app-shell {
   width: 100%;
-  max-width: 1440px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   min-width: 0;
 }
 
