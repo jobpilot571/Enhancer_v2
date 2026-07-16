@@ -2,7 +2,12 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
-import { isComplimentaryEmail } from './complimentaryStore.js'
+import {
+  isComplimentaryEmail,
+  getComplimentaryPlanType,
+  normalizePlanType,
+  planTypeLabel,
+} from './complimentaryStore.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../user-data')
@@ -62,13 +67,21 @@ function hashOtp(code) {
 function publicUser(user, usage = null) {
   if (!user) return null
   const plan = user.plan || 'free'
+  const complimentary = Boolean(user.complimentary) || isComplimentaryEmail(user.email)
+  const typeFromUser = user.complimentaryPlanType
+  const typeFromList = getComplimentaryPlanType(user.email)
+  const planType = complimentary
+    ? normalizePlanType(typeFromUser || typeFromList || 'friend')
+    : null
   const base = {
     id: user.id,
     name: user.name,
     email: user.email,
     emailVerified: Boolean(user.emailVerifiedAt),
     plan,
-    complimentary: Boolean(user.complimentary),
+    complimentary,
+    complimentaryPlanType: planType,
+    planLabel: complimentary ? `${planTypeLabel(planType)} plan` : (plan === 'free' ? 'Free plan' : `${plan} plan`),
     hasPassword: Boolean(user.passwordHash),
     authProvider: user.googleId ? (user.passwordHash ? 'hybrid' : 'google') : 'email',
     createdAt: user.createdAt,
@@ -85,26 +98,29 @@ function initialPlanForEmail(email) {
  * Grant or revoke complimentary Professional access on an existing account.
  * Returns public user or null if no account yet.
  */
-export function setUserComplimentaryAccess(email, enabled, note = '') {
+export function setUserComplimentaryAccess(email, enabled, planType = 'friend') {
   const normalized = normalizeEmail(email)
   const data = getUsers()
   const user = data.users.find((u) => u.email === normalized)
   if (!user) return null
 
   if (enabled) {
+    const type = normalizePlanType(planType)
     user.plan = 'professional'
     user.complimentary = true
-    user.complimentaryNote = String(note || user.complimentaryNote || '').trim()
+    user.complimentaryPlanType = type
+    user.complimentaryNote = planTypeLabel(type)
     user.complimentaryAt = new Date().toISOString()
   } else if (user.complimentary || user.plan === 'professional') {
     // Only downgrade complimentary grants — leave real paid plans alone later
     user.plan = 'free'
     user.complimentary = false
+    user.complimentaryPlanType = null
     user.complimentaryNote = ''
     user.complimentaryAt = null
   }
   saveUsers(data)
-  console.log(`[complimentary] user ${normalized} → plan=${user.plan}`)
+  console.log(`[complimentary] user ${normalized} → plan=${user.plan} type=${user.complimentaryPlanType || 'none'}`)
   return publicUser(user)
 }
 
@@ -112,14 +128,33 @@ export function setUserComplimentaryAccess(email, enabled, note = '') {
 function syncComplimentaryPlan(user) {
   if (!user?.email) return user
   const complimentary = isComplimentaryEmail(user.email) || Boolean(user.complimentary)
-  if (complimentary && user.plan !== 'professional' && user.plan !== 'enterprise') {
+  if (!complimentary) return user
+
+  const type = normalizePlanType(
+    getComplimentaryPlanType(user.email) || user.complimentaryPlanType || 'friend',
+  )
+  let changed = false
+  if (user.plan !== 'professional' && user.plan !== 'enterprise') {
     user.plan = 'professional'
+    changed = true
+  }
+  if (!user.complimentary) {
     user.complimentary = true
+    changed = true
+  }
+  if (user.complimentaryPlanType !== type) {
+    user.complimentaryPlanType = type
+    user.complimentaryNote = planTypeLabel(type)
+    changed = true
+  }
+  if (changed) {
     const all = getUsers()
     const idx = all.users.findIndex((u) => u.id === user.id)
     if (idx >= 0) {
-      all.users[idx].plan = 'professional'
+      all.users[idx].plan = user.plan
       all.users[idx].complimentary = true
+      all.users[idx].complimentaryPlanType = type
+      all.users[idx].complimentaryNote = planTypeLabel(type)
       saveUsers(all)
     }
   }
@@ -224,6 +259,9 @@ export function createUser({ name, email, password }) {
     googleId: null,
     plan: initialPlanForEmail(normalized),
     complimentary: isComplimentaryEmail(normalized),
+    complimentaryPlanType: isComplimentaryEmail(normalized)
+      ? (getComplimentaryPlanType(normalized) || 'friend')
+      : null,
     emailVerifiedAt: null,
     createdAt: new Date().toISOString(),
   }
@@ -298,6 +336,9 @@ export function upsertGoogleUser({ googleId, email, name }) {
     googleId,
     plan: initialPlanForEmail(normalized),
     complimentary: isComplimentaryEmail(normalized),
+    complimentaryPlanType: isComplimentaryEmail(normalized)
+      ? (getComplimentaryPlanType(normalized) || 'friend')
+      : null,
     emailVerifiedAt: null,
     createdAt: new Date().toISOString(),
   }

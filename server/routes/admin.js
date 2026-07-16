@@ -20,6 +20,7 @@ import {
   listComplimentaryEmails,
   addComplimentaryEmail,
   removeComplimentaryEmail,
+  COMPLIMENTARY_PLAN_TYPES,
 } from '../store/complimentaryStore.js'
 import { setUserComplimentaryAccess } from '../store/userStore.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
@@ -182,22 +183,23 @@ router.get('/complimentary', requireAdmin, (_req, res) => {
   // Re-apply plan upgrades so existing accounts pick up unlimited access
   let synced = 0
   for (const e of entries) {
-    if (setUserComplimentaryAccess(e.email, true, e.note)) synced += 1
+    if (setUserComplimentaryAccess(e.email, true, e.planType)) synced += 1
   }
-  res.json({ entries, synced })
+  res.json({ entries, synced, planTypes: COMPLIMENTARY_PLAN_TYPES })
 })
 
 router.post('/complimentary', requireAdmin, (req, res, next) => {
   try {
-    const entry = addComplimentaryEmail(req.body?.email, req.body?.note)
+    const planType = req.body?.planType || req.body?.note
+    const entry = addComplimentaryEmail(req.body?.email, planType)
     // Also upgrade existing account plan so limits apply immediately
-    const user = setUserComplimentaryAccess(entry.email, true, entry.note)
+    const user = setUserComplimentaryAccess(entry.email, true, entry.planType)
     res.status(entry.updated ? 200 : 201).json({
       entry,
       userUpdated: Boolean(user),
       message: user
-        ? `${entry.email} upgraded to Professional (unlimited). They should refresh or sign in again.`
-        : `${entry.email} added. When they sign up / sign in, they get unlimited access.`,
+        ? `${entry.email} set to ${entry.planTypeLabel} plan (unlimited). They should refresh or sign in again.`
+        : `${entry.email} added as ${entry.planTypeLabel}. When they sign up / sign in, they get unlimited access.`,
     })
   } catch (err) {
     next(err)

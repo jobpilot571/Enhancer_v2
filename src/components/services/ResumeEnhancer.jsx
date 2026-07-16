@@ -687,7 +687,7 @@ export default function ResumeEnhancer() {
             <p className="service-block__desc">Upload resume + JD, then enhance. Preview appears below.</p>
             {usageText && (
               <p className="enhancer-usage-chip">
-                Free plan · {usageText}
+                {user?.planLabel || 'Free plan'} · {usageText}
                 {Number.isFinite(enhancerLimit) && enhancerLeft === 0 && (
                   <> · <Link to="/#pricing">Upgrade for more</Link></>
                 )}

@@ -5222,6 +5222,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
   color: var(--gray-600);
 }
 .admin-field input,
+.admin-field select,
 .admin-field textarea {
   font-weight: 500;
   color: var(--gray-700);
@@ -5232,7 +5233,12 @@ body:has(.service-block--enhancer) .footer__col h4 {
   outline: none;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
+.admin-field select {
+  cursor: pointer;
+  min-height: 42px;
+}
 .admin-field input:focus,
+.admin-field select:focus,
 .admin-field textarea:focus {
   border-color: var(--green-400);
   box-shadow: 0 0 0 3px rgba(22, 199, 132, 0.15);

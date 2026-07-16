@@ -10,6 +10,17 @@ const LEGACY_PATH = path.join(ADMIN_DATA_DIR, 'complimentary-emails.json')
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** Complimentary access plan types (display labels for users). */
+export const COMPLIMENTARY_PLAN_TYPES = [
+  { id: 'employee', label: 'Employee' },
+  { id: 'friend', label: 'Friend' },
+  { id: 'admin', label: 'Admin' },
+  { id: 'student', label: 'Student' },
+]
+
+const PLAN_TYPE_IDS = new Set(COMPLIMENTARY_PLAN_TYPES.map((p) => p.id))
+const DEFAULT_PLAN_TYPE = 'friend'
+
 function ensureDirs() {
   if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true })
 }
@@ -30,6 +41,22 @@ function writeJson(filePath, data) {
 
 export function normalizeComplimentaryEmail(email) {
   return String(email || '').trim().toLowerCase()
+}
+
+export function normalizePlanType(value) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (PLAN_TYPE_IDS.has(raw)) return raw
+  // Migrate old free-text notes
+  if (raw.includes('employee')) return 'employee'
+  if (raw.includes('admin')) return 'admin'
+  if (raw.includes('student')) return 'student'
+  if (raw.includes('friend') || raw.includes('relative')) return 'friend'
+  return DEFAULT_PLAN_TYPE
+}
+
+export function planTypeLabel(planType) {
+  const id = normalizePlanType(planType)
+  return COMPLIMENTARY_PLAN_TYPES.find((p) => p.id === id)?.label || 'Friend'
 }
 
 /** Optional comma-separated backup list in env (survives Render disk resets). */
@@ -68,27 +95,30 @@ function saveComplimentaryData(data) {
   writeJson(COMPLIMENTARY_PATH, data)
 }
 
+function shapeEntry(e, source = 'list') {
+  const planType = normalizePlanType(e.planType || e.note)
+  return {
+    email: normalizeComplimentaryEmail(e.email),
+    planType,
+    planTypeLabel: planTypeLabel(planType),
+    // Keep note for backward-compatible clients
+    note: planTypeLabel(planType),
+    addedAt: e.addedAt || null,
+    source,
+  }
+}
+
 /** File + env whitelist (normalized emails). */
 export function listComplimentaryEmails() {
   const data = getComplimentaryData()
   const fromFile = (Array.isArray(data.entries) ? data.entries : [])
-    .map((e) => ({
-      email: normalizeComplimentaryEmail(e.email),
-      note: String(e.note || '').trim(),
-      addedAt: e.addedAt || null,
-      source: 'list',
-    }))
+    .map((e) => shapeEntry(e, 'list'))
     .filter((e) => e.email)
 
   const byEmail = new Map(fromFile.map((e) => [e.email, e]))
   for (const email of envComplimentaryEmails()) {
     if (!byEmail.has(email)) {
-      byEmail.set(email, {
-        email,
-        note: 'From COMPLIMENTARY_EMAILS env',
-        addedAt: null,
-        source: 'env',
-      })
+      byEmail.set(email, shapeEntry({ email, planType: DEFAULT_PLAN_TYPE }, 'env'))
     }
   }
 
@@ -105,33 +135,43 @@ export function isComplimentaryEmail(email) {
   )
 }
 
-export function addComplimentaryEmail(email, note = '') {
+export function getComplimentaryPlanType(email) {
+  const normalized = normalizeComplimentaryEmail(email)
+  if (!normalized) return null
+  const data = getComplimentaryData()
+  const entry = (Array.isArray(data.entries) ? data.entries : []).find(
+    (e) => normalizeComplimentaryEmail(e.email) === normalized,
+  )
+  if (entry) return normalizePlanType(entry.planType || entry.note)
+  if (envComplimentaryEmails().includes(normalized)) return DEFAULT_PLAN_TYPE
+  return null
+}
+
+export function addComplimentaryEmail(email, planType = DEFAULT_PLAN_TYPE) {
   const normalized = normalizeComplimentaryEmail(email)
   if (!normalized || !EMAIL_RE.test(normalized)) {
     throw Object.assign(new Error('Enter a valid email address'), { status: 400 })
   }
+  const type = normalizePlanType(planType)
   const data = getComplimentaryData()
   const entries = Array.isArray(data.entries) ? data.entries : []
   const existing = entries.find((e) => normalizeComplimentaryEmail(e.email) === normalized)
   if (existing) {
-    existing.note = String(note || existing.note || '').trim()
+    existing.planType = type
+    existing.note = planTypeLabel(type)
     saveComplimentaryData({ entries })
-    return {
-      email: normalized,
-      note: existing.note,
-      addedAt: existing.addedAt || null,
-      updated: true,
-    }
+    return { ...shapeEntry(existing), updated: true }
   }
   const entry = {
     email: normalized,
-    note: String(note || '').trim(),
+    planType: type,
+    note: planTypeLabel(type),
     addedAt: new Date().toISOString(),
   }
   entries.push(entry)
   saveComplimentaryData({ entries })
-  console.log(`[complimentary] granted ${normalized}`)
-  return { ...entry, updated: false }
+  console.log(`[complimentary] granted ${normalized} planType=${type}`)
+  return { ...shapeEntry(entry), updated: false }
 }
 
 export function removeComplimentaryEmail(email) {

@@ -388,9 +388,16 @@ function PricingPanel({ initialPlans, onSaved }) {
   )
 }
 
+const PLAN_TYPE_OPTIONS = [
+  { id: 'employee', label: 'Employee' },
+  { id: 'friend', label: 'Friend' },
+  { id: 'admin', label: 'Admin' },
+  { id: 'student', label: 'Student' },
+]
+
 function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
   const [email, setEmail] = useState('')
-  const [note, setNote] = useState('')
+  const [planType, setPlanType] = useState('employee')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -401,14 +408,11 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
     setError('')
     setMessage('')
     try {
-      const res = await addComplimentaryEmail(email, note)
+      const res = await addComplimentaryEmail(email, planType)
       setEmail('')
-      setNote('')
       setMessage(
         res.message
-          || (res.entry?.updated
-            ? `Updated note for ${res.entry.email}`
-            : `${res.entry.email} now has free Professional access`),
+          || `${res.entry.email} set to ${res.entry.planTypeLabel || planType} plan (unlimited)`,
       )
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])
@@ -450,8 +454,8 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
         <div>
           <h2>Free paid access</h2>
           <p>
-            Add emails for friends, employees, or relatives. They get unlimited Professional access
-            while signed in with that email — no charge.
+            Grant unlimited access and choose a plan type label (Employee, Friend, Admin, or Student)
+            shown instead of Free plan.
           </p>
         </div>
       </div>
@@ -472,14 +476,17 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
           />
         </label>
         <label className="admin-field">
-          <span>Note (optional)</span>
-          <input
-            type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Friend, employee, relative…"
+          <span>Plan type</span>
+          <select
+            value={planType}
+            onChange={(e) => setPlanType(e.target.value)}
             disabled={busy}
-          />
+            required
+          >
+            {PLAN_TYPE_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>{opt.label}</option>
+            ))}
+          </select>
         </label>
         <button type="submit" className="btn btn--primary" disabled={busy}>
           {busy ? 'Saving…' : 'Grant access'}
@@ -491,7 +498,7 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
           <thead>
             <tr>
               <th>Email</th>
-              <th>Note</th>
+              <th>Plan type</th>
               <th>Added</th>
               <th>Actions</th>
             </tr>
@@ -510,7 +517,9 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
                   <strong>{entry.email}</strong>
                 </td>
                 <td>
-                  <span className="admin-muted">{entry.note || '—'}</span>
+                  <span className="admin-muted">
+                    {entry.planTypeLabel || entry.note || '—'}
+                  </span>
                 </td>
                 <td>
                   <span className="admin-muted">

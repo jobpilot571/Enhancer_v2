@@ -118,10 +118,10 @@ export async function fetchComplimentaryEmails() {
   return request('/complimentary')
 }
 
-export async function addComplimentaryEmail(email, note = '') {
+export async function addComplimentaryEmail(email, planType = 'friend') {
   return request('/complimentary', {
     method: 'POST',
-    body: JSON.stringify({ email, note }),
+    body: JSON.stringify({ email, planType }),
   })
 }
 

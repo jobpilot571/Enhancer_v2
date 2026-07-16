@@ -1,5 +1,10 @@
 import { FREE_PLAN } from './plans.js'
-import { isComplimentaryEmail } from '../store/complimentaryStore.js'
+import {
+  isComplimentaryEmail,
+  getComplimentaryPlanType,
+  normalizePlanType,
+  planTypeLabel,
+} from '../store/complimentaryStore.js'
 
 /**
  * Resolve the plan used for quotas.
@@ -7,7 +12,7 @@ import { isComplimentaryEmail } from '../store/complimentaryStore.js'
  */
 export function resolveEffectivePlan(user) {
   if (!user) return FREE_PLAN
-  if (isComplimentaryEmail(user.email)) return 'professional'
+  if (isComplimentaryEmail(user.email) || user.complimentary) return 'professional'
   return user.plan || FREE_PLAN
 }
 
@@ -20,9 +25,20 @@ export function withEntitlements(user) {
   const plan = complimentaryAccess
     ? 'professional'
     : (storedPlan === 'professional' || storedPlan === 'enterprise' ? storedPlan : FREE_PLAN)
+
+  const planType = complimentaryAccess
+    ? normalizePlanType(
+      user.complimentaryPlanType || getComplimentaryPlanType(user.email) || 'friend',
+    )
+    : null
+
   return {
     ...user,
     plan,
     complimentaryAccess: complimentaryAccess || storedPlan === 'professional',
+    complimentaryPlanType: planType,
+    planLabel: complimentaryAccess
+      ? `${planTypeLabel(planType)} plan`
+      : (plan === 'free' ? 'Free plan' : `${String(plan).charAt(0).toUpperCase()}${String(plan).slice(1)} plan`),
   }
 }

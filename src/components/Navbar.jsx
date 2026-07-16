@@ -140,7 +140,12 @@ export default function Navbar() {
         <div className="navbar__actions">
           {!loading && isAuthenticated ? (
             <>
-              <span className="navbar__usage" title="Free plan monthly limit">{usageLabel}</span>
+              <span
+                className="navbar__usage"
+                title={user?.planLabel || 'Free plan monthly limit'}
+              >
+                {usageLabel}
+              </span>
               <span className="navbar__user">Hi, {firstName}</span>
               <button type="button" className="btn btn--ghost navbar__signin" onClick={handleLogout}>
                 Sign out
