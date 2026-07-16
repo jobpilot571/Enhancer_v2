@@ -407,58 +407,18 @@ export function getSessionUser(token) {
   return publicUser(user)
 }
 
-const BUILDER_MEMORY_MAX_BYTES = 180_000
-
+/** Persist Basics + Education only (experience, summary, refs, template stay session-only). */
 function sanitizeBuilderMemory(formData) {
   if (!formData || typeof formData !== 'object') return null
-  const companies = Array.isArray(formData.companies)
-    ? formData.companies.slice(0, 6).map((c) => ({
-      name: String(c?.name || '').slice(0, 120),
-      role: String(c?.role || '').slice(0, 120),
-      startDate: String(c?.startDate || '').slice(0, 40),
-      endDate: String(c?.endDate || '').slice(0, 40),
-      city: String(c?.city || '').slice(0, 80),
-      state: String(c?.state || '').slice(0, 40),
-      skills: Array.isArray(c?.skills)
-        ? c.skills.map((s) => String(s || '').slice(0, 60)).filter(Boolean).slice(0, 20)
-        : [],
-    }))
-    : []
-
-  const ref = formData.referenceMaterial && typeof formData.referenceMaterial === 'object'
-    ? {
-      fileName: String(formData.referenceMaterial.fileName || '').slice(0, 200),
-      summaryBullets: Array.isArray(formData.referenceMaterial.summaryBullets)
-        ? formData.referenceMaterial.summaryBullets.map((b) => String(b || '').slice(0, 280)).filter(Boolean).slice(0, 12)
-        : [],
-      experience: Array.isArray(formData.referenceMaterial.experience)
-        ? formData.referenceMaterial.experience.slice(0, 6).map((e) => ({
-          company: String(e?.company || '').slice(0, 120),
-          title: String(e?.title || '').slice(0, 120),
-          bullets: Array.isArray(e?.bullets)
-            ? e.bullets.map((b) => String(b || '').slice(0, 280)).filter(Boolean).slice(0, 12)
-            : [],
-        }))
-        : [],
-      skills: Array.isArray(formData.referenceMaterial.skills)
-        ? formData.referenceMaterial.skills.map((s) => String(s || '').slice(0, 60)).filter(Boolean).slice(0, 40)
-        : [],
-    }
-    : null
-
   const edu = formData.education || {}
-  const memory = {
+  return {
     name: String(formData.name || '').slice(0, 120),
     email: String(formData.email || '').slice(0, 160),
     phone: String(formData.phone || '').slice(0, 40),
     linkedin: String(formData.linkedin || '').slice(0, 200),
     role: String(formData.role || '').slice(0, 120),
     yearsOfExperience: String(formData.yearsOfExperience ?? '').slice(0, 8),
-    companyCount: String(formData.companyCount || companies.length || '1').slice(0, 4),
-    bulletsPerCompany: String(formData.bulletsPerCompany || '8').slice(0, 4),
-    companies,
-    summaryNotes: String(formData.summaryNotes || '').slice(0, 4000),
-    templateId: String(formData.templateId || '').slice(0, 80),
+    companyCount: String(formData.companyCount || '1').slice(0, 4),
     education: {
       school: String(edu.school || '').slice(0, 160),
       course: String(edu.course || '').slice(0, 120),
@@ -466,16 +426,7 @@ function sanitizeBuilderMemory(formData) {
       startDate: String(edu.startDate || '').slice(0, 40),
       endDate: String(edu.endDate || '').slice(0, 40),
     },
-    referenceMaterial: ref,
   }
-
-  const size = Buffer.byteLength(JSON.stringify(memory), 'utf8')
-  if (size > BUILDER_MEMORY_MAX_BYTES) {
-    const err = new Error('Saved memory is too large. Clear the reference document and try again.')
-    err.status = 400
-    throw err
-  }
-  return memory
 }
 
 export function getBuilderMemory(userId) {

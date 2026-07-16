@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import FormField from './FormField'
 import DocumentPreview from './DocumentPreview'
 import DocxViewer from './DocxViewer'
@@ -15,7 +16,6 @@ import {
   uploadReferenceDocument,
   getBuilderMemory,
   saveBuilderMemory,
-  clearBuilderMemory,
 } from '../../api/builder'
 import { getAuthToken, getStoredUser } from '../../api/auth'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
@@ -38,38 +38,47 @@ function readLocalMemory(userId) {
   }
 }
 
+/** Only Basics + Education persist across visits. */
+function stickyMemoryFromForm(form) {
+  return {
+    name: form.name || '',
+    email: form.email || '',
+    phone: form.phone || '',
+    linkedin: form.linkedin || '',
+    role: form.role || '',
+    yearsOfExperience: form.yearsOfExperience ?? '',
+    companyCount: form.companyCount || '1',
+    education: {
+      school: form.education?.school || '',
+      course: form.education?.course || '',
+      degree: form.education?.degree || '',
+      startDate: form.education?.startDate || '',
+      endDate: form.education?.endDate || '',
+    },
+  }
+}
+
 function writeLocalMemory(userId, formData) {
   try {
     localStorage.setItem(
       localMemoryKey(userId),
-      JSON.stringify({ formData, updatedAt: new Date().toISOString() }),
+      JSON.stringify({ formData: stickyMemoryFromForm(formData), updatedAt: new Date().toISOString() }),
     )
   } catch {
     // quota / private mode — ignore
   }
 }
 
-function removeLocalMemory(userId) {
-  try {
-    localStorage.removeItem(localMemoryKey(userId))
-  } catch {
-    /* ignore */
-  }
-}
-
 function hydrateFormFromMemory(saved) {
   if (!saved || typeof saved !== 'object') return null
-  const count = Math.min(6, Math.max(1, Number(saved.companyCount) || (saved.companies || []).length || 1))
+  const sticky = stickyMemoryFromForm(saved)
+  const count = Math.min(6, Math.max(1, Number(sticky.companyCount) || 1))
   return {
     ...initialForm,
-    ...saved,
+    ...sticky,
     companyCount: String(count),
-    companies: syncCompanies(
-      Array.isArray(saved.companies) ? saved.companies.map((c) => ({ ...emptyCompany(), ...c })) : [],
-      count,
-    ),
-    education: { ...initialForm.education, ...(saved.education || {}) },
-    referenceMaterial: saved.referenceMaterial || null,
+    companies: syncCompanies([], count),
+    education: { ...initialForm.education, ...sticky.education },
   }
 }
 
@@ -93,6 +102,7 @@ const SECTIONS = [
   { id: 'experience', label: 'Experience' },
   { id: 'summary', label: 'Summary' },
   { id: 'education', label: 'Education' },
+  { id: 'reference', label: 'Reference' },
   { id: 'templates', label: 'Templates' },
   { id: 'review', label: 'Build' },
 ]
@@ -139,10 +149,68 @@ const initialForm = {
     endDate: '',
   },
   referenceMaterial: null,
+  uploadedReferences: [],
 }
 
 function fillBlank(cur, next) {
   return String(cur || '').trim() ? cur : (next || '')
+}
+
+/** Merge material from multiple reference uploads into one AI-ready blob. */
+function mergeReferenceMaterials(docs) {
+  const list = Array.isArray(docs) ? docs : []
+  if (!list.length) return null
+
+  const experienceByCompany = new Map()
+  const summaryBullets = []
+  const skills = []
+  const fileNames = []
+
+  for (const doc of list) {
+    const m = doc?.material
+    if (!m) continue
+    if (doc.fileName) fileNames.push(doc.fileName)
+    for (const b of m.summaryBullets || []) {
+      const t = String(b || '').trim()
+      if (t) summaryBullets.push(t)
+    }
+    for (const s of m.skills || []) {
+      const t = String(s || '').trim()
+      if (t) skills.push(t)
+    }
+    for (const exp of m.experience || []) {
+      const key = String(exp.company || '').trim().toLowerCase()
+      if (!key) continue
+      const existing = experienceByCompany.get(key)
+      if (!existing) {
+        experienceByCompany.set(key, {
+          company: String(exp.company || '').trim(),
+          title: String(exp.title || '').trim(),
+          bullets: [...(exp.bullets || []).map((b) => String(b || '').trim()).filter(Boolean)],
+        })
+      } else {
+        const seen = new Set(existing.bullets.map((b) => b.toLowerCase()))
+        for (const b of exp.bullets || []) {
+          const t = String(b || '').trim()
+          if (t && !seen.has(t.toLowerCase())) {
+            existing.bullets.push(t)
+            seen.add(t.toLowerCase())
+          }
+        }
+        if (!existing.title && exp.title) existing.title = String(exp.title).trim()
+      }
+    }
+  }
+
+  return {
+    fileName: fileNames.join(' · ') || 'References',
+    summaryBullets: [...new Set(summaryBullets)].slice(0, 24),
+    experience: [...experienceByCompany.values()].map((e) => ({
+      ...e,
+      bullets: e.bullets.slice(0, 20),
+    })),
+    skills: [...new Set(skills)].slice(0, 60),
+  }
 }
 
 /** Merge extracted reference suggestions into the builder form. */
@@ -214,7 +282,7 @@ function syncCompanies(companies, count) {
 }
 
 export default function BuildNewResume() {
-  const [activeSection, setActiveSection] = useState(0)
+  const [step, setStep] = useState(0)
   const [form, setForm] = useState(initialForm)
   const [error, setError] = useState('')
   const [apiOk, setApiOk] = useState(null)
@@ -227,13 +295,12 @@ export default function BuildNewResume() {
   const [samplePreview, setSamplePreview] = useState(null)
   const [refUploading, setRefUploading] = useState(false)
   const [refSuggestions, setRefSuggestions] = useState(null)
-  const [memoryInfo, setMemoryInfo] = useState({ hasMemory: false, updatedAt: null })
-  const [memoryBusy, setMemoryBusy] = useState(false)
-  const [memoryNotice, setMemoryNotice] = useState('')
+  const [cacheReady, setCacheReady] = useState(false)
+  const [cacheNotice, setCacheNotice] = useState('')
+  const [uploadAuthPrompt, setUploadAuthPrompt] = useState(false)
   const refInputRef = useRef(null)
   const buildingRef = useRef(false)
-  const scrollingRef = useRef(false)
-  const sectionRefs = useRef({})
+  const cacheTimerRef = useRef(null)
   const signedIn = Boolean(getAuthToken() && getStoredUser())
 
   useEffect(() => {
@@ -241,58 +308,43 @@ export default function BuildNewResume() {
     const user = getStoredUser()
     const token = getAuthToken()
 
-    // Instant restore from local backup
-    const local = readLocalMemory(user?.id)
-    if (local?.formData) {
-      const hydrated = hydrateFormFromMemory(local.formData)
-      if (hydrated) {
-        setForm(hydrated)
-        setRefSuggestions(hydrated.referenceMaterial
-          ? {
-            fileName: hydrated.referenceMaterial.fileName || 'Saved reference',
-            stats: {
-              companies: hydrated.referenceMaterial.experience?.length || 0,
-              bullets: (hydrated.referenceMaterial.experience || []).reduce((n, e) => n + (e.bullets?.length || 0), 0),
-              summaryLines: hydrated.referenceMaterial.summaryBullets?.length || 0,
-            },
+    async function hydrate() {
+      // Instant restore from local cache
+      const local = readLocalMemory(user?.id)
+      if (local?.formData) {
+        const hydrated = hydrateFormFromMemory(local.formData)
+        if (hydrated) {
+          setForm(hydrated)
+          if (local.updatedAt) {
+            setCacheNotice(`Restored Basics & Education (saved ${formatMemoryTime(local.updatedAt)}).`)
           }
-          : null)
-        setMemoryInfo({ hasMemory: true, updatedAt: local.updatedAt || null })
-        setMemoryNotice('Restored your saved details from this device.')
+        }
       }
+
+      // Account cache wins if available
+      if (token && user) {
+        try {
+          const data = await getBuilderMemory()
+          if (cancelled) return
+          if (data?.formData) {
+            const hydrated = hydrateFormFromMemory(data.formData)
+            if (hydrated) {
+              setForm(hydrated)
+              writeLocalMemory(user.id, data.formData)
+              if (data.updatedAt) {
+                setCacheNotice(`Restored Basics & Education (saved ${formatMemoryTime(data.updatedAt)}).`)
+              }
+            }
+          }
+        } catch {
+          /* keep local restore */
+        }
+      }
+
+      if (!cancelled) setCacheReady(true)
     }
 
-    // Account memory wins if available
-    if (token && user) {
-      getBuilderMemory()
-        .then((data) => {
-          if (cancelled || !data?.formData) {
-            if (!cancelled && data) {
-              setMemoryInfo({ hasMemory: Boolean(data.hasMemory), updatedAt: data.updatedAt })
-            }
-            return
-          }
-          const hydrated = hydrateFormFromMemory(data.formData)
-          if (!hydrated) return
-          setForm(hydrated)
-          writeLocalMemory(user.id, data.formData)
-          setMemoryInfo({ hasMemory: true, updatedAt: data.updatedAt })
-          setRefSuggestions(hydrated.referenceMaterial
-            ? {
-              fileName: hydrated.referenceMaterial.fileName || 'Saved reference',
-              stats: {
-                companies: hydrated.referenceMaterial.experience?.length || 0,
-                bullets: (hydrated.referenceMaterial.experience || []).reduce((n, e) => n + (e.bullets?.length || 0), 0),
-                summaryLines: hydrated.referenceMaterial.summaryBullets?.length || 0,
-              },
-            }
-            : null)
-          setMemoryNotice('Loaded your saved memory from your account.')
-        })
-        .catch(() => {
-          /* keep local restore */
-        })
-    }
+    hydrate()
 
     checkApiHealth().then((h) => {
       if (!cancelled) setApiOk(h.ok)
@@ -323,36 +375,70 @@ export default function BuildNewResume() {
     return () => { cancelled = true }
   }, [])
 
-  // Highlight nav item based on which section is in view
+  // Auto-cache Basics + Education only (local + backend when signed in)
   useEffect(() => {
-    const observers = []
-    SECTIONS.forEach((section, index) => {
-      const el = sectionRefs.current[section.id]
-      if (!el) return
-      const obs = new IntersectionObserver(
-        ([entry]) => {
-          if (scrollingRef.current) return
-          if (entry.isIntersecting) setActiveSection(index)
-        },
-        { rootMargin: '-20% 0px -55% 0px', threshold: 0.1 },
-      )
-      obs.observe(el)
-      observers.push(obs)
-    })
-    return () => observers.forEach((o) => o.disconnect())
-  }, [])
+    if (!cacheReady || building) return undefined
+    const user = getStoredUser()
+    const payload = stickyMemoryFromForm(form)
 
-  function scrollToSection(index) {
-    const id = SECTIONS[index]?.id
-    const el = sectionRefs.current[id]
-    if (!el) return
-    scrollingRef.current = true
-    setActiveSection(index)
+    writeLocalMemory(user?.id, payload)
+
+    if (!getAuthToken() || !user) return undefined
+
+    clearTimeout(cacheTimerRef.current)
+    cacheTimerRef.current = setTimeout(() => {
+      saveBuilderMemory(payload)
+        .then((result) => {
+          if (result?.formData) writeLocalMemory(user.id, result.formData)
+          setCacheNotice(
+            result?.updatedAt
+              ? `Auto-saved Basics & Education ${formatMemoryTime(result.updatedAt)}`
+              : 'Auto-saved Basics & Education',
+          )
+        })
+        .catch(() => {
+          /* quiet — local cache still works */
+        })
+    }, 1500)
+
+    return () => clearTimeout(cacheTimerRef.current)
+  }, [
+    form.name,
+    form.email,
+    form.phone,
+    form.linkedin,
+    form.role,
+    form.yearsOfExperience,
+    form.companyCount,
+    form.education,
+    cacheReady,
+    building,
+  ])
+
+  function openUploadIfSignedIn(inputRef) {
+    if (!signedIn) {
+      setUploadAuthPrompt(true)
+      setError('')
+      return
+    }
+    setUploadAuthPrompt(false)
+    inputRef.current?.click()
+  }
+
+  /** Free navigation — required fields checked only on Build. */
+  function goToStep(index) {
     setError('')
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    window.setTimeout(() => {
-      scrollingRef.current = false
-    }, 600)
+    setUploadAuthPrompt(false)
+    setStep(Math.max(0, Math.min(SECTIONS.length - 1, index)))
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function goNext() {
+    goToStep(step + 1)
+  }
+
+  function goBack() {
+    goToStep(step - 1)
   }
 
   async function openSamplePreview(templateId, e) {
@@ -416,22 +502,69 @@ export default function BuildNewResume() {
   }
 
   async function handleReferenceUpload(e) {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files || [])
     e.target.value = ''
-    if (!file) return
-
-    const lower = file.name.toLowerCase()
-    if (!lower.endsWith('.docx') && !lower.endsWith('.pdf')) {
-      setError('Reference document must be a .docx or .pdf file.')
+    if (!files.length) return
+    if (!signedIn) {
+      setUploadAuthPrompt(true)
       return
     }
 
+    const existing = Array.isArray(form.uploadedReferences) ? form.uploadedReferences : []
+    const remaining = Math.max(0, 10 - existing.length)
+    if (remaining <= 0) {
+      setError('You can upload up to 10 reference documents. Remove one to add another.')
+      return
+    }
+
+    const batch = files.slice(0, remaining)
+    const skipped = files.length - batch.length
     setRefUploading(true)
     setError('')
+    setRefSuggestions(null)
+
     try {
-      const result = await uploadReferenceDocument(file)
-      setRefSuggestions(result.suggestions)
-      setForm((f) => applyReferenceSuggestions(f, result.suggestions))
+      let nextDocs = [...existing]
+      let lastSuggestions = null
+
+      for (const file of batch) {
+        const lower = file.name.toLowerCase()
+        if (!lower.endsWith('.docx') && !lower.endsWith('.pdf')) {
+          setError(`Skipped ${file.name} — only .docx or .pdf allowed.`)
+          continue
+        }
+        const result = await uploadReferenceDocument(file)
+        const suggestions = result.suggestions
+        lastSuggestions = suggestions
+        const entry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          fileName: suggestions?.fileName || file.name,
+          stats: suggestions?.stats || {},
+          uploadedAt: new Date().toISOString(),
+          material: suggestions?.referenceMaterial || null,
+        }
+        nextDocs = [
+          ...nextDocs.filter((d) => d.fileName?.toLowerCase() !== entry.fileName.toLowerCase()),
+          entry,
+        ].slice(0, 10)
+      }
+
+      const merged = mergeReferenceMaterials(nextDocs)
+      setRefSuggestions(lastSuggestions)
+      setForm((f) => {
+        const patched = lastSuggestions
+          ? applyReferenceSuggestions({ ...f, uploadedReferences: nextDocs }, lastSuggestions)
+          : { ...f, uploadedReferences: nextDocs }
+        return {
+          ...patched,
+          uploadedReferences: nextDocs,
+          referenceMaterial: merged,
+        }
+      })
+
+      if (skipped > 0) {
+        setError(`Added ${batch.length} file(s). ${skipped} skipped (10-document limit).`)
+      }
     } catch (err) {
       setError(err.message || 'Could not read that reference document.')
     } finally {
@@ -441,85 +574,27 @@ export default function BuildNewResume() {
 
   function clearReference() {
     setRefSuggestions(null)
-    setForm((f) => ({ ...f, referenceMaterial: null }))
+    setForm((f) => ({ ...f, referenceMaterial: null, uploadedReferences: [] }))
     setError('')
   }
 
-  async function handleSaveMemory() {
-    const user = getStoredUser()
-    if (!getAuthToken() || !user) {
-      setError('Sign in to save your details for next time.')
-      return
-    }
-    setMemoryBusy(true)
-    setError('')
-    setMemoryNotice('')
-    try {
-      const payload = buildPayload()
-      const result = await saveBuilderMemory(payload)
-      writeLocalMemory(user.id, result.formData || payload)
-      setMemoryInfo({ hasMemory: true, updatedAt: result.updatedAt || new Date().toISOString() })
-      setMemoryNotice('Saved. Next visit, these details will load automatically.')
-    } catch (err) {
-      setError(err.message || 'Could not save memory.')
-    } finally {
-      setMemoryBusy(false)
-    }
-  }
-
-  async function handleLoadMemory() {
-    const user = getStoredUser()
-    setMemoryBusy(true)
-    setError('')
-    setMemoryNotice('')
-    try {
-      let formData = null
-      let updatedAt = null
-      if (getAuthToken() && user) {
-        const data = await getBuilderMemory()
-        formData = data.formData
-        updatedAt = data.updatedAt
+  function removeReferenceDoc(id) {
+    setForm((f) => {
+      const nextDocs = (f.uploadedReferences || []).filter((d) => d.id !== id)
+      if (!nextDocs.length) {
+        setRefSuggestions(null)
+        return { ...f, uploadedReferences: [], referenceMaterial: null }
       }
-      if (!formData) {
-        const local = readLocalMemory(user?.id)
-        formData = local?.formData || null
-        updatedAt = local?.updatedAt || null
+      return {
+        ...f,
+        uploadedReferences: nextDocs,
+        referenceMaterial: mergeReferenceMaterials(nextDocs),
       }
-      if (!formData) {
-        setError('No saved memory yet. Fill the form and click Save my details.')
-        return
-      }
-      const hydrated = hydrateFormFromMemory(formData)
-      setForm(hydrated)
-      setMemoryInfo({ hasMemory: true, updatedAt })
-      setMemoryNotice('Loaded your saved details.')
-    } catch (err) {
-      setError(err.message || 'Could not load saved memory.')
-    } finally {
-      setMemoryBusy(false)
-    }
-  }
-
-  async function handleClearMemory() {
-    const user = getStoredUser()
-    setMemoryBusy(true)
-    setError('')
-    setMemoryNotice('')
-    try {
-      if (getAuthToken() && user) {
-        await clearBuilderMemory()
-      }
-      removeLocalMemory(user?.id)
-      setMemoryInfo({ hasMemory: false, updatedAt: null })
-      setMemoryNotice('Saved memory cleared.')
-    } catch (err) {
-      setError(err.message || 'Could not clear saved memory.')
-    } finally {
-      setMemoryBusy(false)
-    }
+    })
   }
 
   function validateSection(index) {
+    // Match SECTIONS order: basics, experience, summary, education, reference, templates, review
     if (index === 0) {
       if (!form.name.trim()) return 'Please enter your name.'
       if (!form.email.trim()) return 'Please enter your email.'
@@ -552,7 +627,7 @@ export default function BuildNewResume() {
       if (!edu.startDate.trim()) return 'Enter education start date.'
     }
 
-    if (index === 4) {
+    if (index === 5) {
       if (!form.templateId) return 'Please select a resume template.'
     }
 
@@ -589,6 +664,7 @@ export default function BuildNewResume() {
         endDate: form.education.endDate.trim(),
       },
       referenceMaterial: form.referenceMaterial || null,
+      uploadedReferences: Array.isArray(form.uploadedReferences) ? form.uploadedReferences : [],
     }
   }
 
@@ -597,7 +673,7 @@ export default function BuildNewResume() {
       const msg = validateSection(i)
       if (msg) {
         setError(msg)
-        scrollToSection(i)
+        setStep(i)
         return
       }
     }
@@ -608,7 +684,7 @@ export default function BuildNewResume() {
     setError('')
     setPreviewBlob(null)
     setBuildStep('generating_content')
-    scrollToSection(SECTIONS.length - 1)
+    setStep(SECTIONS.length - 1)
 
     try {
       const payload = buildPayload()
@@ -622,21 +698,24 @@ export default function BuildNewResume() {
       const blob = await fetchFileBlob(result.sessionId || sid)
       setPreviewBlob(blob)
       setSessionId(result.sessionId || sid)
-      scrollToSection(SECTIONS.length - 1)
+      setStep(SECTIONS.length - 1)
 
-      // Quietly keep account memory fresh after a successful build
+      // Keep Basics + Education sticky after a successful build
       const user = getStoredUser()
+      const sticky = stickyMemoryFromForm(payload)
       if (getAuthToken() && user) {
-        saveBuilderMemory(payload)
+        saveBuilderMemory(sticky)
           .then((mem) => {
-            writeLocalMemory(user.id, mem.formData || payload)
-            setMemoryInfo({ hasMemory: true, updatedAt: mem.updatedAt || new Date().toISOString() })
+            writeLocalMemory(user.id, mem.formData || sticky)
+            if (mem.updatedAt) {
+              setCacheNotice(`Auto-saved Basics & Education ${formatMemoryTime(mem.updatedAt)}`)
+            }
           })
           .catch(() => {
-            writeLocalMemory(user.id, payload)
+            writeLocalMemory(user.id, sticky)
           })
       } else {
-        writeLocalMemory(user?.id, payload)
+        writeLocalMemory(user?.id, sticky)
       }
     } catch (err) {
       setError(err.message || 'Failed to build resume')
@@ -647,12 +726,7 @@ export default function BuildNewResume() {
   }
 
   const companyCount = Number(form.companyCount) || form.companies.length
-
-  function setSectionRef(id) {
-    return (el) => {
-      if (el) sectionRefs.current[id] = el
-    }
-  }
+  const isLastStep = step === SECTIONS.length - 1
 
   return (
     <div className="service-block">
@@ -661,8 +735,14 @@ export default function BuildNewResume() {
         <div>
           <h3 className="service-block__title">Professional Resume Builder</h3>
           <p className="service-block__desc">
-            Answer a few questions — or upload a reference document — and we&apos;ll generate a polished DOCX for you.
+            Enter your details step by step — optionally add reference docs for experience — and we&apos;ll generate a polished DOCX.
           </p>
+          {!signedIn && (
+            <p className="enhancer-usage-chip">
+              <Link to="/login">Sign in</Link> required to build — free plan includes 5 resume builds / month.
+              You can fill the form first; Build needs an account.
+            </p>
+          )}
         </div>
       </div>
 
@@ -672,13 +752,13 @@ export default function BuildNewResume() {
         </div>
       )}
 
-      <nav className="builder-steps builder-steps--sticky" aria-label="Resume builder sections">
+      <nav className="builder-steps" aria-label="Resume builder steps">
         {SECTIONS.map((s, i) => (
           <button
             key={s.id}
             type="button"
-            className={`builder-steps__item ${i === activeSection ? 'is-active' : ''} ${i < activeSection ? 'is-done' : ''}`}
-            onClick={() => scrollToSection(i)}
+            className={`builder-steps__item ${i === step ? 'is-active' : ''} ${i < step ? 'is-done' : ''}`}
+            onClick={() => goToStep(i)}
           >
             <span className="builder-steps__num">{i + 1}</span>
             <span className="builder-steps__label">{s.label}</span>
@@ -686,110 +766,20 @@ export default function BuildNewResume() {
         ))}
       </nav>
 
-      <div className="form-card form-card--single">
-        <section
-          id="builder-basics"
-          ref={setSectionRef('basics')}
-          className="builder-section"
-        >
+      <div className="form-card">
+        {step === 0 && (
+        <section id="builder-basics" className="builder-section">
           <h4 className="builder-section__title">
             <span className="builder-section__num">1</span>
             Basics
           </h4>
 
-          <div className="builder-ref builder-ref--memory">
-            <div className="builder-ref__copy">
-              <strong>Saved memory</strong>
-              <p>
-                Save your basics, experience, education, and summary once — we&apos;ll restore them
-                next time so you don&apos;t retype everything.
-                {!signedIn ? ' Sign in to keep this on your account across devices.' : ''}
-              </p>
+          {cacheNotice && (
+            <div className="builder-ref__hint" role="status">
+              {cacheNotice}
+              {!signedIn ? ' Sign in to sync across devices.' : ''}
             </div>
-            <div className="builder-ref__actions">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                disabled={memoryBusy || building}
-                onClick={handleSaveMemory}
-              >
-                {memoryBusy ? 'Saving…' : 'Save my details'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                disabled={memoryBusy || building}
-                onClick={handleLoadMemory}
-              >
-                Load saved
-              </button>
-              {memoryInfo.hasMemory && (
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  disabled={memoryBusy || building}
-                  onClick={handleClearMemory}
-                >
-                  Clear memory
-                </button>
-              )}
-            </div>
-            {(memoryNotice || memoryInfo.updatedAt) && (
-              <div className="builder-ref__status" role="status">
-                {memoryNotice || 'Saved memory ready.'}
-                {memoryInfo.updatedAt
-                  ? ` Last saved ${formatMemoryTime(memoryInfo.updatedAt)}.`
-                  : ''}
-              </div>
-            )}
-          </div>
-
-          <div className="builder-ref">
-            <div className="builder-ref__copy">
-              <strong>Optional: reference document</strong>
-              <p>
-                Upload an old resume or notes (DOCX/PDF). We&apos;ll pull companies, summary lines,
-                and bullets so the generated resume can reuse your real achievements.
-              </p>
-            </div>
-            <input
-              ref={refInputRef}
-              type="file"
-              accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              hidden
-              onChange={handleReferenceUpload}
-            />
-            <div className="builder-ref__actions">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                disabled={refUploading || building}
-                onClick={() => refInputRef.current?.click()}
-              >
-                {refUploading ? 'Reading document…' : (refSuggestions ? 'Replace document' : 'Upload reference')}
-              </button>
-              {(refSuggestions || form.referenceMaterial) && (
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  disabled={refUploading || building}
-                  onClick={clearReference}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {refSuggestions && (
-              <div className="builder-ref__status" role="status">
-                Applied from <strong>{refSuggestions.fileName}</strong>
-                {' — '}
-                {refSuggestions.stats?.companies || 0} companies,{' '}
-                {refSuggestions.stats?.bullets || 0} bullets,{' '}
-                {refSuggestions.stats?.summaryLines || 0} summary lines.
-                Review Experience and Summary next, then Build.
-              </div>
-            )}
-          </div>
+          )}
 
           <div className="form-grid">
             <FormField
@@ -856,12 +846,10 @@ export default function BuildNewResume() {
             />
           </div>
         </section>
+        )}
 
-        <section
-          id="builder-experience"
-          ref={setSectionRef('experience')}
-          className="builder-section"
-        >
+        {step === 1 && (
+        <section id="builder-experience" className="builder-section">
           <h4 className="builder-section__title">
             <span className="builder-section__num">2</span>
             Experience
@@ -936,12 +924,10 @@ export default function BuildNewResume() {
             ))}
           </div>
         </section>
+        )}
 
-        <section
-          id="builder-summary"
-          ref={setSectionRef('summary')}
-          className="builder-section"
-        >
+        {step === 2 && (
+        <section id="builder-summary" className="builder-section">
           <h4 className="builder-section__title">
             <span className="builder-section__num">3</span>
             Summary
@@ -969,12 +955,10 @@ export default function BuildNewResume() {
             )}
           </div>
         </section>
+        )}
 
-        <section
-          id="builder-education"
-          ref={setSectionRef('education')}
-          className="builder-section"
-        >
+        {step === 3 && (
+        <section id="builder-education" className="builder-section">
           <h4 className="builder-section__title">
             <span className="builder-section__num">4</span>
             Education
@@ -1022,14 +1006,132 @@ export default function BuildNewResume() {
             />
           </div>
         </section>
+        )}
 
-        <section
-          id="builder-templates"
-          ref={setSectionRef('templates')}
-          className="builder-section"
-        >
+        {step === 4 && (
+        <section id="builder-reference" className="builder-section">
           <h4 className="builder-section__title">
             <span className="builder-section__num">5</span>
+            Reference
+          </h4>
+          <div className="builder-upload">
+            <div className="builder-upload__copy">
+              <strong>Optional: reference documents</strong>
+              <p>
+                Upload up to 10 old resumes or notes (DOCX/PDF). We&apos;ll merge real project
+                involvement, summary lines, experience bullets, and skills into an ATS-friendly,
+                professional resume.
+                {!signedIn && (
+                  <>
+                    {' '}
+                    <Link to="/login">Sign in</Link> or <Link to="/signup">sign up</Link> to upload.
+                  </>
+                )}
+              </p>
+            </div>
+            <input
+              ref={refInputRef}
+              type="file"
+              accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              hidden
+              multiple
+              onChange={handleReferenceUpload}
+            />
+            <button
+              type="button"
+              className="builder-upload__btn"
+              disabled={refUploading || building || (form.uploadedReferences?.length || 0) >= 10}
+              onClick={() => openUploadIfSignedIn(refInputRef)}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              {refUploading
+                ? 'Reading document…'
+                : (form.uploadedReferences?.length || 0) >= 10
+                  ? 'Limit reached (10)'
+                  : 'Upload reference'}
+            </button>
+            {uploadAuthPrompt && !signedIn && (
+              <p className="enhancer-usage-chip" role="status">
+                Please <Link to="/login">sign in</Link> or <Link to="/signup">sign up</Link> to upload a reference document.
+              </p>
+            )}
+
+            {(form.uploadedReferences?.length > 0) && (
+              <>
+                <div className="builder-doc-grid" aria-label="Uploaded reference documents">
+                  {form.uploadedReferences.map((doc) => (
+                    <div key={doc.id} className="builder-doc-box">
+                      <div className="builder-doc-box__top">
+                        <span className="builder-doc-box__ext">
+                          {(doc.fileName || '').toLowerCase().endsWith('.pdf') ? 'PDF' : 'DOCX'}
+                        </span>
+                        <button
+                          type="button"
+                          className="builder-doc-box__remove"
+                          onClick={() => removeReferenceDoc(doc.id)}
+                          aria-label={`Remove ${doc.fileName}`}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div className="builder-doc-box__icon" aria-hidden="true">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                      </div>
+                      <strong className="builder-doc-box__name" title={doc.fileName}>
+                        {doc.fileName}
+                      </strong>
+                      <small className="builder-doc-box__stats">
+                        {doc.stats?.companies || 0} cos · {doc.stats?.bullets || 0} bullets
+                      </small>
+                    </div>
+                  ))}
+                </div>
+                <p className="builder-ref__hint">
+                  {form.uploadedReferences.length} of 10 documents
+                  {form.referenceMaterial
+                    ? ` · merged for summary, experience bullets & skills`
+                    : ''}
+                </p>
+              </>
+            )}
+
+            {refSuggestions && (
+              <div className="builder-ref__status" role="status">
+                Latest file applied: <strong>{refSuggestions.fileName}</strong>
+                {' — '}
+                {refSuggestions.stats?.companies || 0} companies,{' '}
+                {refSuggestions.stats?.bullets || 0} bullets,{' '}
+                {refSuggestions.stats?.summaryLines || 0} summary lines.
+              </div>
+            )}
+
+            {(form.uploadedReferences?.length > 0) && (
+              <div className="builder-ref__actions">
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={refUploading || building}
+                  onClick={clearReference}
+                >
+                  Clear all references
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+        )}
+
+        {step === 5 && (
+        <section id="builder-templates" className="builder-section">
+          <h4 className="builder-section__title">
+            <span className="builder-section__num">6</span>
             Templates
           </h4>
           <div className="template-grid">
@@ -1081,14 +1183,12 @@ export default function BuildNewResume() {
             })}
           </div>
         </section>
+        )}
 
-        <section
-          id="builder-review"
-          ref={setSectionRef('review')}
-          className="builder-section"
-        >
+        {step === 6 && (
+        <section id="builder-review" className="builder-section">
           <h4 className="builder-section__title">
-            <span className="builder-section__num">6</span>
+            <span className="builder-section__num">7</span>
             Build
           </h4>
           <div className="builder-review">
@@ -1133,38 +1233,65 @@ export default function BuildNewResume() {
             )}
           </div>
         </section>
+        )}
 
         {error && <p className="builder-error" role="alert">{error}</p>}
 
         <div className="form-cta form-cta--nav">
-          <button
-            type="button"
-            className="btn btn--primary btn--xl"
-            onClick={handleBuild}
-            disabled={building}
-          >
-            {building ? (
-              <>
-                <span className="btn-spinner" />
-                {getBuildStepLabel(buildStep)}
-              </>
-            ) : (
-              <>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="12" y1="18" x2="12" y2="12" />
-                  <line x1="9" y1="15" x2="15" y2="15" />
-                </svg>
-                {previewBlob ? 'Rebuild Resume' : 'Build Resume'}
-              </>
-            )}
-          </button>
+          {step > 0 && (
+            <button
+              type="button"
+              className="btn btn--outline btn--xl"
+              onClick={goBack}
+              disabled={building}
+            >
+              Back
+            </button>
+          )}
 
-          {previewBlob && sessionId && (
-            <a href={getDownloadUrl(sessionId)} className="btn btn--outline btn--xl" download>
-              Download DOCX
-            </a>
+          {!isLastStep && (
+            <button
+              type="button"
+              className="btn btn--primary btn--xl"
+              onClick={goNext}
+              disabled={building}
+            >
+              Next
+            </button>
+          )}
+
+          {isLastStep && (
+            <>
+              <button
+                type="button"
+                className="btn btn--primary btn--xl"
+                onClick={handleBuild}
+                disabled={building}
+              >
+                {building ? (
+                  <>
+                    <span className="btn-spinner" />
+                    {getBuildStepLabel(buildStep)}
+                  </>
+                ) : (
+                  <>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="12" y1="18" x2="12" y2="12" />
+                      <line x1="9" y1="15" x2="15" y2="15" />
+                    </svg>
+                    {previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+                  </>
+                )}
+              </button>
+
+              {previewBlob && sessionId && (
+                <a href={getDownloadUrl(sessionId)} className="btn btn--outline btn--xl" download>
+                  Download DOCX
+                </a>
+              )}
+            </>
           )}
         </div>
       </div>

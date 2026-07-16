@@ -10,7 +10,7 @@ import {
 } from '../store/sessionStore.js'
 import { createBuildJob, getBuildJob } from '../store/buildJobStore.js'
 import { runBuildJob } from '../services/buildWorker.js'
-import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
+import { requireUser, checkUsage, consumeUsage, optionalUser } from '../middleware/userAuth.js'
 import {
   getBuilderMemory,
   saveBuilderMemory,
@@ -122,9 +122,9 @@ router.delete('/memory', requireUser, (req, res, next) => {
 /**
  * Upload a reference resume/doc. Extracts bullets + basics so the form
  * (and later AI generation) can produce a stronger DOCX. Does not consume
- * a builder usage credit.
+ * a builder usage credit. Works signed-out or signed-in.
  */
-router.post('/reference-upload', requireUser, upload.single('reference'), async (req, res, next) => {
+router.post('/reference-upload', optionalUser, upload.single('reference'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
@@ -151,8 +151,9 @@ router.post('/reference-upload', requireUser, upload.single('reference'), async 
       fileName: req.file.originalname,
     })
 
+    const userTag = req.user?.id || 'guest'
     console.log(
-      `[builder] reference-upload user=${req.user.id} file=${req.file.originalname} `
+      `[builder] reference-upload user=${userTag} file=${req.file.originalname} `
       + `method=${method} companies=${suggestions.stats.companies} bullets=${suggestions.stats.bullets}`,
     )
 
