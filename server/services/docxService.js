@@ -132,6 +132,16 @@ function getRawParagraphText(chunk) {
     .join('')
 }
 
+/** Split category-label vs skills body around the first <w:tab/> (tab-column layouts). */
+function getParagraphTextPartsAroundTab(chunk) {
+  const tabIdx = chunk.search(/<w:tab[\s/>]/)
+  if (tabIdx === -1) return null
+  return {
+    before: getRawParagraphText(chunk.slice(0, tabIdx)).trim(),
+    after: getRawParagraphText(chunk.slice(tabIdx)).trim(),
+  }
+}
+
 function detectLiteralBulletPrefix(chunk) {
   const raw = getRawParagraphText(chunk)
   const m = raw.match(/^(\s*[•\u2022▪◦]\s+)/)
@@ -620,56 +630,120 @@ function normalizePageMargins(xml) {
 }
 
 function normalizeParagraphIndents(xml) {
-  return xml.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
-    const get = (name) => {
-      const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
-      return m ? parseInt(m[1], 10) : null
-    }
-    let left = get('w:left')
-    let hanging = get('w:hanging')
-    let firstLine = get('w:firstLine')
-    let right = get('w:right')
-    let changed = false
+  // Process per paragraph so we can preserve tab-column skills layouts
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    const hasTabLayout = /<w:tabs\b/.test(para) || /<w:tab[\s/>]/.test(para)
+    const tabPosMatch = [...para.matchAll(/<w:tab\b[^>]*w:pos="(\d+)"/g)]
+    const designedCol = tabPosMatch.length
+      ? Math.max(...tabPosMatch.map((m) => parseInt(m[1], 10)))
+      : null
 
-    if (left != null && left > MAX_PARA_LEFT_IND) {
-      // Extreme indents (1"+) cause the "shoved right" look on many BA resumes
-      left = left > 1440 ? 720 : MAX_PARA_LEFT_IND
-      changed = true
+    // Classic skills layout: left indent ≈ hanging indent (both large) to align wrapped lines
+    const indTag = para.match(/<w:ind\b[^/]*\/>/)
+    let isHangingColumn = false
+    if (indTag) {
+      const leftM = /w:left="(\d+)"/.exec(indTag[0])
+      const hangM = /w:hanging="(\d+)"/.exec(indTag[0])
+      const left = leftM ? parseInt(leftM[1], 10) : 0
+      const hanging = hangM ? parseInt(hangM[1], 10) : 0
+      if (hanging >= 720 && left >= hanging - 240) isHangingColumn = true
     }
-    if (hanging != null && hanging > MAX_PARA_HANGING) {
-      hanging = MAX_PARA_HANGING
-      changed = true
-    }
-    // Hanging indent larger than left pushes glyphs outside the clip region
-    if (left != null && hanging != null && hanging > left) {
-      hanging = Math.min(hanging, Math.max(0, left))
-      changed = true
-    }
-    if (firstLine != null && firstLine > 720) {
-      firstLine = 360
-      changed = true
-    }
-    if (right != null && right > 720) {
-      right = 0
-      changed = true
-    }
-    if (!changed) return tag
 
-    const parts = []
-    if (left != null) parts.push(`w:left="${left}"`)
-    if (hanging != null) parts.push(`w:hanging="${hanging}"`)
-    if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
-    if (right != null) parts.push(`w:right="${right}"`)
-    // Keep start/end attributes if present (Word 2010+)
-    for (const name of ['w:start', 'w:end']) {
-      const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
-      if (m) {
-        let v = parseInt(m[1], 10)
-        if (v > MAX_PARA_LEFT_IND) v = 720
-        parts.push(`${name}="${v}"`)
+    // Skills / two-column lines: never crush hanging indent — that causes the
+    // "label then huge gap then skills / wrapped lines misaligned" mess.
+    if (hasTabLayout || isHangingColumn || designedCol) {
+      return para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+        const get = (name) => {
+          const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+          return m ? parseInt(m[1], 10) : null
+        }
+        let left = get('w:left')
+        let hanging = get('w:hanging')
+        let firstLine = get('w:firstLine')
+        let right = get('w:right')
+        let changed = false
+        const col = designedCol || hanging || left || 2880
+
+        // Restore hanging if a prior pass destroyed the column align
+        if (designedCol && (hanging == null || hanging < designedCol * 0.55)) {
+          hanging = designedCol
+          left = Math.max(left || 0, designedCol)
+          changed = true
+        }
+        // Only clamp absurd >5" indents
+        if (left != null && left > 7200) {
+          left = col
+          changed = true
+        }
+        if (hanging != null && hanging > 7200) {
+          hanging = col
+          changed = true
+        }
+        if (right != null && right > 1440) {
+          right = 0
+          changed = true
+        }
+        if (!changed) return tag
+
+        const parts = []
+        if (left != null) parts.push(`w:left="${left}"`)
+        if (hanging != null) parts.push(`w:hanging="${hanging}"`)
+        if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
+        if (right != null) parts.push(`w:right="${right}"`)
+        return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
+      })
+    }
+
+    // Non-column body text: clamp extreme shove-right indents only
+    return para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+      const get = (name) => {
+        const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+        return m ? parseInt(m[1], 10) : null
       }
-    }
-    return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
+      let left = get('w:left')
+      let hanging = get('w:hanging')
+      let firstLine = get('w:firstLine')
+      let right = get('w:right')
+      let changed = false
+
+      // Only clamp pathological body indents (>1"), not normal list bullets (~720)
+      if (left != null && left > 1440) {
+        left = 720
+        changed = true
+      }
+      if (hanging != null && hanging > 720 && !(left != null && hanging >= (left - 240))) {
+        hanging = MAX_PARA_HANGING
+        changed = true
+      }
+      if (left != null && hanging != null && hanging > left) {
+        hanging = Math.min(hanging, Math.max(0, left))
+        changed = true
+      }
+      if (firstLine != null && firstLine > 720) {
+        firstLine = 360
+        changed = true
+      }
+      if (right != null && right > 720) {
+        right = 0
+        changed = true
+      }
+      if (!changed) return tag
+
+      const parts = []
+      if (left != null) parts.push(`w:left="${left}"`)
+      if (hanging != null) parts.push(`w:hanging="${hanging}"`)
+      if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
+      if (right != null) parts.push(`w:right="${right}"`)
+      for (const name of ['w:start', 'w:end']) {
+        const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+        if (m) {
+          let v = parseInt(m[1], 10)
+          if (v > 1440) v = 720
+          parts.push(`${name}="${v}"`)
+        }
+      }
+      return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
+    })
   })
 }
 
@@ -1578,27 +1652,34 @@ function discoverSkillCategoryLines(xml) {
 
     if (plain && !isSkillsSectionTitle(plain)) {
       const colonMatch = plain.match(/^([^:]{2,48}):\s*(.*)$/)
-      if (colonMatch) {
-        const label = colonMatch[1].replace(/[•\u2022]/g, '').trim()
-        const rest = (colonMatch[2] || '').trim()
-        // Only real short category labels — skip prose / already-dumped lines
-        if (
-          label.length >= 2
-          && label.length <= 40
-          && label.split(/\s+/).length <= 6
-          && !label.includes(',')
-          && rest.length < 350
-        ) {
-          lines.push({
-            label,
-            plain,
-            raw,
-            paraEnd,
-            pStart,
-            restLen: rest.length,
-            inTable: isParagraphInsideTable(xml, pStart),
-          })
-        }
+      // Tab-column "Category<TAB>skills..." — w:tab is not present in plain text
+      const tabParts = !colonMatch ? getParagraphTextPartsAroundTab(chunk) : null
+      const label = colonMatch
+        ? colonMatch[1].replace(/[•\u2022]/g, '').trim()
+        : (tabParts?.before || '').replace(/[•\u2022]/g, '').trim()
+      const rest = colonMatch
+        ? (colonMatch[2] || '').trim()
+        : (tabParts?.after || '')
+
+      if (
+        label
+        && label.length >= 2
+        && label.length <= 48
+        && label.split(/\s+/).length <= 8
+        && !label.includes(',')
+        && rest.length < 350
+        && (colonMatch || tabParts)
+      ) {
+        lines.push({
+          label,
+          plain,
+          raw,
+          paraEnd,
+          pStart,
+          restLen: rest.length,
+          inTable: isParagraphInsideTable(xml, pStart),
+          hasTabLayout: /<w:tabs\b/.test(chunk) || /<w:tab[\s/>]/.test(chunk) || Boolean(tabParts),
+        })
       }
     }
 
@@ -1711,14 +1792,15 @@ function redistributeSkillsToExistingCategories(plan, xml) {
       continue
     }
     const bucket = ensureBucket(line)
-    const maxPerLine = line.inTable ? 3 : 5
+    const maxPerLine = line.inTable ? 2 : (line.hasTabLayout ? 3 : 5)
     if (bucket.skills.length >= maxPerLine) {
       skipped.push(skill)
       continue
     }
     // Skip if line is already long — appending more breaks table/column layouts
+    const maxRest = line.inTable ? 120 : (line.hasTabLayout ? 160 : 220)
     const projected = (line.restLen || 0) + bucket.skills.join(', ').length + skill.length
-    if (projected > (line.inTable ? 140 : 220)) {
+    if (projected > maxRest) {
       skipped.push(skill)
       continue
     }
@@ -1734,6 +1816,7 @@ function redistributeSkillsToExistingCategories(plan, xml) {
       skills: b.skills,
       paraEnd: b.line.paraEnd,
       inTable: !!b.line.inTable,
+      hasTabLayout: !!b.line.hasTabLayout,
     }))
 
   return { entries, categoryLines, skipped }
@@ -1867,6 +1950,15 @@ function extractLastRunRPr(xml, paragraphEnd) {
   const chunk = getParagraphChunk(xml, paragraphEnd)
   const styles = extractRunStyles(chunk)
   // Skills lines often bold/underline category labels; append skills in normal body style
+  return stripUnderline(styles.baseRPr || stripBold(styles.boldRPr) || '')
+}
+
+/** Prefer run props from the skills body (after the category tab), not the bold label. */
+function extractSkillsBodyRPr(xml, paragraphEnd) {
+  const chunk = getParagraphChunk(xml, paragraphEnd)
+  const tabIdx = chunk.search(/<w:tab[\s/>]/)
+  const bodyChunk = tabIdx >= 0 ? chunk.slice(tabIdx) : chunk
+  const styles = extractRunStyles(bodyChunk)
   return stripUnderline(styles.baseRPr || stripBold(styles.boldRPr) || '')
 }
 
@@ -2575,8 +2667,12 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     if (!chunk || isSkillsSectionTitle(getPlainTextFromParagraph(chunk))) continue
 
     const existingText = getRawParagraphText(chunk).trimEnd()
-    // Hard stop: never dump into an already-long skills line (breaks 2-col tables)
-    const maxLineLen = entry.inTable ? 160 : 260
+    const hasTabLayout = entry.hasTabLayout
+      || /<w:tabs\b/.test(chunk)
+      || /<w:tab[\s/>]/.test(chunk)
+    // Tab/hanging-column skills lines break easily — keep appends tiny
+    const maxLineLen = entry.inTable ? 140 : (hasTabLayout ? 180 : 240)
+    const maxAdd = entry.inTable ? 2 : (hasTabLayout ? 3 : 5)
     if (existingText.length > maxLineLen) continue
 
     const room = Math.max(0, maxLineLen - existingText.length - 2)
@@ -2586,14 +2682,15 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
       if (!isValidSkillName(skill)) continue
       const addLen = skill.length + 2
       if (used + addLen > room) break
-      if (toAdd.length >= (entry.inTable ? 3 : 5)) break
+      if (toAdd.length >= maxAdd) break
       toAdd.push(skill)
       used += addLen
     }
     if (!toAdd.length) continue
 
-    const needsComma = existingText.length > 0 && !/[,;:]$/.test(existingText)
-    const rPr = extractLastRunRPr(xml, entry.paraEnd)
+    // Never insert before the tab that separates category label from skills list
+    const needsComma = existingText.length > 0 && !/[,;:\t]$/.test(existingText)
+    const rPr = extractSkillsBodyRPr(xml, entry.paraEnd)
     const runs = toAdd.map((s, i) => buildSkillRun(s, rPr, mark, {
       leadingSeparator: i === 0 ? (needsComma ? ', ' : ' ') : ', ',
     })).join('')

@@ -191,7 +191,11 @@ export function findGeometryDefects(xml) {
   let extremeInd = 0
   for (const m of xml.matchAll(/<w:ind\b[^/]*\/>/g)) {
     const left = /w:left="(\d+)"/.exec(m[0])
+    const hang = /w:hanging="(\d+)"/.exec(m[0])
     const n = left ? parseInt(left[1], 10) : 0
+    const hanging = hang ? parseInt(hang[1], 10) : 0
+    // Tab-column skills use large left≈hanging — not a layout defect
+    if (hanging >= 720 && n >= hanging - 240) continue
     if (n > 1440) extremeInd += 1
   }
   if (extremeInd > 0) {

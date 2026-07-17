@@ -179,6 +179,52 @@ assert(!/w:w="600"/.test(fixedGeo), 'skinny gridCol widened')
 assert(!/w:left="2880" w:hanging/.test(fixedGeo), 'extreme para indent capped')
 assert(fixedGeo.includes('Experienced Business Analyst'), 'full sentence preserved')
 
+// --- Skills tab-column layout: hanging ≈ left must NOT be crushed ---
+const skillsTabBody = [
+  '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>TECHNICAL SKILLS</w:t></w:r></w:p>',
+  '<w:p><w:pPr>',
+  '<w:tabs><w:tab w:val="left" w:pos="2880"/></w:tabs>',
+  '<w:ind w:left="2880" w:hanging="2880"/>',
+  '</w:pPr>',
+  '<w:r><w:rPr><w:b/></w:rPr><w:t>Business Analysis &amp; Requirements</w:t></w:r>',
+  '<w:r><w:tab/></w:r>',
+  '<w:r><w:t>Requirements Gathering, Stakeholder Management, Process Mapping, Gap Analysis</w:t></w:r>',
+  '</w:p>',
+  '<w:p><w:pPr>',
+  '<w:tabs><w:tab w:val="left" w:pos="2880"/></w:tabs>',
+  '<w:ind w:left="2880" w:hanging="2880"/>',
+  '</w:pPr>',
+  '<w:r><w:rPr><w:b/></w:rPr><w:t>Agile &amp; SDLC</w:t></w:r>',
+  '<w:r><w:tab/></w:r>',
+  '<w:r><w:t>Scrum, Kanban, User Stories, Acceptance Criteria</w:t></w:r>',
+  '</w:p>',
+  '<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>',
+].join('')
+
+const skillsXml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${skillsTabBody}</w:body></w:document>`
+const skillsGeoFixed = normalizeDocxGeometry(skillsXml)
+assert(/w:left="2880"/.test(skillsGeoFixed), 'skills column left indent preserved')
+assert(/w:hanging="2880"/.test(skillsGeoFixed), 'skills hanging indent preserved')
+assert(!findGeometryDefects(skillsGeoFixed).some((d) => d.code === 'extreme_indent'), 'skills column not flagged as extreme indent')
+
+const skillsBuf = makeDocx(skillsTabBody)
+const skillsPlan = {
+  summaryBullets: [],
+  experienceAdditions: [],
+  bulletRewrites: [],
+  skillsToAdd: ['Jira', 'Confluence'],
+  skillsByCategory: [{ category: 'Agile & SDLC', skills: ['Jira'] }],
+}
+const { buffer: skillsPatched } = patchDocx(skillsBuf, skillsPlan, {
+  highlight: false,
+  resumeData: { name: 'Vamsidhar', experience: [] },
+})
+const skillsOut = new PizZip(skillsPatched).file('word/document.xml').asText()
+assert(/w:left="2880"/.test(skillsOut), 'patch preserves skills left column')
+assert(/w:hanging="2880"/.test(skillsOut), 'patch preserves skills hanging column')
+assert(/<w:tab[\s/>]/.test(skillsOut), 'patch preserves category tab')
+assert(skillsOut.includes('Business Analysis'), 'skills labels intact')
+
 const geoBuf = makeDocx(skinnyTableBody.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, '') + '<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="2880"/></w:sectPr>')
 const geoEnsured = ensureEnhancedResumeQuality(geoBuf, geoBuf, { name: 'Arpitha', experience: [{ company: 'Anthem' }] }, { maxAttempts: 2 })
 const geoOut = new PizZip(geoEnsured.buffer).file('word/document.xml').asText()
