@@ -10,6 +10,7 @@ import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
 import { isEmailConfigured } from './services/email.js'
+import { initComplimentaryStore, getComplimentaryStorageStatus } from './store/complimentaryStore.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -68,6 +69,7 @@ app.get('/api/health', (_req, res) => {
     adminConfigured: isAdminConfigured(),
     emailConfigured: isEmailConfigured(),
     googleAuthConfigured: isGoogleAuthConfigured(),
+    complimentaryStorage: getComplimentaryStorageStatus(),
   })
 })
 
@@ -75,6 +77,8 @@ app.use((err, _req, res, _next) => {
   console.error(err)
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' })
 })
+
+await initComplimentaryStore()
 
 app.listen(PORT, () => {
   console.log(`Resume Enhancer API running on port ${PORT}`)

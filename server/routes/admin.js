@@ -21,6 +21,7 @@ import {
   addComplimentaryEmail,
   removeComplimentaryEmail,
   COMPLIMENTARY_PLAN_TYPES,
+  getComplimentaryStorageStatus,
 } from '../store/complimentaryStore.js'
 import { setUserComplimentaryAccess } from '../store/userStore.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
@@ -178,25 +179,36 @@ router.put('/pricing', requireAdmin, (req, res, next) => {
 
 // ——— Complimentary paid access (friends / employees / relatives) ———
 
-router.get('/complimentary', requireAdmin, (_req, res) => {
-  const entries = listComplimentaryEmails()
-  // Re-apply plan upgrades so existing accounts pick up unlimited access
-  let synced = 0
-  for (const e of entries) {
-    if (setUserComplimentaryAccess(e.email, true, e.planType)) synced += 1
+router.get('/complimentary', requireAdmin, async (_req, res, next) => {
+  try {
+    const entries = listComplimentaryEmails()
+    // Re-apply plan upgrades so existing accounts pick up unlimited access
+    let synced = 0
+    for (const e of entries) {
+      if (setUserComplimentaryAccess(e.email, true, e.planType)) synced += 1
+    }
+    res.json({
+      entries,
+      synced,
+      planTypes: COMPLIMENTARY_PLAN_TYPES,
+      storage: getComplimentaryStorageStatus(),
+    })
+  } catch (err) {
+    next(err)
   }
-  res.json({ entries, synced, planTypes: COMPLIMENTARY_PLAN_TYPES })
 })
 
-router.post('/complimentary', requireAdmin, (req, res, next) => {
+router.post('/complimentary', requireAdmin, async (req, res, next) => {
   try {
     const planType = req.body?.planType || req.body?.note
-    const entry = addComplimentaryEmail(req.body?.email, planType)
+    const entry = await addComplimentaryEmail(req.body?.email, planType)
     // Also upgrade existing account plan so limits apply immediately
     const user = setUserComplimentaryAccess(entry.email, true, entry.planType)
+    const storage = getComplimentaryStorageStatus()
     res.status(entry.updated ? 200 : 201).json({
       entry,
       userUpdated: Boolean(user),
+      storage,
       message: user
         ? `${entry.email} set to ${entry.planTypeLabel} plan (unlimited). They should refresh or sign in again.`
         : `${entry.email} added as ${entry.planTypeLabel}. When they sign up / sign in, they get unlimited access.`,
@@ -206,12 +218,12 @@ router.post('/complimentary', requireAdmin, (req, res, next) => {
   }
 })
 
-router.delete('/complimentary/:email', requireAdmin, (req, res, next) => {
+router.delete('/complimentary/:email', requireAdmin, async (req, res, next) => {
   try {
     const email = decodeURIComponent(req.params.email || '')
-    removeComplimentaryEmail(email)
+    await removeComplimentaryEmail(email)
     const user = setUserComplimentaryAccess(email, false)
-    res.json({ ok: true, userUpdated: Boolean(user) })
+    res.json({ ok: true, userUpdated: Boolean(user), storage: getComplimentaryStorageStatus() })
   } catch (err) {
     next(err)
   }

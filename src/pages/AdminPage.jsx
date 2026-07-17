@@ -395,12 +395,17 @@ const PLAN_TYPE_OPTIONS = [
   { id: 'student', label: 'Student' },
 ]
 
-function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
+function ComplimentaryPanel({ entries, onChange, onSessionExpired, storage }) {
   const [email, setEmail] = useState('')
   const [planType, setPlanType] = useState('employee')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [storageInfo, setStorageInfo] = useState(storage || null)
+
+  useEffect(() => {
+    setStorageInfo(storage || null)
+  }, [storage])
 
   async function handleAdd(e) {
     e.preventDefault()
@@ -410,12 +415,14 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
     try {
       const res = await addComplimentaryEmail(email, planType)
       setEmail('')
+      if (res.storage) setStorageInfo(res.storage)
       setMessage(
         res.message
           || `${res.entry.email} set to ${res.entry.planTypeLabel || planType} plan (unlimited)`,
       )
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])
+      if (list.storage) setStorageInfo(list.storage)
     } catch (err) {
       if (/session expired/i.test(err.message || '')) {
         onSessionExpired?.()
@@ -433,10 +440,12 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
     setError('')
     setMessage('')
     try {
-      await removeComplimentaryEmail(targetEmail)
+      const res = await removeComplimentaryEmail(targetEmail)
+      if (res.storage) setStorageInfo(res.storage)
       setMessage(`Removed ${targetEmail}`)
       const list = await fetchComplimentaryEmails()
       onChange?.(list.entries || [])
+      if (list.storage) setStorageInfo(list.storage)
     } catch (err) {
       if (/session expired/i.test(err.message || '')) {
         onSessionExpired?.()
@@ -459,6 +468,20 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired }) {
           </p>
         </div>
       </div>
+
+      {storageInfo && !storageInfo.durable && (
+        <p className="admin-banner admin-banner--warn">
+          Emails are wiped when Render redeploys. To keep them permanently, add on Render:
+          {' '}<code>COMPLIMENTARY_GIST_ID</code> + <code>GITHUB_TOKEN</code>
+          {' '}(create a private GitHub Gist with file <code>complimentary-emails.json</code>,
+          content <code>{`{"entries":[]}`}</code>, then paste the Gist ID and a token with gist scope).
+        </p>
+      )}
+      {storageInfo?.durable && (
+        <p className="admin-banner admin-banner--ok">
+          Permanent storage is on — add emails once; they survive redeploys.
+        </p>
+      )}
 
       {error && <p className="admin-error">{error}</p>}
       {message && <p className="admin-banner admin-banner--ok">{message}</p>}
@@ -552,6 +575,7 @@ export default function AdminPage() {
   const [templates, setTemplates] = useState([])
   const [plans, setPlans] = useState([])
   const [complimentary, setComplimentary] = useState([])
+  const [complimentaryStorage, setComplimentaryStorage] = useState(null)
   const [loadError, setLoadError] = useState('')
 
   const catalog = Object.fromEntries(RESUME_TEMPLATES.map((t) => [t.id, t]))
@@ -573,6 +597,7 @@ export default function AdminPage() {
       setTemplates([])
       setPlans([])
       setComplimentary([])
+      setComplimentaryStorage(null)
       return
     }
 
@@ -580,6 +605,7 @@ export default function AdminPage() {
     if (priceRes.status === 'fulfilled') setPlans(priceRes.value.plans || [])
     if (accessRes.status === 'fulfilled') {
       setComplimentary(accessRes.value.entries || [])
+      setComplimentaryStorage(accessRes.value.storage || null)
     } else {
       setComplimentary([])
     }
@@ -632,6 +658,7 @@ export default function AdminPage() {
     setTemplates([])
     setPlans([])
     setComplimentary([])
+    setComplimentaryStorage(null)
   }
 
   if (checking) {
@@ -699,12 +726,14 @@ export default function AdminPage() {
         {tab === 'access' && (
           <ComplimentaryPanel
             entries={complimentary}
+            storage={complimentaryStorage}
             onChange={setComplimentary}
             onSessionExpired={() => {
               setAuthed(false)
               setTemplates([])
               setPlans([])
               setComplimentary([])
+              setComplimentaryStorage(null)
             }}
           />
         )}
