@@ -575,15 +575,20 @@ const MIN_PAGE_MARGIN = 504 // 0.35"
 const MAX_PAGE_MARGIN = 1440 // 1"
 const SAFE_PAGE_MARGIN = 720 // 0.5"
 const MIN_CONTENT_COL = 2880 // 2" — body column floor
-const MIN_ANY_COL = 1800 // 1.25" — stop letter-wrap section titles
+const MIN_ANY_COL = 2160 // 1.5" — stop letter-wrap ("Business", "Experience")
+const MIN_SIDEBAR_COL = 2400 // left label column floor after stripping vertical text
+const CHAR_WIDTH_TWIPS = 160 // ~11pt Calibri average glyph width
 const MAX_PARA_LEFT_IND = 1080 // 0.75"
 const MAX_PARA_HANGING = 360
+const DEFAULT_CONTENT_WIDTH = 9360 // ~6.5" usable page width
 
 /**
  * Permanent fix for production layout failures seen across many resumes:
  * - huge left whitespace / content shoved right (pgMar + extreme w:ind)
- * - section titles wrapping vertically ("E\nx\np...") in skinny table cells
+ * - section titles wrapping vertically ("B\nu\ns...") in skinny table cells
  * - clipped leading letters from hanging indent > usable cell width
+ * - Technical Skills categories mashed onto one line
+ * - heading borders cutting through headline text
  *
  * Deterministic OOXML rewrite — no AI.
  */
@@ -593,7 +598,10 @@ export function normalizeDocxGeometry(xml) {
   out = normalizePageMargins(out)
   out = normalizeParagraphIndents(out)
   out = normalizeTableGeometry(out)
+  out = relocateSkinnySidebarText(out)
   out = ensureTableCellsHaveParagraph(out)
+  out = splitMashedSkillCategoryParagraphs(out)
+  out = normalizeHeadingBorders(out)
   return out
 }
 
@@ -752,6 +760,8 @@ function normalizeParagraphIndents(xml) {
  * Also strips vertical textDirection that makes headings unreadable in body layouts.
  */
 function normalizeTableGeometry(xml) {
+  const contentWidth = estimateContentWidthTwips(xml)
+
   return xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tbl) => {
     let next = tbl
 
@@ -760,10 +770,12 @@ function normalizeTableGeometry(xml) {
       .replace(/<w:textDirection\b[^/]*\/>/g, '')
       .replace(/<w:textDirection\b[\s\S]*?<\/w:textDirection>/g, '')
 
+    // Convert percentage cell widths to absolute dxa so floors apply
+    next = convertPctTcWidths(next, contentWidth)
+
     // Collect gridCol widths
     const gridCols = [...next.matchAll(/<w:gridCol\b[^/]*\/>/g)]
     if (!gridCols.length) {
-      // Still fix absolute tcW below
       return widenTcWidths(next)
     }
 
@@ -772,23 +784,22 @@ function normalizeTableGeometry(xml) {
       return w ? parseInt(w[1], 10) : 0
     })
 
-    // Detect skinny columns that still hold readable text
+    // Per-column: any text + longest word (letter-wrap risk)
     const colHasText = widths.map(() => false)
-    let colIdx = -1
-    // Walk cells in document order and map to columns (handles rowspans poorly but good enough)
+    const colLongestWord = widths.map(() => 0)
     const rows = [...next.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)]
     for (const row of rows) {
-      colIdx = 0
+      let colIdx = 0
       const cells = [...row[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)]
       for (const cell of cells) {
         const spanMatch = /w:gridSpan[^>]*w:val="(\d+)"/.exec(cell[0])
         const span = spanMatch ? parseInt(spanMatch[1], 10) : 1
-        const text = [...cell[0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
-          .map((t) => t[1])
-          .join('')
-          .replace(/\s+/g, '')
-        if (text.length >= 3 && colIdx < colHasText.length) {
+        const text = getCellPlainText(cell[0])
+        const compact = text.replace(/\s+/g, '')
+        if (compact.length >= 1 && colIdx < colHasText.length) {
           colHasText[colIdx] = true
+          const longest = longestWordLen(text)
+          if (longest > colLongestWord[colIdx]) colLongestWord[colIdx] = longest
         }
         colIdx += span
       }
@@ -796,33 +807,34 @@ function normalizeTableGeometry(xml) {
 
     let changed = false
     const newWidths = widths.map((w, i) => {
-      if (!colHasText[i]) return w
-      if (w > 0 && w < MIN_ANY_COL) {
+      if (!colHasText[i] || w <= 0) return w
+      const need = Math.max(MIN_ANY_COL, colLongestWord[i] * CHAR_WIDTH_TWIPS + 240)
+      if (w < need) {
         changed = true
-        return Math.max(MIN_ANY_COL, w)
+        return need
       }
       return w
     })
 
-    // If 2-col layout: left skinny + right content → ensure content col is usable
+    // 2-col sidebar layouts: left label must fit a full word after textDirection strip
     if (newWidths.length === 2) {
       const [a, b] = newWidths
-      if (a > 0 && a < MIN_ANY_COL && b > a) {
-        newWidths[0] = MIN_ANY_COL
+      if (colHasText[0] && a > 0 && a < MIN_SIDEBAR_COL) {
+        newWidths[0] = Math.max(MIN_SIDEBAR_COL, colLongestWord[0] * CHAR_WIDTH_TWIPS + 240)
         changed = true
       }
-      if (b > 0 && b < MIN_CONTENT_COL && colHasText[1]) {
+      if (colHasText[1] && b > 0 && b < MIN_CONTENT_COL) {
         newWidths[1] = Math.max(MIN_CONTENT_COL, b)
         changed = true
       }
-      // Single-letter wrap risk: left col < ~char width for "Experience" (10 chars)
-      if (a > 0 && a < 2000 && colHasText[0]) {
-        newWidths[0] = Math.max(2160, a)
-        changed = true
+      // Keep total roughly page-sized — borrow from the wider column if needed
+      const total = newWidths[0] + newWidths[1]
+      if (total > contentWidth + 720 && newWidths[1] > MIN_CONTENT_COL) {
+        const overflow = total - contentWidth
+        newWidths[1] = Math.max(MIN_CONTENT_COL, newWidths[1] - overflow)
       }
     }
 
-    // Multi-col: bump any text-bearing column under the floor
     for (let i = 0; i < newWidths.length; i++) {
       if (colHasText[i] && newWidths[i] > 0 && newWidths[i] < MIN_ANY_COL) {
         newWidths[i] = MIN_ANY_COL
@@ -845,18 +857,58 @@ function normalizeTableGeometry(xml) {
   })
 }
 
+function getCellPlainText(cellXml) {
+  return [...cellXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((t) => unescapeXml(t[1]))
+    .join('')
+}
+
+function longestWordLen(text) {
+  let max = 0
+  for (const w of String(text || '').split(/[^A-Za-z0-9+#./-]+/)) {
+    if (w.length > max) max = w.length
+  }
+  return max
+}
+
+function estimateContentWidthTwips(xml) {
+  const pgMar = xml.match(/<w:pgMar\b[^/]*\/>/)
+  const pgSz = xml.match(/<w:pgSz\b[^/]*\/>/)
+  const pageW = pgSz && /w:w="(\d+)"/.exec(pgSz[0]) ? parseInt(/w:w="(\d+)"/.exec(pgSz[0])[1], 10) : 12240
+  let left = SAFE_PAGE_MARGIN
+  let right = SAFE_PAGE_MARGIN
+  if (pgMar) {
+    const l = /w:left="(\d+)"/.exec(pgMar[0])
+    const r = /w:right="(\d+)"/.exec(pgMar[0])
+    if (l) left = parseInt(l[1], 10)
+    if (r) right = parseInt(r[1], 10)
+  }
+  const usable = pageW - left - right
+  return usable > 4000 ? usable : DEFAULT_CONTENT_WIDTH
+}
+
+function convertPctTcWidths(tblXml, contentWidth) {
+  return tblXml.replace(/<w:tcW\b[^/]*\/>/g, (tag) => {
+    if (!/w:type="pct"/.test(tag)) return tag
+    const wMatch = /w:w="(\d+)"/.exec(tag)
+    if (!wMatch) return tag
+    // OOXML pct is 1/50 of a percent (5000 = 100%)
+    const pct = parseInt(wMatch[1], 10)
+    const dxa = Math.max(MIN_ANY_COL, Math.round((pct / 5000) * contentWidth))
+    return `<w:tcW w:w="${dxa}" w:type="dxa"/>`
+  })
+}
+
 function widenTcWidths(tblXml, gridWidths = null) {
   let colCursor = 0
-  // Reset per row
   return tblXml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
     colCursor = 0
     return row.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (cell) => {
       const spanMatch = /w:gridSpan[^>]*w:val="(\d+)"/.exec(cell)
       const span = spanMatch ? parseInt(spanMatch[1], 10) : 1
-      const textLen = [...cell.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
-        .map((t) => t[1])
-        .join('')
-        .replace(/\s+/g, '').length
+      const plain = getCellPlainText(cell)
+      const textLen = plain.replace(/\s+/g, '').length
+      const wordFloor = Math.max(MIN_ANY_COL, longestWordLen(plain) * CHAR_WIDTH_TWIPS + 240)
 
       let target = null
       if (gridWidths && gridWidths.length) {
@@ -865,20 +917,25 @@ function widenTcWidths(tblXml, gridWidths = null) {
         if (sum > 0) target = sum
       }
 
-      const tcW = /<w:tcW\b[^/]*\/>/.exec(cell)
       let nextCell = cell
-      if (textLen >= 3) {
-        const floor = span > 1 ? MIN_CONTENT_COL : MIN_ANY_COL
+      if (textLen >= 1) {
+        const floor = span > 1 ? Math.max(MIN_CONTENT_COL, wordFloor) : wordFloor
+        const tcW = /<w:tcW\b[^/]*\/>/.exec(cell)
         if (tcW) {
           const wMatch = /w:w="(\d+)"/.exec(tcW[0])
           const cur = wMatch ? parseInt(wMatch[1], 10) : 0
-          const want = Math.max(cur < floor ? floor : cur, target || 0)
-          if (want > cur || (cur > 0 && cur < floor)) {
-            nextCell = nextCell.replace(tcW[0], tcW[0].replace(/w:w="\d+"/, `w:w="${Math.max(want, floor)}"`))
+          const want = Math.max(cur < floor ? floor : cur, target || 0, floor)
+          if (want > cur) {
+            let replacement = tcW[0]
+              .replace(/w:w="\d+"/, `w:w="${want}"`)
+              .replace(/w:type="pct"/, 'w:type="dxa"')
+            if (!/w:type=/.test(replacement)) {
+              replacement = replacement.replace(/\/>$/, ' w:type="dxa"/>')
+            }
+            nextCell = nextCell.replace(tcW[0], replacement)
           }
-        } else if (target || textLen >= 3) {
+        } else {
           const want = Math.max(target || floor, floor)
-          // Inject tcW into tcPr or create tcPr
           if (/<w:tcPr\b[\s\S]*?<\/w:tcPr>/.test(nextCell)) {
             nextCell = nextCell.replace(
               /<w:tcPr\b[\s\S]*?<\/w:tcPr>/,
@@ -895,6 +952,165 @@ function widenTcWidths(tblXml, gridWidths = null) {
 
       colCursor += span
       return nextCell
+    })
+  })
+}
+
+/**
+ * Nuclear fix for letter-stacked sidebar labels ("B\nu\ns\ni\nn\ne\ss\ss"):
+ * when left cell is still too narrow for its text, move that text into the right cell.
+ */
+function relocateSkinnySidebarText(xml) {
+  return xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tbl) => {
+    const gridCols = [...tbl.matchAll(/<w:gridCol\b[^/]*\/>/g)]
+    if (gridCols.length !== 2) return tbl
+    const widths = gridCols.map((m) => {
+      const w = /w:w="(\d+)"/.exec(m[0])
+      return w ? parseInt(w[1], 10) : 0
+    })
+
+    return tbl.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
+      const cells = [...row.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)]
+      if (cells.length !== 2) return row
+      const left = cells[0][0]
+      const right = cells[1][0]
+      const leftText = getCellPlainText(left).trim()
+      const rightText = getCellPlainText(right).trim()
+      if (!leftText || leftText.length > 48) return row
+      if (rightText.length < 20) return row
+      if ((left.match(/<w:p\b/g) || []).length > 3) return row
+
+      const tcW = /w:w="(\d+)"/.exec(left.match(/<w:tcW\b[^/]*\/>/)?.[0] || '')
+      const leftW = tcW ? parseInt(tcW[1], 10) : widths[0]
+      const need = leftText.replace(/\s+/g, '').length * CHAR_WIDTH_TWIPS + 240
+      if (!(leftW > 0 && leftW < Math.min(need, 1600))) return row
+
+      const escaped = escapeXml(leftText)
+      const injected = `<w:p><w:pPr><w:spacing w:before="0" w:after="60"/></w:pPr>`
+        + `<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`
+
+      const leftOpen = left.match(/^<w:tc\b[^>]*>/)?.[0] || '<w:tc>'
+      let leftTcPr = left.match(/<w:tcPr\b[\s\S]*?<\/w:tcPr>/)?.[0]
+      if (leftTcPr) {
+        if (/<w:tcW\b/.test(leftTcPr)) {
+          leftTcPr = leftTcPr.replace(/<w:tcW\b[^/]*\/>/, '<w:tcW w:w="0" w:type="dxa"/>')
+        } else {
+          leftTcPr = leftTcPr.replace('</w:tcPr>', '<w:tcW w:w="0" w:type="dxa"/></w:tcPr>')
+        }
+      } else {
+        leftTcPr = '<w:tcPr><w:tcW w:w="0" w:type="dxa"/></w:tcPr>'
+      }
+      const newLeft = `${leftOpen}${leftTcPr}<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:tc>`
+
+      const rightOpen = right.match(/^<w:tc\b[^>]*>/)?.[0] || '<w:tc>'
+      const rightTcPr = right.match(/<w:tcPr\b[\s\S]*?<\/w:tcPr>/)?.[0] || ''
+      const rightBody = right.slice(rightOpen.length + rightTcPr.length).replace(/<\/w:tc>$/, '')
+      const newRight = `${rightOpen}${rightTcPr}${injected}${rightBody}</w:tc>`
+
+      return row.replace(left, newLeft).replace(right, newRight)
+    })
+  })
+}
+
+/**
+ * Split skills paragraphs that mashed multiple "Category:" blocks onto one line.
+ * e.g. "...Wireframes BI and Reporting Tools: Power BI..."
+ */
+function splitMashedSkillCategoryParagraphs(xml) {
+  const skillsStart = findSectionStart(xml, SECTION_ANCHORS.skills)
+  if (skillsStart === -1) return xml
+  const skillsEnd = findNextSectionStart(xml, skillsStart)
+  if (skillsEnd <= skillsStart) return xml
+
+  const before = xml.slice(0, skillsStart)
+  let section = xml.slice(skillsStart, skillsEnd)
+  const after = xml.slice(skillsEnd)
+
+  section = section.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    if (isSkillsSectionTitle(getPlainTextFromParagraph(para))) return para
+    const plain = getPlainTextFromParagraph(para)
+    const segments = splitPlainIntoSkillCategories(plain)
+    if (segments.length < 2) return para
+
+    const open = para.match(/^<w:p\b[^>]*>/)?.[0] || '<w:p>'
+    const pPr = para.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/)?.[0] || '<w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>'
+    const styles = extractRunStyles(para)
+    const rPr = stripUnderline(styles.baseRPr || stripBold(styles.boldRPr) || '')
+    const labelRPr = styles.boldRPr || (rPr ? rPr.replace(/<\/w:rPr>/, '<w:b/></w:rPr>') : '<w:rPr><w:b/></w:rPr>')
+
+    return segments.map((seg) => {
+      const label = escapeXml(seg.label)
+      const rest = escapeXml(seg.rest)
+      const labelRun = `<w:r>${labelRPr}<w:t xml:space="preserve">${label}:</w:t></w:r>`
+      const bodyRun = rest
+        ? `<w:r>${rPr}<w:t xml:space="preserve"> ${rest}</w:t></w:r>`
+        : ''
+      return `${open}${pPr}${labelRun}${bodyRun}</w:p>`
+    }).join('')
+  })
+
+  return before + section + after
+}
+
+function splitPlainIntoSkillCategories(plain) {
+  const colonRe = /:\s*/g
+  const hits = []
+  let m
+  while ((m = colonRe.exec(plain))) {
+    const before = plain.slice(0, m.index)
+    const labelMatch = before.match(/([A-Z][A-Za-z0-9/+-]*(?:\s+(?:and|&|of|\/|[A-Z][A-Za-z0-9/+-]*)){0,4})$/)
+    if (!labelMatch) continue
+    const label = labelMatch[1].trim()
+    const words = label.split(/\s+/).filter(Boolean)
+    if (words.length < 1 || words.length > 5) continue
+    if (label.length < 2 || label.length > 48) continue
+    hits.push({
+      label,
+      labelStart: m.index - labelMatch[1].length,
+      contentStart: m.index + m[0].length,
+    })
+  }
+  if (hits.length < 2) return []
+
+  const segments = []
+  for (let i = 0; i < hits.length; i++) {
+    const contentEnd = i + 1 < hits.length ? hits[i + 1].labelStart : plain.length
+    const rest = plain.slice(hits[i].contentStart, contentEnd).replace(/[,\s]+$/, '').trim()
+    segments.push({ label: hits[i].label, rest })
+  }
+  return segments
+}
+
+/** Keep bottom borders from cutting through heading text. */
+function normalizeHeadingBorders(xml) {
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    if (!/<w:pBdr\b/.test(para)) return para
+    const plain = getPlainTextFromParagraph(para)
+    // Only touch short heading-like lines or lines with bottom border
+    if (!/<w:bottom\b/.test(para) && !/<w:top\b/.test(para)) return para
+    if (plain.length > 180) return para
+
+    return para.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/, (pPr) => {
+      let next = pPr
+      if (/<w:spacing\b[^/]*\/>/.test(next)) {
+        next = next.replace(/<w:spacing\b[^/]*\/>/, (sp) => {
+          const after = /w:after="(\d+)"/.exec(sp)
+          const before = /w:before="(\d+)"/.exec(sp)
+          let a = after ? parseInt(after[1], 10) : 0
+          let b = before ? parseInt(before[1], 10) : 0
+          if (a < 120) a = 120
+          if (b < 60) b = 60
+          let out = sp
+          if (after) out = out.replace(/w:after="\d+"/, `w:after="${a}"`)
+          else out = out.replace(/\/>$/, ` w:after="${a}"/>`)
+          if (before) out = out.replace(/w:before="\d+"/, `w:before="${b}"`)
+          else out = out.replace(/\/>$/, ` w:before="${b}"/>`)
+          return out
+        })
+      } else {
+        next = next.replace('</w:pPr>', '<w:spacing w:before="60" w:after="120"/></w:pPr>')
+      }
+      return next
     })
   })
 }

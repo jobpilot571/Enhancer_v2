@@ -165,12 +165,17 @@ export function findGeometryDefects(xml) {
   for (const m of xml.matchAll(/<w:gridCol\b[^/]*\/>/g)) {
     const w = /w:w="(\d+)"/.exec(m[0])
     const n = w ? parseInt(w[1], 10) : 0
-    if (n > 0 && n < 1600) skinnyCols += 1
+    // Align with MIN_ANY_COL (2160) — 1600 still letter-wraps "Business"
+    if (n > 0 && n < 2160) skinnyCols += 1
   }
   for (const m of xml.matchAll(/<w:tcW\b[^/]*\/>/g)) {
+    if (/w:type="pct"/.test(m[0])) {
+      skinnyCols += 1
+      continue
+    }
     const w = /w:w="(\d+)"/.exec(m[0])
     const n = w ? parseInt(w[1], 10) : 0
-    if (n > 0 && n < 1200) skinnyCols += 1
+    if (n > 0 && n < 2160) skinnyCols += 1
   }
   if (skinnyCols > 0) {
     defects.push({
@@ -183,7 +188,7 @@ export function findGeometryDefects(xml) {
   if (/<w:textDirection\b/.test(xml)) {
     defects.push({
       code: 'text_direction',
-      severity: 'medium',
+      severity: 'high',
       message: 'Vertical textDirection found on table cells',
     })
   }
@@ -204,6 +209,31 @@ export function findGeometryDefects(xml) {
       severity: 'high',
       message: `Extreme left indent found (${extremeInd}) — causes large left whitespace`,
     })
+  }
+
+  // Mashed skills: multiple Category: labels in one paragraph inside skills section
+  const skillsHeading = /<(?:w:t)[^>]*>[^<]*(?:technical skills|core competencies|skills)[^<]*<\/w:t>/i.exec(xml)
+  if (skillsHeading) {
+    const from = skillsHeading.index
+    const nextSection = xml.slice(from + 1).search(
+      /<(?:w:t)[^>]*>[^<]*(?:professional experience|work experience|education|certifications|projects)[^<]*<\/w:t>/i,
+    )
+    const skillsXml = nextSection === -1 ? xml.slice(from) : xml.slice(from, from + 1 + nextSection)
+    const mashed = []
+    for (const m of skillsXml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)) {
+      const plain = [...m[0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join(' ')
+      if (/^(?:technical\s+)?skills$|core competencies/i.test(plain.trim())) continue
+      const labels = plain.match(/\b[A-Z][A-Za-z0-9 &/+-]{1,42}:\s/g) || []
+      if (labels.length >= 2) mashed.push(plain.slice(0, 120))
+    }
+    if (mashed.length) {
+      defects.push({
+        code: 'skills_mashed',
+        severity: 'high',
+        message: `Skills categories mashed into one line (${mashed.length})`,
+        samples: mashed.slice(0, 2),
+      })
+    }
   }
 
   return defects
@@ -335,6 +365,7 @@ export function repairEnhancedResume(enhancedBuffer, qaResult) {
     'narrow_table_col',
     'text_direction',
     'extreme_indent',
+    'skills_mashed',
   ].some((c) => codes.has(c))
 
   if (needsLayout || !qaResult?.ok) {
@@ -379,13 +410,15 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
   maxAttempts = 2,
   log = () => {},
 } = {}) {
-  let buffer = enhancedBuffer
+  // Permanent: always run layout repair once after enhance — do not wait for QA failure.
+  // Many resumes pass soft QA while still having letter-wrap / mashed-skills defects.
+  let buffer = repairDocxLayout(enhancedBuffer)
   let qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
-  const history = [{ attempt: 0, ok: qa.ok, defects: qa.defects.map((d) => d.code) }]
+  const history = [{ attempt: 0, ok: qa.ok, defects: qa.defects.map((d) => d.code), actions: ['layout_sanitize'] }]
 
   if (qa.ok) {
-    log('qa: passed')
-    return { buffer, qa, repaired: false, history }
+    log('qa: passed (after mandatory layout repair)')
+    return { buffer, qa, repaired: true, history }
   }
 
   log(`qa: failed (${qa.defects.map((d) => d.code).join(', ')}) — repairing`)
@@ -407,7 +440,7 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
   return {
     buffer,
     qa,
-    repaired: history.length > 1,
+    repaired: true,
     history,
   }
 }

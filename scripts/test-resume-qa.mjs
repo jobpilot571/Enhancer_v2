@@ -230,5 +230,52 @@ const geoEnsured = ensureEnhancedResumeQuality(geoBuf, geoBuf, { name: 'Arpitha'
 const geoOut = new PizZip(geoEnsured.buffer).file('word/document.xml').asText()
 assert(!/w:left="2880"/.test(geoOut) || (geoOut.match(/w:left="2880"/g) || []).length === 0, 'QA repair clears huge left margin')
 assert(!/<w:textDirection\b/.test(geoOut), 'QA repair strips textDirection')
+assert(geoEnsured.repaired, 'mandatory layout repair always runs')
+
+// --- Permanent: vertical "Business" sidebar + mashed skills categories ---
+const verticalBusinessBody = [
+  '<w:p><w:r><w:t>SHAHEDA AFRIDE</w:t></w:r></w:p>',
+  '<w:tbl>',
+  '<w:tblGrid><w:gridCol w:w="480"/><w:gridCol w:w="8500"/></w:tblGrid>',
+  '<w:tr>',
+  '<w:tc><w:tcPr><w:tcW w:w="480" w:type="dxa"/><w:textDirection w:val="btLr"/></w:tcPr>',
+  '<w:p><w:r><w:t>Business</w:t></w:r></w:p></w:tc>',
+  '<w:tc><w:tcPr><w:tcW w:w="8500" w:type="dxa"/></w:tcPr>',
+  '<w:p><w:r><w:t>PROFESSIONAL SUMMARY</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Business Analyst with 4+ years delivering ERP and healthcare programs.</w:t></w:r></w:p>',
+  '</w:tc></w:tr></w:tbl>',
+  '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>TECHNICAL SKILLS</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Documentation: BRD, FRD, User Stories, Use Cases and Wireframes BI and Reporting Tools: Power BI, Tableau Database: SQL, MySQL</w:t></w:r></w:p>',
+  '<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>',
+].join('')
+
+const verticalXml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${verticalBusinessBody}</w:body></w:document>`
+assert(findGeometryDefects(verticalXml).some((d) => d.code === 'narrow_table_col'), 'detects Business sidebar skinny col')
+assert(findGeometryDefects(verticalXml).some((d) => d.code === 'skills_mashed'), 'detects mashed skills categories')
+
+const verticalFixed = normalizeDocxGeometry(verticalXml)
+assert(!/<w:textDirection\b/.test(verticalFixed), 'vertical Business textDirection stripped')
+assert(!/w:w="480"/.test(verticalFixed), '480-twip Business column widened or cleared')
+assert(verticalFixed.includes('Documentation:'), 'Documentation category preserved')
+assert(verticalFixed.includes('BI and Reporting Tools:'), 'BI category preserved')
+// Mashed line must become separate paragraphs
+const skillParas = [...verticalFixed.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)]
+  .map((m) => [...m[0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join(''))
+  .filter((t) => /Documentation:|Reporting Tools:|Database:/.test(t))
+assert(skillParas.length >= 2, 'mashed skills split into multiple paragraphs')
+assert(!findGeometryDefects(verticalFixed).some((d) => d.code === 'skills_mashed'), 'skills mash cleared after normalize')
+
+const verticalBuf = makeDocx(verticalBusinessBody)
+const verticalQa = ensureEnhancedResumeQuality(
+  verticalBuf,
+  verticalBuf,
+  { name: 'Shaheda', experience: [{ company: 'Client' }] },
+  { maxAttempts: 2 },
+)
+const verticalOut = new PizZip(verticalQa.buffer).file('word/document.xml').asText()
+assert(verticalQa.repaired, 'permanent repair ran for Business sidebar resume')
+assert(!/<w:textDirection\b/.test(verticalOut), 'QA path strips textDirection')
+assert(!/w:w="480"/.test(verticalOut), 'QA path clears 480-twip column')
+assert(verticalOut.includes('Business'), 'Business label text preserved')
 
 console.log('ALL QA TESTS PASSED')
