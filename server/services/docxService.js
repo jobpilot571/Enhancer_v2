@@ -553,7 +553,284 @@ function sanitizeDocumentPagination(xml) {
   out = out.replace(/<w:framePr\b[^/]*\/>/g, '')
   out = out.replace(/<w:framePr\b[\s\S]*?<\/w:framePr>/g, '')
 
+  // Permanent layout geometry pass — margins, skinny columns, extreme indents
+  out = normalizeDocxGeometry(out)
+
   return out
+}
+
+/** Twips helpers (1440 twips = 1 inch). */
+const TWIP_IN = 1440
+const MIN_PAGE_MARGIN = 504 // 0.35"
+const MAX_PAGE_MARGIN = 1440 // 1"
+const SAFE_PAGE_MARGIN = 720 // 0.5"
+const MIN_CONTENT_COL = 2880 // 2" — body column floor
+const MIN_ANY_COL = 1800 // 1.25" — stop letter-wrap section titles
+const MAX_PARA_LEFT_IND = 1080 // 0.75"
+const MAX_PARA_HANGING = 360
+
+/**
+ * Permanent fix for production layout failures seen across many resumes:
+ * - huge left whitespace / content shoved right (pgMar + extreme w:ind)
+ * - section titles wrapping vertically ("E\nx\np...") in skinny table cells
+ * - clipped leading letters from hanging indent > usable cell width
+ *
+ * Deterministic OOXML rewrite — no AI.
+ */
+export function normalizeDocxGeometry(xml) {
+  if (!xml) return xml
+  let out = xml
+  out = normalizePageMargins(out)
+  out = normalizeParagraphIndents(out)
+  out = normalizeTableGeometry(out)
+  out = ensureTableCellsHaveParagraph(out)
+  return out
+}
+
+function normalizePageMargins(xml) {
+  return xml.replace(/<w:pgMar\b[^/]*\/>/g, (tag) => {
+    const attrs = {}
+    for (const m of tag.matchAll(/\b(w:(?:top|right|bottom|left|header|footer|gutter))="(\d+)"/g)) {
+      attrs[m[1]] = parseInt(m[2], 10)
+    }
+    const clamp = (key) => {
+      if (attrs[key] == null) return
+      if (attrs[key] > MAX_PAGE_MARGIN) attrs[key] = SAFE_PAGE_MARGIN
+      if (attrs[key] < MIN_PAGE_MARGIN) attrs[key] = MIN_PAGE_MARGIN
+    }
+    // Left margin is the usual culprit for "huge left space"
+    if (attrs['w:left'] != null && attrs['w:left'] > 1260) {
+      attrs['w:left'] = SAFE_PAGE_MARGIN
+    }
+    if (attrs['w:right'] != null && attrs['w:right'] > 1440) {
+      attrs['w:right'] = SAFE_PAGE_MARGIN
+    }
+    clamp('w:top')
+    clamp('w:bottom')
+    clamp('w:left')
+    clamp('w:right')
+
+    const parts = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`)
+    // Preserve any other attributes we didn't parse
+    const other = [...tag.matchAll(/\b(w:[a-zA-Z]+)="([^"]*)"/g)]
+      .filter((m) => !attrs[m[1]])
+      .map((m) => `${m[1]}="${m[2]}"`)
+    return `<w:pgMar ${[...parts, ...other].join(' ')}/>`
+  })
+}
+
+function normalizeParagraphIndents(xml) {
+  return xml.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+    const get = (name) => {
+      const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+      return m ? parseInt(m[1], 10) : null
+    }
+    let left = get('w:left')
+    let hanging = get('w:hanging')
+    let firstLine = get('w:firstLine')
+    let right = get('w:right')
+    let changed = false
+
+    if (left != null && left > MAX_PARA_LEFT_IND) {
+      // Extreme indents (1"+) cause the "shoved right" look on many BA resumes
+      left = left > 1440 ? 720 : MAX_PARA_LEFT_IND
+      changed = true
+    }
+    if (hanging != null && hanging > MAX_PARA_HANGING) {
+      hanging = MAX_PARA_HANGING
+      changed = true
+    }
+    // Hanging indent larger than left pushes glyphs outside the clip region
+    if (left != null && hanging != null && hanging > left) {
+      hanging = Math.min(hanging, Math.max(0, left))
+      changed = true
+    }
+    if (firstLine != null && firstLine > 720) {
+      firstLine = 360
+      changed = true
+    }
+    if (right != null && right > 720) {
+      right = 0
+      changed = true
+    }
+    if (!changed) return tag
+
+    const parts = []
+    if (left != null) parts.push(`w:left="${left}"`)
+    if (hanging != null) parts.push(`w:hanging="${hanging}"`)
+    if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
+    if (right != null) parts.push(`w:right="${right}"`)
+    // Keep start/end attributes if present (Word 2010+)
+    for (const name of ['w:start', 'w:end']) {
+      const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+      if (m) {
+        let v = parseInt(m[1], 10)
+        if (v > MAX_PARA_LEFT_IND) v = 720
+        parts.push(`${name}="${v}"`)
+      }
+    }
+    return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
+  })
+}
+
+/**
+ * Widen skinny table columns that force section titles to wrap one letter per line.
+ * Also strips vertical textDirection that makes headings unreadable in body layouts.
+ */
+function normalizeTableGeometry(xml) {
+  return xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tbl) => {
+    let next = tbl
+
+    // Remove vertical text direction on cells (common sidebar title pattern gone wrong)
+    next = next
+      .replace(/<w:textDirection\b[^/]*\/>/g, '')
+      .replace(/<w:textDirection\b[\s\S]*?<\/w:textDirection>/g, '')
+
+    // Collect gridCol widths
+    const gridCols = [...next.matchAll(/<w:gridCol\b[^/]*\/>/g)]
+    if (!gridCols.length) {
+      // Still fix absolute tcW below
+      return widenTcWidths(next)
+    }
+
+    const widths = gridCols.map((m) => {
+      const w = /w:w="(\d+)"/.exec(m[0])
+      return w ? parseInt(w[1], 10) : 0
+    })
+
+    // Detect skinny columns that still hold readable text
+    const colHasText = widths.map(() => false)
+    let colIdx = -1
+    // Walk cells in document order and map to columns (handles rowspans poorly but good enough)
+    const rows = [...next.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)]
+    for (const row of rows) {
+      colIdx = 0
+      const cells = [...row[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)]
+      for (const cell of cells) {
+        const spanMatch = /w:gridSpan[^>]*w:val="(\d+)"/.exec(cell[0])
+        const span = spanMatch ? parseInt(spanMatch[1], 10) : 1
+        const text = [...cell[0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+          .map((t) => t[1])
+          .join('')
+          .replace(/\s+/g, '')
+        if (text.length >= 3 && colIdx < colHasText.length) {
+          colHasText[colIdx] = true
+        }
+        colIdx += span
+      }
+    }
+
+    let changed = false
+    const newWidths = widths.map((w, i) => {
+      if (!colHasText[i]) return w
+      if (w > 0 && w < MIN_ANY_COL) {
+        changed = true
+        return Math.max(MIN_ANY_COL, w)
+      }
+      return w
+    })
+
+    // If 2-col layout: left skinny + right content → ensure content col is usable
+    if (newWidths.length === 2) {
+      const [a, b] = newWidths
+      if (a > 0 && a < MIN_ANY_COL && b > a) {
+        newWidths[0] = MIN_ANY_COL
+        changed = true
+      }
+      if (b > 0 && b < MIN_CONTENT_COL && colHasText[1]) {
+        newWidths[1] = Math.max(MIN_CONTENT_COL, b)
+        changed = true
+      }
+      // Single-letter wrap risk: left col < ~char width for "Experience" (10 chars)
+      if (a > 0 && a < 2000 && colHasText[0]) {
+        newWidths[0] = Math.max(2160, a)
+        changed = true
+      }
+    }
+
+    // Multi-col: bump any text-bearing column under the floor
+    for (let i = 0; i < newWidths.length; i++) {
+      if (colHasText[i] && newWidths[i] > 0 && newWidths[i] < MIN_ANY_COL) {
+        newWidths[i] = MIN_ANY_COL
+        changed = true
+      }
+    }
+
+    if (changed) {
+      let gi = 0
+      next = next.replace(/<w:gridCol\b[^/]*\/>/g, (tag) => {
+        const w = newWidths[gi++]
+        if (w == null) return tag
+        if (/w:w="\d+"/.test(tag)) return tag.replace(/w:w="\d+"/, `w:w="${w}"`)
+        return tag.replace(/\/?>/, ` w:w="${w}"/>`).replace(/\/\/>/, '/>')
+      })
+    }
+
+    next = widenTcWidths(next, newWidths)
+    return next
+  })
+}
+
+function widenTcWidths(tblXml, gridWidths = null) {
+  let colCursor = 0
+  // Reset per row
+  return tblXml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
+    colCursor = 0
+    return row.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (cell) => {
+      const spanMatch = /w:gridSpan[^>]*w:val="(\d+)"/.exec(cell)
+      const span = spanMatch ? parseInt(spanMatch[1], 10) : 1
+      const textLen = [...cell.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+        .map((t) => t[1])
+        .join('')
+        .replace(/\s+/g, '').length
+
+      let target = null
+      if (gridWidths && gridWidths.length) {
+        let sum = 0
+        for (let i = 0; i < span; i++) sum += gridWidths[colCursor + i] || 0
+        if (sum > 0) target = sum
+      }
+
+      const tcW = /<w:tcW\b[^/]*\/>/.exec(cell)
+      let nextCell = cell
+      if (textLen >= 3) {
+        const floor = span > 1 ? MIN_CONTENT_COL : MIN_ANY_COL
+        if (tcW) {
+          const wMatch = /w:w="(\d+)"/.exec(tcW[0])
+          const cur = wMatch ? parseInt(wMatch[1], 10) : 0
+          const want = Math.max(cur < floor ? floor : cur, target || 0)
+          if (want > cur || (cur > 0 && cur < floor)) {
+            nextCell = nextCell.replace(tcW[0], tcW[0].replace(/w:w="\d+"/, `w:w="${Math.max(want, floor)}"`))
+          }
+        } else if (target || textLen >= 3) {
+          const want = Math.max(target || floor, floor)
+          // Inject tcW into tcPr or create tcPr
+          if (/<w:tcPr\b[\s\S]*?<\/w:tcPr>/.test(nextCell)) {
+            nextCell = nextCell.replace(
+              /<w:tcPr\b[\s\S]*?<\/w:tcPr>/,
+              (tcPr) => tcPr.replace('</w:tcPr>', `<w:tcW w:w="${want}" w:type="dxa"/></w:tcPr>`),
+            )
+          } else {
+            nextCell = nextCell.replace(
+              /^<w:tc\b[^>]*>/,
+              (open) => `${open}<w:tcPr><w:tcW w:w="${want}" w:type="dxa"/></w:tcPr>`,
+            )
+          }
+        }
+      }
+
+      colCursor += span
+      return nextCell
+    })
+  })
+}
+
+/** OOXML requires every table cell to contain at least one paragraph. */
+function ensureTableCellsHaveParagraph(xml) {
+  return xml.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (cell) => {
+    if (/<w:p\b/.test(cell)) return cell
+    return cell.replace(/<\/w:tc>/, '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:tc>')
+  })
 }
 
 /**
@@ -604,6 +881,8 @@ export function repairDocxLayout(docxBuffer) {
 
   let xml = sanitizeDocumentPagination(docFile.asText())
   xml = sanitizeDocumentPagination(xml) // second pass after structural deletes
+  // Geometry is included in sanitizeDocumentPagination; run once more for safety
+  xml = normalizeDocxGeometry(xml)
   zip.file('word/document.xml', xml)
   sanitizeAllStyleParts(zip)
 

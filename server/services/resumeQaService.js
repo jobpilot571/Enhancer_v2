@@ -135,6 +135,73 @@ export function findPaginationDefects(xml) {
     })
   }
 
+  // Geometry traps: huge left margins / skinny columns / extreme indents
+  defects.push(...findGeometryDefects(xml))
+
+  return defects
+}
+
+/**
+ * Detect layout geometry that causes huge left gaps, vertical section titles,
+ * and clipped leading letters after enhance.
+ */
+export function findGeometryDefects(xml) {
+  const defects = []
+
+  for (const m of xml.matchAll(/<w:pgMar\b[^/]*\/>/g)) {
+    const left = /w:left="(\d+)"/.exec(m[0])
+    const n = left ? parseInt(left[1], 10) : 0
+    if (n > 1440) {
+      defects.push({
+        code: 'huge_page_margin',
+        severity: 'high',
+        message: `Page left margin too large (${n} twips) — content will look shoved right`,
+      })
+      break
+    }
+  }
+
+  let skinnyCols = 0
+  for (const m of xml.matchAll(/<w:gridCol\b[^/]*\/>/g)) {
+    const w = /w:w="(\d+)"/.exec(m[0])
+    const n = w ? parseInt(w[1], 10) : 0
+    if (n > 0 && n < 1600) skinnyCols += 1
+  }
+  for (const m of xml.matchAll(/<w:tcW\b[^/]*\/>/g)) {
+    const w = /w:w="(\d+)"/.exec(m[0])
+    const n = w ? parseInt(w[1], 10) : 0
+    if (n > 0 && n < 1200) skinnyCols += 1
+  }
+  if (skinnyCols > 0) {
+    defects.push({
+      code: 'narrow_table_col',
+      severity: 'high',
+      message: `Narrow table column(s) found (${skinnyCols}) — section titles may wrap vertically`,
+    })
+  }
+
+  if (/<w:textDirection\b/.test(xml)) {
+    defects.push({
+      code: 'text_direction',
+      severity: 'medium',
+      message: 'Vertical textDirection found on table cells',
+    })
+  }
+
+  let extremeInd = 0
+  for (const m of xml.matchAll(/<w:ind\b[^/]*\/>/g)) {
+    const left = /w:left="(\d+)"/.exec(m[0])
+    const n = left ? parseInt(left[1], 10) : 0
+    if (n > 1440) extremeInd += 1
+  }
+  if (extremeInd > 0) {
+    defects.push({
+      code: 'extreme_indent',
+      severity: 'high',
+      message: `Extreme left indent found (${extremeInd}) — causes large left whitespace`,
+    })
+  }
+
   return defects
 }
 
@@ -260,6 +327,10 @@ export function repairEnhancedResume(enhancedBuffer, qaResult) {
     'frame',
     'tall_row',
     'missing_keepnext_override',
+    'huge_page_margin',
+    'narrow_table_col',
+    'text_direction',
+    'extreme_indent',
   ].some((c) => codes.has(c))
 
   if (needsLayout || !qaResult?.ok) {

@@ -3,8 +3,9 @@ import {
   qaEnhancedResume,
   ensureEnhancedResumeQuality,
   findPaginationDefects,
+  findGeometryDefects,
 } from '../server/services/resumeQaService.js'
-import { patchDocx } from '../server/services/docxService.js'
+import { patchDocx, normalizeDocxGeometry } from '../server/services/docxService.js'
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed')
@@ -146,5 +147,42 @@ const plan = {
 const { buffer: patched } = patchDocx(originalBuf, plan, { highlight: false, resumeData })
 const afterPatchQa = qaEnhancedResume(originalBuf, patched, resumeData)
 assert(afterPatchQa.ok, 'normal patchDocx output passes QA')
+
+// --- Geometry: huge left margin + skinny sidebar column (vertical "Experience") ---
+const skinnyTableBody = [
+  '<w:tbl>',
+  '<w:tblGrid><w:gridCol w:w="600"/><w:gridCol w:w="5000"/></w:tblGrid>',
+  '<w:tr>',
+  '<w:tc><w:tcPr><w:tcW w:w="600" w:type="dxa"/><w:textDirection w:val="btLr"/></w:tcPr>',
+  '<w:p><w:r><w:t>Experience</w:t></w:r></w:p></w:tc>',
+  '<w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>',
+  '<w:p><w:pPr><w:ind w:left="2880" w:hanging="360"/></w:pPr>',
+  '<w:r><w:t>Experienced Business Analyst skilled in IFS ERP.</w:t></w:r></w:p></w:tc>',
+  '</w:tr></w:tbl>',
+  '<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="2880" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>',
+].join('')
+
+const geoDefects = findGeometryDefects(
+  `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${skinnyTableBody}</w:body></w:document>`,
+)
+assert(geoDefects.some((d) => d.code === 'huge_page_margin'), 'detects huge page margin')
+assert(geoDefects.some((d) => d.code === 'narrow_table_col'), 'detects narrow table col')
+assert(geoDefects.some((d) => d.code === 'extreme_indent'), 'detects extreme indent')
+
+const fixedGeo = normalizeDocxGeometry(
+  `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${skinnyTableBody}</w:body></w:document>`,
+)
+assert(!/w:left="2880"/.test(fixedGeo), 'page left margin normalized')
+assert(/w:left="720"/.test(fixedGeo), 'safe page margin applied')
+assert(!/<w:textDirection\b/.test(fixedGeo), 'textDirection stripped')
+assert(!/w:w="600"/.test(fixedGeo), 'skinny gridCol widened')
+assert(!/w:left="2880" w:hanging/.test(fixedGeo), 'extreme para indent capped')
+assert(fixedGeo.includes('Experienced Business Analyst'), 'full sentence preserved')
+
+const geoBuf = makeDocx(skinnyTableBody.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, '') + '<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="2880"/></w:sectPr>')
+const geoEnsured = ensureEnhancedResumeQuality(geoBuf, geoBuf, { name: 'Arpitha', experience: [{ company: 'Anthem' }] }, { maxAttempts: 2 })
+const geoOut = new PizZip(geoEnsured.buffer).file('word/document.xml').asText()
+assert(!/w:left="2880"/.test(geoOut) || (geoOut.match(/w:left="2880"/g) || []).length === 0, 'QA repair clears huge left margin')
+assert(!/<w:textDirection\b/.test(geoOut), 'QA repair strips textDirection')
 
 console.log('ALL QA TESTS PASSED')
