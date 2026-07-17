@@ -1632,7 +1632,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 .resume-enhancer-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+  gap: 5mm;
   width: 100%;
   max-width: 100%;
   align-items: stretch;
@@ -1647,8 +1647,8 @@ body:has(.service-block--enhancer) .footer__col h4 {
 }
 .resume-enhancer-workspace--inputs {
   align-items: stretch;
-  gap: 10px;
-  margin-bottom: 0;
+  gap: 5mm;
+  margin-bottom: 5mm;
   position: relative;
   z-index: 5;
 }
@@ -1719,14 +1719,14 @@ body:has(.service-block--enhancer) .footer__col h4 {
   font-size: 0.75rem;
 }
 .enhance-preview-block--section {
-  margin-top: 2.5vh;
+  margin-top: 5mm;
   padding-top: 0;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
 }
 .enhance-preview-block--section.is-after-results {
-  margin-top: 12px;
+  margin-top: 5mm;
 }
 .enhance-preview-block__labels {
   display: none;
@@ -2672,7 +2672,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 }
 .enhance-preview-block .resume-enhancer-workspace {
   width: 100%;
-  gap: 12px;
+  gap: 5mm;
 }
 .enhance-results--v2 .enhance-preview-block .upload-box {
   width: 100%;
