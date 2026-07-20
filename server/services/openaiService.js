@@ -125,6 +125,18 @@ const BULLET_RULES = `Bullet writing rules (strict — every bullet MUST follow 
 - Do NOT start bullets with a bullet character (•). Plain sentence text only.
 - Sound like a confident professional, not a job description copy.`
 
+/** Stricter rules for JD-tailored resume builds. */
+const JD_BULLET_RULES = `Experience bullet rules (strict — EVERY experience bullet MUST follow ALL of these):
+- Real-time project involvement: name the project/system, your role, technical approach, and business outcome.
+- Professional, clean, humanized, understandable — sounds like a real engineer/analyst wrote it.
+- Technical and specific (tools, frameworks, data, APIs, cloud, methods) — never vague filler.
+- EACH bullet MUST include at least ONE skill/tool/keyword from the job description (naturally woven in).
+- EACH bullet MUST be AT LEAST 2 lines when rendered (about 28–40 words). Prefer ~32–38 words. Never write a short one-liner.
+- Do NOT exceed ~42 words / about 2.5 lines.
+- Use strong action verbs and measurable impact where believable.
+- Do NOT start with a bullet character. Plain sentence text only.
+- No color instructions — content only.`
+
 /**
  * Normalize compact LLM plan into the shape expected by filterEnhancementPlan / patchDocx.
  * Empty original + non-empty replacement => new addition (summary or experience).
@@ -586,16 +598,17 @@ export async function generateResumeFromJd(formData, jdData) {
   return jsonCompletion(
     `You are an expert resume writer building a brand-new resume from scratch that is STRONGLY tailored to a specific job description.
 
-${BULLET_RULES}
+${JD_BULLET_RULES}
 
 Hard rules:
 - The candidate has NO existing resume — invent believable, JD-aligned content from their facts + the JD.
 - Resume target role / title MUST be exactly: "${roleTitle}" (the JD role). Do not use a different title.
 - Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
 - For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
-- Align every bullet to JD responsibilities, tools, and keywords — sound like someone who already does this job.
-- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets. Almost every JD must-have skill should appear at least once in the present company's bullets.
-- Older companies: still JD-aligned but can emphasize adjacent/related skills — do not dump every JD keyword into every company.
+- EVERY experience bullet must be ~2 lines (28–40 words) and must include at least one JD skill/tool/keyword.
+- Align every bullet to JD responsibilities, tools, and keywords — sound like someone who already does this job with real project ownership.
+- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets.
+- Older companies: still JD-aligned with real project stories; each bullet still needs ≥1 JD skill.
 - If a company has OptionalSummaryGuidance, use it as soft guidance for that company's bullets (do not copy it verbatim into bullets unless it fits).
 - summaryBullets: return EXACTLY ${summaryCount} strong, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
 - skillCategories: return 5–7 category headings. Include EVERY skill from the JD list below (required + preferred + tools + keywords) plus closely related skills. Do not omit JD skills.

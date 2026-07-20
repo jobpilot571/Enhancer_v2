@@ -6,6 +6,7 @@ export default function PreviewDownloadStep({
   downloadUrl,
   building,
   buildStepLabel,
+  onStartNew,
 }) {
   return (
     <div className="jd-step">
@@ -40,13 +41,21 @@ export default function PreviewDownloadStep({
         )
       )}
 
-      {previewBlob && downloadUrl && (
-        <div className="form-cta form-cta--nav" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+      <div className="form-cta form-cta--nav" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="btn btn--outline btn--xl"
+          onClick={onStartNew}
+          disabled={building}
+        >
+          Build new resume
+        </button>
+        {previewBlob && downloadUrl && (
           <a href={downloadUrl} className="btn btn--primary btn--xl" download>
             Download DOCX
           </a>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

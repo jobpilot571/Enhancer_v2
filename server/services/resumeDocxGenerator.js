@@ -244,7 +244,10 @@ function buildHeader(resume, style) {
 }
 
 function buildExperienceEntry(job, style, compact) {
-  const accent = style.accent || '1E40AF'
+  const accent = style.forceBlack ? '000000' : (style.accent || '1E40AF')
+  const ink = style.forceBlack ? '000000' : '111827'
+  const muted = style.forceBlack ? '000000' : '4B5563'
+  const companyColor = style.forceBlack ? '000000' : accent
   const company = clean(job.company)
   const title = clean(job.title)
   const dates = clean(job.dates) || formatDates(job.startDate, job.endDate)
@@ -258,9 +261,9 @@ function buildExperienceEntry(job, style, compact) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
         children: [
-          new TextRun({ text: loc ? `${company} – ${loc}` : company, bold: true, size: 20, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: loc ? `${company} – ${loc}` : company, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
@@ -308,15 +311,15 @@ function buildExperienceEntry(job, style, compact) {
             bold: true,
             size: 20,
             font: 'Calibri',
-            color: '111827',
+            color: ink,
           }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
     if (loc) {
-      paras.push(bodyPara(loc, { after: 40, run: { size: 18, color: '4B5563' } }))
+      paras.push(bodyPara(loc, { after: 40, run: { size: 18, color: muted } }))
     }
   } else if (layout === 'title-company-split') {
     paras.push(
@@ -324,9 +327,9 @@ function buildExperienceEntry(job, style, compact) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
         children: [
-          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
@@ -335,9 +338,9 @@ function buildExperienceEntry(job, style, compact) {
         spacing: { after: 40 },
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
         children: [
-          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: accent }),
+          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: companyColor }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: loc, size: 18, font: 'Calibri', color: '4B5563' }),
+          new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
         ],
       }),
     )
@@ -348,9 +351,9 @@ function buildExperienceEntry(job, style, compact) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
         children: [
-          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: '111827' }),
+          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, size: 18, font: 'Calibri', color: accent, italics: true }),
+          new TextRun({ text: dates, size: 18, font: 'Calibri', color: companyColor, italics: true }),
         ],
       }),
     )
@@ -360,7 +363,7 @@ function buildExperienceEntry(job, style, compact) {
         new Paragraph({
           spacing: { after: 40 },
           children: [
-            new TextRun({ text: companyLine, size: 20, font: 'Calibri', color: '374151', italics: true }),
+            new TextRun({ text: companyLine, size: 20, font: 'Calibri', color: muted, italics: true }),
           ],
         }),
       )
@@ -375,9 +378,21 @@ function buildExperienceEntry(job, style, compact) {
 
 /**
  * Build a professional DOCX from structured resume JSON + template id.
+ * @param {object} [options]
+ * @param {boolean} [options.forceBlack] — JD Builder: all text/accents black only
  */
-export async function generateResumeDocx(resume, templateId = 'classic-blue') {
-  const style = getTemplateStyle(templateId)
+export async function generateResumeDocx(resume, templateId = 'classic-blue', options = {}) {
+  let style = { ...getTemplateStyle(templateId) }
+  if (options.forceBlack) {
+    style = {
+      ...style,
+      accent: '000000',
+      nameColor: '000000',
+      forceBlack: true,
+      // Avoid colored banner headers
+      headerStyle: style.headerStyle === 'banner' ? 'centered' : style.headerStyle,
+    }
+  }
   const accent = style.accent || '1E40AF'
   const compact = !!style.compact
   const children = []
@@ -431,7 +446,12 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue') {
               spacing: { after: 40 },
               children: [
                 new TextRun({ text: `${label}: `, bold: true, size: 20, font: 'Calibri', color: accent }),
-                new TextRun({ text: items.join(', '), size: 20, font: 'Calibri', color: '1F2937' }),
+                new TextRun({
+                  text: items.join(', '),
+                  size: 20,
+                  font: 'Calibri',
+                  color: style.forceBlack ? '000000' : '1F2937',
+                }),
               ],
             }),
           )

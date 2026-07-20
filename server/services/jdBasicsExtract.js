@@ -97,6 +97,31 @@ function mapEducationEntries(edu) {
   }).slice(0, 4)
 }
 
+function normalizeDegree(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const lower = text.toLowerCase().replace(/\./g, '').replace(/'/g, '')
+  const map = {
+    masters: "Master's",
+    master: "Master's",
+    ms: 'M.S.',
+    mse: 'M.S.',
+    msc: 'M.S.',
+    mba: 'M.B.A.',
+    bachelors: "Bachelor's",
+    bachelor: "Bachelor's",
+    bs: 'B.S.',
+    ba: 'B.A.',
+    be: 'B.E.',
+    btech: 'B.Tech',
+    phd: 'Ph.D.',
+    doctorate: 'Ph.D.',
+    associates: "Associate's",
+    associate: "Associate's",
+  }
+  return map[lower] || text
+}
+
 function extractLinkedIn(text) {
   const m = String(text || '').match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+\/?/i)
   return m?.[0] || ''
@@ -108,14 +133,45 @@ function extractLinkedIn(text) {
  */
 export function mapJdBasicsFromResume(resumeData, resumeText = '') {
   const loc = splitCityState(resumeData?.location || '')
-  const education = mapEducationEntries(resumeData?.education)
+  // Also sniff city/state from early resume lines if location blank
+  if (!loc.city && resumeText) {
+    const head = String(resumeText).slice(0, 800)
+    const m = head.match(/\b([A-Za-z .]{2,40}),\s*([A-Z]{2})\b/)
+    if (m) {
+      loc.city = m[1].trim()
+      loc.state = m[2].trim()
+    }
+  }
+
+  let education = mapEducationEntries(resumeData?.education)
+
+  // Scan raw text education section if parse missed school names
+  if ((!education.length || education.every((e) => !e.school)) && resumeText) {
+    const eduBlock = String(resumeText).match(
+      /(?:^|\n)\s*education\s*\n([\s\S]{20,1200}?)(?=\n\s*(?:experience|work history|skills|projects|certifications)\b|$)/i,
+    )
+    if (eduBlock) {
+      const lines = eduBlock[1].split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 3)
+      const fromText = lines.map(parseEduLine).filter((e) => e.school || e.degree || e.major)
+      if (fromText.length) education = fromText.slice(0, 4)
+    }
+  }
+
+  education = education.map((e) => ({
+    ...e,
+    degree: normalizeDegree(e.degree),
+  }))
+
+  const linkedin = String(resumeData?.linkedin || resumeData?.linkedIn || '').trim()
+    || extractLinkedIn(resumeText)
+  // Ignore garbage short non-URL linkedin values like "dd"
+  const linkedinClean = /linkedin\.com/i.test(linkedin) || linkedin.length > 12 ? linkedin : ''
 
   return {
     fullName: String(resumeData?.name || '').trim(),
     email: String(resumeData?.email || '').trim(),
     phone: String(resumeData?.phone || '').trim(),
-    linkedin: String(resumeData?.linkedin || resumeData?.linkedIn || '').trim()
-      || extractLinkedIn(resumeText),
+    linkedin: linkedinClean,
     city: loc.city,
     state: loc.state,
     education,

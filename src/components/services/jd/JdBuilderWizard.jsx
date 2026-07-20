@@ -20,8 +20,8 @@ import {
   emptyEducation,
   newId,
 } from './jdProjectModel'
-import { readJdDraft, writeJdDraft } from './jdDraftStorage'
-import BasicResumeStep from './steps/BasicResumeStep'
+import { readJdDraft, writeJdDraft, clearJdDraft } from './jdDraftStorage'
+import BasicResumeStep, { normalizeEducationFromExtract } from './steps/BasicResumeStep'
 import TargetRoleStep from './steps/TargetRoleStep'
 import JobDescriptionStep from './steps/JobDescriptionStep'
 import ReferenceDocsStep from './steps/ReferenceDocsStep'
@@ -155,9 +155,13 @@ export default function JdBuilderWizard() {
         }
       } else if (lower.endsWith('.docx') || lower.endsWith('.pdf')) {
         const result = await extractJdBasics(file)
+        if (!result?.ok && !result?.basics) {
+          throw new Error(result?.error || 'Could not extract details from that resume.')
+        }
         const basics = result?.basics || {}
-        const education = Array.isArray(basics.education) && basics.education.length
-          ? basics.education.map((e) => ({
+        const normalizedEdu = normalizeEducationFromExtract(basics.education || [])
+        const education = normalizedEdu.length
+          ? normalizedEdu.map((e) => ({
               ...emptyEducation(),
               id: newId('edu'),
               degree: e.degree || '',
@@ -239,6 +243,21 @@ export default function JdBuilderWizard() {
       ...projectRef.current,
       targetRole: { ...projectRef.current.targetRole, jdFileName: file.name },
     })
+  }
+
+  async function handleStartNewResume() {
+    if (buildingRef.current) return
+    const ok = window.confirm('Start a new resume? Current draft and preview will be cleared.')
+    if (!ok) return
+    clearJdDraft(userId)
+    setPreviewBlob(null)
+    setBuiltRole('')
+    setBuildStep('')
+    setError('')
+    const fresh = createEmptyProject()
+    setProject(fresh)
+    setStep(0)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   async function handleBuild() {
@@ -412,6 +431,7 @@ export default function JdBuilderWizard() {
             downloadUrl={project.sessionId ? getDownloadUrl(project.sessionId) : null}
             building={building}
             buildStepLabel={getJdBuildStepLabel(buildStep)}
+            onStartNew={handleStartNewResume}
           />
         )}
 

@@ -46,7 +46,13 @@ function validateFormData(formData) {
   }
 
   const years = Number(formData.yearsOfExperience)
-  if (!Number.isFinite(years) || years < 0) return 'Years of experience is required'
+  // Years may be computed from company dates; allow 0+
+  if (!Number.isFinite(years) || years < 0) {
+    // soft: derive later from companies — only reject negative non-numeric
+    if (formData.yearsOfExperience !== undefined && formData.yearsOfExperience !== '' && !Number.isFinite(years)) {
+      return 'Years of experience is invalid'
+    }
+  }
 
   const companyCount = Number(formData.companyCount)
   if (!Number.isFinite(companyCount) || companyCount < 1 || companyCount > 6) {
@@ -94,8 +100,12 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
     let resumeData = local.data
     let method = 'local'
 
-    const needsAi = !resumeData.email && !resumeData.phone && !resumeData.name
-      || (!resumeData.education?.length && local.confidence < 0.55)
+    const mappedLocal = mapJdBasicsFromResume(local.data, resumeText)
+    const contactWeak = !mappedLocal.fullName && !mappedLocal.email && !mappedLocal.phone
+    const educationWeak = !mappedLocal.education?.length
+      || mappedLocal.education.every((e) => !e.school && !e.degree)
+    // Always try AI when contact OR education is incomplete — local parsers often miss schools.
+    const needsAi = contactWeak || educationWeak || local.confidence < 0.7
 
     if (needsAi) {
       try {
@@ -117,6 +127,17 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
     }
 
     const basics = mapJdBasicsFromResume(resumeData, resumeText)
+    // If AI still missed education, merge local-mapped education
+    if (!basics.education.length && mappedLocal.education.length) {
+      basics.education = mappedLocal.education
+    }
+    if (!basics.fullName && mappedLocal.fullName) basics.fullName = mappedLocal.fullName
+    if (!basics.email && mappedLocal.email) basics.email = mappedLocal.email
+    if (!basics.phone && mappedLocal.phone) basics.phone = mappedLocal.phone
+    if (!basics.city && mappedLocal.city) basics.city = mappedLocal.city
+    if (!basics.state && mappedLocal.state) basics.state = mappedLocal.state
+    if (!basics.linkedin && mappedLocal.linkedin) basics.linkedin = mappedLocal.linkedin
+
     const userTag = req.user?.id || 'guest'
     console.log(
       `[jd-builder] extract-basics user=${userTag} file=${req.file.originalname} `

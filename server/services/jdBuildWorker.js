@@ -66,7 +66,7 @@ function skillMentioned(text, skill) {
   return t.includes(s)
 }
 
-/** Ensure JD skills appear in skillCategories and mostly in present-company bullets. */
+/** Ensure JD skills appear in skillCategories and every experience bullet mentions ≥1 JD skill. */
 function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
   const jdSkills = collectJdSkills(jdData)
   if (!jdSkills.length) return resumeData
@@ -101,38 +101,27 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
     ...jdSkills,
   ].map((s) => String(s || '').trim()).filter(Boolean))]
 
-  const experience = [...(resumeData.experience || [])]
-  if (experience.length) {
+  const experience = (resumeData.experience || []).map((job, jobIdx) => {
     const maxBullets = Math.min(
       15,
-      Math.max(3, Number(orderedCompanies[0]?.bulletCount) || experience[0].bullets?.length || 8),
+      Math.max(3, Number(orderedCompanies[jobIdx]?.bulletCount) || job.bullets?.length || 8),
     )
-    const present = { ...experience[0], bullets: [...(experience[0].bullets || [])] }
-    let presentText = present.bullets.join(' ')
-    // Prefer ~70% of JD skills in the present (most recent) company
-    const targetCount = Math.max(1, Math.ceil(jdSkills.length * 0.7))
-    const missingInPresent = jdSkills.filter((s) => !skillMentioned(presentText, s))
-    const toPlace = missingInPresent.slice(0, Math.max(0, targetCount - (jdSkills.length - missingInPresent.length)))
-
-    let skillIdx = 0
-    // First: append short skill clauses onto existing bullets (keeps bullet count)
-    for (let i = 0; i < present.bullets.length && skillIdx < toPlace.length; i++) {
-      const skill = toPlace[skillIdx]
-      if (skillMentioned(present.bullets[i], skill)) continue
-      present.bullets[i] = `${present.bullets[i].replace(/\.$/, '')} using ${skill}.`
-      skillIdx += 1
-    }
-    // Then: fill remaining bullet slots if under budget
-    while (skillIdx < toPlace.length && present.bullets.length < maxBullets) {
-      const skill = toPlace[skillIdx]
-      present.bullets.push(
-        `Leveraged ${skill} to deliver measurable outcomes for stakeholders and production systems.`,
-      )
-      skillIdx += 1
-    }
-    presentText = present.bullets.join(' ')
-    experience[0] = { ...present, bullets: present.bullets.slice(0, maxBullets) }
-  }
+    const bullets = [...(job.bullets || [])].slice(0, maxBullets).map((raw, bi) => {
+      let text = String(raw || '').trim()
+      if (!text) return text
+      const skill = jdSkills[(jobIdx + bi) % jdSkills.length]
+      if (skill && !skillMentioned(text, skill)) {
+        text = `${text.replace(/\.$/, '')}, applying ${skill} to deliver production-ready outcomes.`
+      }
+      // Nudge short one-liners toward ~2 lines (~28+ words)
+      const words = text.split(/\s+/).filter(Boolean)
+      if (words.length < 28 && skill) {
+        text = `${text.replace(/\.$/, '')} across real project delivery with measurable stakeholder impact using ${skill}.`
+      }
+      return text
+    })
+    return { ...job, bullets }
+  })
 
   return {
     ...resumeData,
@@ -264,7 +253,7 @@ export async function runJdBuildJob(jobId, sessionId) {
     updateBuildJob(jobId, { step: 'building_docx' })
     const templateId = formData.templateId || 'compact-ats'
     log(jobId, `building DOCX template=${templateId}`)
-    const buffer = await generateResumeDocx(resumeData, templateId)
+    const buffer = await generateResumeDocx(resumeData, templateId, { forceBlack: true })
 
     updateBuildJob(jobId, { step: 'preparing_preview' })
     log(jobId, 'saving files')

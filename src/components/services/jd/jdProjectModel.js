@@ -94,6 +94,45 @@ export function syncExperiences(experiences, count) {
   return next
 }
 
+/** Parse "Jan 2020" / "Present" into a timestamp for sorting / span calc. */
+function experienceDateKey(value, fallbackNow = false) {
+  const raw = String(value || '').trim()
+  if (!raw || /^present$|^current$|^now$/i.test(raw)) {
+    return fallbackNow ? Date.now() : Number.MAX_SAFE_INTEGER
+  }
+  const months = {
+    jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2,
+    apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6,
+    aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+    oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+  }
+  const m = raw.match(/([A-Za-z]{3,9})?\s*(\d{4})/)
+  if (m) {
+    const month = m[1] ? (months[m[1].toLowerCase()] ?? 0) : 0
+    return Date.UTC(Number(m[2]), month, 1)
+  }
+  return 0
+}
+
+/** Approximate total years from earliest start → latest end (or now). */
+export function computeYearsOfExperience(experiences) {
+  let minStart = Infinity
+  let maxEnd = -Infinity
+  const now = Date.now()
+  for (const e of experiences || []) {
+    if (!String(e?.startDate || '').trim()) continue
+    const start = experienceDateKey(e.startDate)
+    if (!start || start === Number.MAX_SAFE_INTEGER) continue
+    const end = experienceDateKey(e.endDate, true)
+    const endTs = end === Number.MAX_SAFE_INTEGER ? now : end
+    minStart = Math.min(minStart, start)
+    maxEnd = Math.max(maxEnd, endTs)
+  }
+  if (!Number.isFinite(minStart) || minStart === Infinity || maxEnd < minStart) return 0
+  const years = (maxEnd - minStart) / (365.25 * 24 * 60 * 60 * 1000)
+  return Math.max(0, Math.round(years * 10) / 10)
+}
+
 export function emptyCertification() {
   return {
     id: newId('cert'),
@@ -137,7 +176,6 @@ export function createEmptyProject() {
     },
     targetRole: {
       jobTitle: '',
-      yearsOfExperience: '',
       companyCount: '3',
       jobDescription: '',
       jdFileName: '',
@@ -192,9 +230,6 @@ export function validateStep(project, stepIndex) {
   }
   if (step === 'target') {
     if (!String(t.jobTitle || '').trim()) return 'Please enter the role.'
-    if (t.yearsOfExperience === '' || Number(t.yearsOfExperience) < 0) {
-      return 'Please enter total years of experience.'
-    }
     if (!t.companyCount) return 'Select how many companies.'
     const count = Number(t.companyCount) || (project.experiences || []).length
     const list = (project.experiences || []).slice(0, count)
@@ -202,9 +237,9 @@ export function validateStep(project, stepIndex) {
       const e = list[i] || {}
       if (!String(e.companyName || '').trim()) return `Company ${i + 1}: enter the company name.`
       if (!String(e.jobTitle || '').trim()) return `Company ${i + 1}: enter the role.`
-      if (!String(e.startDate || '').trim()) return `Company ${i + 1}: enter the start date.`
-      if (!String(e.city || '').trim()) return `Company ${i + 1}: enter the city.`
-      if (!String(e.state || '').trim()) return `Company ${i + 1}: enter the state.`
+      if (!String(e.startDate || '').trim()) return `Company ${i + 1}: select the start month and year.`
+      if (!String(e.city || '').trim()) return `Company ${i + 1}: select the city.`
+      if (!String(e.state || '').trim()) return `Company ${i + 1}: select the state.`
       const bullets = Number(e.bulletCount)
       if (!Number.isFinite(bullets) || bullets < 3 || bullets > 15) {
         return `Company ${i + 1}: select required bullets (3–15).`
@@ -228,7 +263,6 @@ export function validateStep(project, stepIndex) {
 export function toLegacyBuildPayload(project) {
   const b = project.basicInformation || {}
   const t = project.targetRole || {}
-  const years = Number(t.yearsOfExperience) || 0
   const count = Number(t.companyCount) || (project.experiences || []).length
   const companies = (project.experiences || []).slice(0, count).map((e) => ({
     name: String(e.companyName || '').trim(),
@@ -240,6 +274,10 @@ export function toLegacyBuildPayload(project) {
     summary: '',
     bulletCount: Number(e.bulletCount) || 8,
   }))
+  const years = computeYearsOfExperience(companies.map((c) => ({
+    startDate: c.startDate,
+    endDate: c.endDate,
+  })))
 
   return {
     name: String(b.fullName || '').trim(),

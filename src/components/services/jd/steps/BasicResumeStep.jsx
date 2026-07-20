@@ -1,5 +1,13 @@
 import FormField from '../../FormField'
+import SelectWithOther from '../SelectWithOther'
+import UsCityStateFields from '../UsCityStateFields'
 import { emptyEducation } from '../jdProjectModel'
+import {
+  DEGREE_OPTIONS,
+  MAJOR_OPTIONS,
+  US_UNIVERSITY_OPTIONS,
+  matchOptionOrOther,
+} from '../../../../data/usEducationOptions'
 
 export default function BasicResumeStep({ project, onChange, onUploadBasicResume, uploading }) {
   const b = project.basicInformation
@@ -95,17 +103,11 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
           onChange={(e) => patch({ linkedin: e.target.value })}
           placeholder="linkedin.com/in/…"
         />
-        <FormField
-          label="City"
-          value={b.city}
-          onChange={(e) => patch({ city: e.target.value })}
-          placeholder="City"
-        />
-        <FormField
-          label="State"
-          value={b.state}
-          onChange={(e) => patch({ state: e.target.value })}
-          placeholder="State"
+        <UsCityStateFields
+          city={b.city}
+          state={b.state}
+          required
+          onChange={({ city, state }) => patch({ city, state })}
         />
       </div>
 
@@ -121,12 +123,49 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
             )}
           </div>
           <div className="form-grid">
-            <FormField label="Degree" value={edu.degree} onChange={(e) => patchEdu(index, 'degree', e.target.value)} placeholder="e.g. B.S." />
-            <FormField label="Major" value={edu.major} onChange={(e) => patchEdu(index, 'major', e.target.value)} placeholder="e.g. Computer Science" />
-            <FormField label="University / college" value={edu.school} onChange={(e) => patchEdu(index, 'school', e.target.value)} placeholder="School name" className="form-field--full" />
-            <FormField label="Location" value={edu.location} onChange={(e) => patchEdu(index, 'location', e.target.value)} placeholder="City, State" />
-            <FormField label="Graduation year" value={edu.graduationYear} onChange={(e) => patchEdu(index, 'graduationYear', e.target.value)} placeholder="e.g. 2020" />
-            <FormField label="GPA (optional)" value={edu.gpa} onChange={(e) => patchEdu(index, 'gpa', e.target.value)} placeholder="Only if on resume" />
+            <SelectWithOther
+              label="Degree"
+              value={edu.degree}
+              options={DEGREE_OPTIONS}
+              placeholder="Select degree"
+              otherPlaceholder="Enter degree"
+              onChange={(v) => patchEdu(index, 'degree', v)}
+            />
+            <SelectWithOther
+              label="Major"
+              value={edu.major}
+              options={MAJOR_OPTIONS}
+              placeholder="Select major"
+              otherPlaceholder="Enter major"
+              onChange={(v) => patchEdu(index, 'major', v)}
+            />
+            <SelectWithOther
+              label="University / college"
+              value={edu.school}
+              options={US_UNIVERSITY_OPTIONS}
+              placeholder="Select university"
+              otherPlaceholder="Enter university or college name"
+              className="form-field--full"
+              onChange={(v) => patchEdu(index, 'school', v)}
+            />
+            <FormField
+              label="Location"
+              value={edu.location}
+              onChange={(e) => patchEdu(index, 'location', e.target.value)}
+              placeholder="City, State"
+            />
+            <FormField
+              label="Graduation year"
+              value={edu.graduationYear}
+              onChange={(e) => patchEdu(index, 'graduationYear', e.target.value)}
+              placeholder="e.g. 2020"
+            />
+            <FormField
+              label="GPA (optional)"
+              value={edu.gpa}
+              onChange={(e) => patchEdu(index, 'gpa', e.target.value)}
+              placeholder="Only if on resume"
+            />
           </div>
         </div>
       ))}
@@ -135,4 +174,19 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
       </button>
     </div>
   )
+}
+
+/** Normalize extracted education fields against dropdown options. */
+export function normalizeEducationFromExtract(entries) {
+  return (entries || []).map((e) => {
+    const degree = matchOptionOrOther(e.degree, DEGREE_OPTIONS)
+    const major = matchOptionOrOther(e.major, MAJOR_OPTIONS)
+    const school = matchOptionOrOther(e.school, US_UNIVERSITY_OPTIONS)
+    return {
+      ...e,
+      degree: degree.select === 'Other' ? degree.custom : degree.select,
+      major: major.select === 'Other' ? major.custom : major.select,
+      school: school.select === 'Other' ? school.custom : school.select,
+    }
+  })
 }
