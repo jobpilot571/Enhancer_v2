@@ -93,6 +93,20 @@ export async function startJdBuild(formData, sessionId = null) {
   return res.json()
 }
 
+/**
+ * Upload a resume DOCX/PDF and extract contact + education for Basics step.
+ */
+export async function extractJdBasics(file) {
+  const form = new FormData()
+  form.append('resume', file)
+  const res = await request('/extract-basics', {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(90000),
+  })
+  return res.json()
+}
+
 export async function getJdBuildStatus(jobId) {
   const res = await request(`/build-status/${jobId}`, {
     signal: AbortSignal.timeout(30000),

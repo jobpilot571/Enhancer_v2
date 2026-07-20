@@ -8,6 +8,7 @@ import {
   getJdBuildStepLabel,
   fetchFileBlob,
   getDownloadUrl,
+  extractJdBasics,
 } from '../../../api/jdBuilder'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../../api/admin'
 import {
@@ -16,6 +17,8 @@ import {
   validateStep,
   toLegacyBuildPayload,
   syncExperiences,
+  emptyEducation,
+  newId,
 } from './jdProjectModel'
 import { readJdDraft, writeJdDraft } from './jdDraftStorage'
 import BasicResumeStep from './steps/BasicResumeStep'
@@ -141,22 +144,77 @@ export default function JdBuilderWizard() {
         basicResumeFileName: file.name,
         basicResumeExtracted: false,
       }
-      if (lower.endsWith('.txt')) {
+
+      if (lower.endsWith('.txt') || lower.endsWith('.md')) {
         const text = await file.text()
+        const sniffed = sniffContactFromText(text)
         partial = {
           ...partial,
-          ...sniffContactFromText(text),
-          basicResumeExtracted: true,
+          ...sniffed,
+          basicResumeExtracted: Boolean(sniffed.fullName || sniffed.email || sniffed.phone),
+        }
+      } else if (lower.endsWith('.docx') || lower.endsWith('.pdf')) {
+        const result = await extractJdBasics(file)
+        const basics = result?.basics || {}
+        const education = Array.isArray(basics.education) && basics.education.length
+          ? basics.education.map((e) => ({
+              ...emptyEducation(),
+              id: newId('edu'),
+              degree: e.degree || '',
+              major: e.major || '',
+              school: e.school || '',
+              location: e.location || '',
+              graduationYear: e.graduationYear || '',
+              gpa: e.gpa || '',
+            }))
+          : undefined
+
+        partial = {
+          ...partial,
+          fullName: basics.fullName || '',
+          email: basics.email || '',
+          phone: basics.phone || '',
+          linkedin: basics.linkedin || '',
+          city: basics.city || '',
+          state: basics.state || '',
+          ...(education ? { education } : {}),
+          basicResumeExtracted: Boolean(
+            basics.fullName || basics.email || basics.phone || education?.length,
+          ),
+        }
+
+        if (!partial.basicResumeExtracted) {
+          setError('Could not find contact details in that file. Please fill them in manually.')
         }
       } else {
-        setError('DOCX/PDF extraction arrives in Phase 4. For now, enter contact & education manually (or upload a .txt export).')
+        setError('Please upload a .docx, .pdf, or .txt resume.')
       }
+
+      const prev = projectRef.current.basicInformation || {}
       updateProject({
         ...projectRef.current,
-        basicInformation: { ...projectRef.current.basicInformation, ...partial },
+        basicInformation: {
+          ...prev,
+          ...partial,
+          // Keep existing typed values if extraction left a field blank
+          fullName: partial.fullName || prev.fullName || '',
+          email: partial.email || prev.email || '',
+          phone: partial.phone || prev.phone || '',
+          linkedin: partial.linkedin || prev.linkedin || '',
+          city: partial.city || prev.city || '',
+          state: partial.state || prev.state || '',
+        },
       })
     } catch (err) {
       setError(err.message || 'Could not read that file.')
+      updateProject({
+        ...projectRef.current,
+        basicInformation: {
+          ...projectRef.current.basicInformation,
+          basicResumeFileName: file.name,
+          basicResumeExtracted: false,
+        },
+      })
     } finally {
       setBasicUploading(false)
     }

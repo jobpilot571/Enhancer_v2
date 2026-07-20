@@ -1,18 +1,33 @@
 import { Router } from 'express'
 import fs from 'fs'
+import multer from 'multer'
 import {
   createJdBuilderSession,
+  detectFileType,
   getSession,
   updateSession,
   readFile,
 } from '../store/sessionStore.js'
 import { createBuildJob, getBuildJob } from '../store/buildJobStore.js'
 import { runJdBuildJob } from '../services/jdBuildWorker.js'
-import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
+import { requireUser, checkUsage, consumeUsage, optionalUser } from '../middleware/userAuth.js'
+import { extractResumeText } from '../services/resumeExtract.js'
+import { parseResumeLocally } from '../services/localResumeParse.js'
+import { parseResume } from '../services/openaiService.js'
+import { mapJdBasicsFromResume } from '../services/jdBasicsExtract.js'
 
 const router = Router()
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const type = detectFileType(file.originalname, file.mimetype)
+    cb(type ? null : new Error('Only .docx and .pdf files are allowed'), !!type)
+  },
+})
 
 function validateFormData(formData) {
   if (!formData || typeof formData !== 'object') {
@@ -58,6 +73,66 @@ function validateFormData(formData) {
 
   return null
 }
+
+/**
+ * Extract contact + education only from an uploaded resume (DOCX/PDF).
+ * Does not consume usage. Works signed-out or signed-in.
+ */
+router.post('/extract-basics', optionalUser, upload.single('resume'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+
+    const fileType = detectFileType(req.file.originalname, req.file.mimetype)
+    if (!fileType) return res.status(400).json({ error: 'Only .docx and .pdf files are allowed' })
+
+    const resumeText = await extractResumeText(req.file.buffer, fileType)
+    if (!String(resumeText || '').trim()) {
+      return res.status(400).json({ error: 'Could not read text from that document. Try a .docx resume.' })
+    }
+
+    const local = parseResumeLocally(resumeText)
+    let resumeData = local.data
+    let method = 'local'
+
+    const needsAi = !resumeData.email && !resumeData.phone && !resumeData.name
+      || (!resumeData.education?.length && local.confidence < 0.55)
+
+    if (needsAi) {
+      try {
+        resumeData = await parseResume(resumeText)
+        method = 'AI'
+        // Prefer local contact if AI omitted it
+        if (!resumeData.email && local.data.email) resumeData.email = local.data.email
+        if (!resumeData.phone && local.data.phone) resumeData.phone = local.data.phone
+        if (!resumeData.name && local.data.name) resumeData.name = local.data.name
+        if (!resumeData.location && local.data.location) resumeData.location = local.data.location
+        if ((!resumeData.education || !resumeData.education.length) && local.data.education?.length) {
+          resumeData.education = local.data.education
+        }
+      } catch (err) {
+        console.warn('[jd-builder] extract-basics AI fallback failed:', err.message)
+        method = 'local'
+        resumeData = local.data
+      }
+    }
+
+    const basics = mapJdBasicsFromResume(resumeData, resumeText)
+    const userTag = req.user?.id || 'guest'
+    console.log(
+      `[jd-builder] extract-basics user=${userTag} file=${req.file.originalname} `
+      + `method=${method} name=${Boolean(basics.fullName)} email=${Boolean(basics.email)} edu=${basics.education.length}`,
+    )
+
+    res.json({
+      ok: true,
+      method,
+      fileName: req.file.originalname,
+      basics,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
 
 router.post('/build', requireUser, checkUsage('jdBuilder'), (req, res, next) => {
   try {
