@@ -171,7 +171,7 @@ export default function JdBuilderWizard() {
               graduationYear: e.graduationYear || '',
               gpa: e.gpa || '',
             }))
-          : undefined
+          : [emptyEducation()]
 
         partial = {
           ...partial,
@@ -181,9 +181,9 @@ export default function JdBuilderWizard() {
           linkedin: basics.linkedin || '',
           city: basics.city || '',
           state: basics.state || '',
-          ...(education ? { education } : {}),
+          education,
           basicResumeExtracted: Boolean(
-            basics.fullName || basics.email || basics.phone || education?.length,
+            basics.fullName || basics.email || basics.phone || normalizedEdu.length,
           ),
         }
 
@@ -200,13 +200,18 @@ export default function JdBuilderWizard() {
         basicInformation: {
           ...prev,
           ...partial,
-          // Keep existing typed values if extraction left a field blank
+          // Prefer freshly extracted values; only keep prior typed value if extract left blank
           fullName: partial.fullName || prev.fullName || '',
           email: partial.email || prev.email || '',
           phone: partial.phone || prev.phone || '',
           linkedin: partial.linkedin || prev.linkedin || '',
-          city: partial.city || prev.city || '',
-          state: partial.state || prev.state || '',
+          city: Object.prototype.hasOwnProperty.call(partial, 'city')
+            ? (partial.city || '')
+            : (prev.city || ''),
+          state: Object.prototype.hasOwnProperty.call(partial, 'state')
+            ? (partial.state || '')
+            : (prev.state || ''),
+          education: Array.isArray(partial.education) ? partial.education : (prev.education || [emptyEducation()]),
         },
       })
     } catch (err) {

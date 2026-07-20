@@ -14,7 +14,7 @@ import { requireUser, checkUsage, consumeUsage, optionalUser } from '../middlewa
 import { extractResumeText } from '../services/resumeExtract.js'
 import { parseResumeLocally } from '../services/localResumeParse.js'
 import { parseResume } from '../services/openaiService.js'
-import { mapJdBasicsFromResume } from '../services/jdBasicsExtract.js'
+import { mapJdBasicsFromResume, sanitizeBasics } from '../services/jdBasicsExtract.js'
 
 const router = Router()
 
@@ -82,6 +82,7 @@ function validateFormData(formData) {
 
 /**
  * Extract contact + education only from an uploaded resume (DOCX/PDF).
+ * Text-first: always parse plain text for Basics; AI only fills missing contact gaps.
  * Does not consume usage. Works signed-out or signed-in.
  */
 router.post('/extract-basics', optionalUser, upload.single('resume'), async (req, res, next) => {
@@ -96,52 +97,52 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
       return res.status(400).json({ error: 'Could not read text from that document. Try a .docx resume.' })
     }
 
-    const local = parseResumeLocally(resumeText)
-    let resumeData = local.data
-    let method = 'local'
+    // 1) Always extract from plain text first (accurate Basics only)
+    let basics = mapJdBasicsFromResume({}, resumeText)
+    let method = 'text'
 
-    const mappedLocal = mapJdBasicsFromResume(local.data, resumeText)
-    const contactWeak = !mappedLocal.fullName && !mappedLocal.email && !mappedLocal.phone
-    const educationWeak = !mappedLocal.education?.length
-      || mappedLocal.education.every((e) => !e.school && !e.degree)
-    // Always try AI when contact OR education is incomplete — local parsers often miss schools.
-    const needsAi = contactWeak || educationWeak || local.confidence < 0.7
+    const contactWeak = !basics.fullName || (!basics.email && !basics.phone)
+    const educationWeak = !basics.education?.length
 
-    if (needsAi) {
+    // 2) Optional AI only to fill gaps — never trust AI location/education blindly
+    if (contactWeak || educationWeak) {
       try {
-        resumeData = await parseResume(resumeText)
-        method = 'AI'
-        // Prefer local contact if AI omitted it
-        if (!resumeData.email && local.data.email) resumeData.email = local.data.email
-        if (!resumeData.phone && local.data.phone) resumeData.phone = local.data.phone
-        if (!resumeData.name && local.data.name) resumeData.name = local.data.name
-        if (!resumeData.location && local.data.location) resumeData.location = local.data.location
-        if ((!resumeData.education || !resumeData.education.length) && local.data.education?.length) {
-          resumeData.education = local.data.education
+        const local = parseResumeLocally(resumeText)
+        let resumeData = local.data
+        if (local.confidence < 0.75 || contactWeak || educationWeak) {
+          try {
+            resumeData = await parseResume(resumeText)
+            method = 'text+AI'
+          } catch (err) {
+            console.warn('[jd-builder] extract-basics AI fallback failed:', err.message)
+            method = 'text+local'
+            resumeData = local.data
+          }
+        } else {
+          method = 'text+local'
         }
+
+        const enriched = mapJdBasicsFromResume(resumeData, resumeText)
+        // Fill only empty fields from enrichment (text wins when present)
+        basics = sanitizeBasics({
+          fullName: basics.fullName || enriched.fullName,
+          email: basics.email || enriched.email,
+          phone: basics.phone || enriched.phone,
+          linkedin: basics.linkedin || enriched.linkedin,
+          city: basics.city || enriched.city,
+          state: basics.state || enriched.state,
+          education: basics.education?.length ? basics.education : (enriched.education || []),
+        })
       } catch (err) {
-        console.warn('[jd-builder] extract-basics AI fallback failed:', err.message)
-        method = 'local'
-        resumeData = local.data
+        console.warn('[jd-builder] extract-basics enrich failed:', err.message)
       }
     }
-
-    const basics = mapJdBasicsFromResume(resumeData, resumeText)
-    // If AI still missed education, merge local-mapped education
-    if (!basics.education.length && mappedLocal.education.length) {
-      basics.education = mappedLocal.education
-    }
-    if (!basics.fullName && mappedLocal.fullName) basics.fullName = mappedLocal.fullName
-    if (!basics.email && mappedLocal.email) basics.email = mappedLocal.email
-    if (!basics.phone && mappedLocal.phone) basics.phone = mappedLocal.phone
-    if (!basics.city && mappedLocal.city) basics.city = mappedLocal.city
-    if (!basics.state && mappedLocal.state) basics.state = mappedLocal.state
-    if (!basics.linkedin && mappedLocal.linkedin) basics.linkedin = mappedLocal.linkedin
 
     const userTag = req.user?.id || 'guest'
     console.log(
       `[jd-builder] extract-basics user=${userTag} file=${req.file.originalname} `
-      + `method=${method} name=${Boolean(basics.fullName)} email=${Boolean(basics.email)} edu=${basics.education.length}`,
+      + `method=${method} name=${Boolean(basics.fullName)} email=${Boolean(basics.email)} `
+      + `city=${basics.city || '-'} state=${basics.state || '-'} edu=${basics.education?.length || 0}`,
     )
 
     res.json({
