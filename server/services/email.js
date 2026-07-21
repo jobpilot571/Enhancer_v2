@@ -1,10 +1,45 @@
 /**
  * Email delivery for signup OTP.
  * Uses Resend when RESEND_API_KEY is set; otherwise logs the code (local/dev).
+ *
+ * EMAIL_FROM must use a domain verified in Resend (e.g. JoBPilot.AI <shiva@jobpilot.solutions>).
+ * Never use @gmail.com / @yahoo.com etc. — Resend will reject those.
  */
 
 function getFromAddress() {
   return (process.env.EMAIL_FROM || 'JoBPilot.AI <onboarding@resend.dev>').trim()
+}
+
+function extractEmailDomain(from) {
+  const match = String(from || '').match(/@([a-z0-9.-]+)>?$/i)
+  return match ? match[1].toLowerCase() : ''
+}
+
+/** Consumer mailbox domains cannot be used as Resend "from" addresses. */
+function isUnverifiedMailboxDomain(domain) {
+  return /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|aol|protonmail|me)\.com$/.test(domain)
+    || domain === 'yahoo.co.uk'
+}
+
+export function getEmailFromStatus() {
+  const from = getFromAddress()
+  const domain = extractEmailDomain(from)
+  const consumerFrom = isUnverifiedMailboxDomain(domain)
+  const usingResendOnboarding = /@resend\.dev>?$/i.test(from) || domain === 'resend.dev'
+  return {
+    configured: isEmailConfigured(),
+    fromDomain: domain || null,
+    consumerMailboxFrom: consumerFrom,
+    usingResendOnboarding,
+    ok: isEmailConfigured() && Boolean(domain) && !consumerFrom,
+    hint: !isEmailConfigured()
+      ? 'Set RESEND_API_KEY on Render.'
+      : consumerFrom
+        ? `EMAIL_FROM uses @${domain}. Resend cannot send from Gmail/Yahoo/etc. Set EMAIL_FROM to an address on your verified domain (e.g. JoBPilot.AI <shiva@jobpilot.solutions>).`
+        : usingResendOnboarding
+          ? 'Using onboarding@resend.dev — you can only email your own Resend account address. Verify jobpilot.solutions in Resend and set EMAIL_FROM to that domain.'
+          : `Sending from @${domain}.`,
+  }
 }
 
 export function isEmailConfigured() {
@@ -13,6 +48,12 @@ export function isEmailConfigured() {
 
 async function sendViaResend({ to, subject, html, text }) {
   const apiKey = process.env.RESEND_API_KEY.trim()
+  const from = getFromAddress()
+  const status = getEmailFromStatus()
+  if (status.consumerMailboxFrom) {
+    throw new Error(status.hint)
+  }
+
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -20,7 +61,7 @@ async function sendViaResend({ to, subject, html, text }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: getFromAddress(),
+      from,
       to: [to],
       subject,
       html,
@@ -36,6 +77,11 @@ async function sendViaResend({ to, subject, html, text }) {
       detail = parsed.message || parsed.error || detail
     } catch {
       /* keep raw body */
+    }
+    if (/gmail\.com domain is not verified|domain is not verified/i.test(detail)) {
+      throw new Error(
+        `${detail} Fix on Render: set EMAIL_FROM to JoBPilot.AI <shiva@jobpilot.solutions> (or another address on your Resend-verified domain), then restart the service.`,
+      )
     }
     throw new Error(detail)
   }

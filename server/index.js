@@ -9,7 +9,7 @@ import authRoutes from './routes/auth.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
-import { isEmailConfigured } from './services/email.js'
+import { isEmailConfigured, getEmailFromStatus } from './services/email.js'
 import { initComplimentaryStore, getComplimentaryStorageStatus } from './store/complimentaryStore.js'
 import { initDurableUserStore, getUserStorageStatus } from './store/durableUserData.js'
 
@@ -69,6 +69,7 @@ app.get('/api/health', (_req, res) => {
     aiProviders: getConfiguredProviders(),
     adminConfigured: isAdminConfigured(),
     emailConfigured: isEmailConfigured(),
+    emailFrom: getEmailFromStatus(),
     googleAuthConfigured: isGoogleAuthConfigured(),
     complimentaryStorage: getComplimentaryStorageStatus(),
     userStorage: getUserStorageStatus(),

@@ -65,8 +65,10 @@ async function issueOtpAndRespond(res, user, { created = false } = {}) {
     message = 'Email delivery is not configured yet. Use the on-screen code below (also printed in the server console).'
   } else if (/invalid|unauthorized|401/i.test(deliveryError)) {
     message = 'Email API key is invalid. Check RESEND_API_KEY in .env (paste the full key from resend.com/api-keys), then restart the server.'
-  } else if (/domain|from|not allowed|restricted/i.test(deliveryError)) {
-    message = `Email could not be sent (${deliveryError}). With onboarding@resend.dev you can only email your Resend account address, or verify your own domain.`
+  } else if (/domain|from|not allowed|restricted|gmail\.com|EMAIL_FROM/i.test(deliveryError)) {
+    message = deliveryError.includes('Fix on Render') || deliveryError.includes('EMAIL_FROM')
+      ? deliveryError
+      : `Email could not be sent (${deliveryError}). On Render, set EMAIL_FROM to an address on your verified domain (e.g. JoBPilot.AI <shiva@jobpilot.solutions>), not a Gmail address.`
   } else {
     message = deliveryError
       ? `We could not deliver the email: ${deliveryError}`

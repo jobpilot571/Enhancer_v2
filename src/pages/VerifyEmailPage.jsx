@@ -103,8 +103,8 @@ export default function VerifyEmailPage() {
           </div>
         )}
 
-        {!previewCode && message && !delivered && (
-          <p className="auth-banner auth-banner--warn">{message}</p>
+        {!previewCode && message && (
+          <p className={`auth-banner ${delivered ? 'auth-banner--ok' : 'auth-banner--warn'}`}>{message}</p>
         )}
 
         {!previewCode && !delivered && !message && emailConfigured === false && (
@@ -142,7 +142,6 @@ export default function VerifyEmailPage() {
           </label>
 
           {error && <p className="auth-error">{error}</p>}
-          {message && !previewCode && <p className="auth-banner auth-banner--ok">{message}</p>}
 
           <button type="submit" className="btn btn--primary btn--full" disabled={loading || code.length !== 6}>
             {loading ? 'Verifying…' : 'Verify & continue'}
