@@ -178,6 +178,15 @@ assert(!/<w:textDirection\b/.test(fixedGeo), 'textDirection stripped')
 assert(!/w:w="600"/.test(fixedGeo), 'skinny gridCol widened')
 assert(!/w:left="2880" w:hanging/.test(fixedGeo), 'extreme para indent capped')
 assert(fixedGeo.includes('Experienced Business Analyst'), 'full sentence preserved')
+// Regression: w:gutter="0" must not be emitted twice ("Attribute w:gutter redefined")
+const pgMarTags = [...fixedGeo.matchAll(/<w:pgMar\b[^/]*\/>/g)].map((m) => m[0])
+assert(pgMarTags.length >= 1, 'pgMar present after normalize')
+for (const tag of pgMarTags) {
+  const gutters = [...tag.matchAll(/\bw:gutter="/g)]
+  assert(gutters.length <= 1, 'w:gutter appears at most once per pgMar')
+  const names = [...tag.matchAll(/\b(w:[a-zA-Z]+)="/g)].map((m) => m[1])
+  assert(names.length === new Set(names).size, 'pgMar has no redefined attributes')
+}
 
 // --- Skills tab-column layout: hanging ≈ left must NOT be crushed ---
 const skillsTabBody = [

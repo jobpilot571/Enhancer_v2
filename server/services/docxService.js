@@ -609,6 +609,7 @@ function normalizePageMargins(xml) {
   return xml.replace(/<w:pgMar\b[^/]*\/>/g, (tag) => {
     const attrs = {}
     for (const m of tag.matchAll(/\b(w:(?:top|right|bottom|left|header|footer|gutter))="(\d+)"/g)) {
+      // Last value wins if the source tag already had duplicates
       attrs[m[1]] = parseInt(m[2], 10)
     }
     const clamp = (key) => {
@@ -627,12 +628,17 @@ function normalizePageMargins(xml) {
     clamp('w:bottom')
     clamp('w:left')
     clamp('w:right')
+    // Keep gutter as-is (0 is valid). Never re-emit it via "other" — that caused
+    // "Attribute w:gutter redefined" and broke the enhanced preview XML parse.
 
     const parts = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`)
-    // Preserve any other attributes we didn't parse
-    const other = [...tag.matchAll(/\b(w:[a-zA-Z]+)="([^"]*)"/g)]
-      .filter((m) => !attrs[m[1]])
-      .map((m) => `${m[1]}="${m[2]}"`)
+    const seen = new Set(Object.keys(attrs))
+    const other = []
+    for (const m of tag.matchAll(/\b(w:[a-zA-Z]+)="([^"]*)"/g)) {
+      if (seen.has(m[1])) continue
+      seen.add(m[1])
+      other.push(`${m[1]}="${m[2]}"`)
+    }
     return `<w:pgMar ${[...parts, ...other].join(' ')}/>`
   })
 }
