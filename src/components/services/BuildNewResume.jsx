@@ -430,7 +430,7 @@ export default function BuildNewResume() {
     setError('')
     setUploadAuthPrompt(false)
     setStep(Math.max(0, Math.min(SECTIONS.length - 1, index)))
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'auto' })
   }
 
   function goNext() {

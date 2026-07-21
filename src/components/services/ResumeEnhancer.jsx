@@ -329,8 +329,16 @@ function JdPanel({ jdText, jdPrepStatus, onOpen, boxRef }) {
 function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
   const hasJd = Boolean(jdText.trim())
   const [panelStyle, setPanelStyle] = useState(null)
+  const textareaRef = useRef(null)
 
   useEffect(() => {
+    const isMobile = window.matchMedia('(max-width: 900px)').matches
+    // Mobile: let CSS center the panel. Do not re-anchor on scroll (iOS keyboard jumps feel like auto-scroll).
+    if (isMobile) {
+      setPanelStyle(null)
+      return undefined
+    }
+
     const place = () => {
       const el = anchorRef?.current
       if (!el) return
@@ -338,11 +346,9 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
       const width = Math.min(Math.max(r.width * 1.2, 440), Math.min(window.innerWidth * 0.48, 580))
       const maxHeight = Math.min(window.innerHeight * 0.8, 680)
 
-      // Anchor on the right: align to JD box (right side of screen)
       let left = Math.max(12, r.right - width)
       let top = r.top
 
-      // If modal would cover too high, drop just under the JD box still right-aligned
       if (top + Math.min(maxHeight, 320) > window.innerHeight - 12) {
         top = Math.min(r.bottom + 8, window.innerHeight - Math.min(maxHeight, 320) - 12)
       }
@@ -361,11 +367,7 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
 
     place()
     window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
+    return () => window.removeEventListener('resize', place)
   }, [anchorRef])
 
   useEffect(() => {
@@ -375,6 +377,14 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onCancel])
+
+  useEffect(() => {
+    // Focus without scrolling the page underneath
+    const t = window.setTimeout(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    }, 0)
+    return () => window.clearTimeout(t)
+  }, [])
 
   return (
     <div className="jd-modal" role="dialog" aria-modal="true" aria-label="Paste job description">
@@ -391,6 +401,7 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
         </div>
         <div className="jd-modal__body">
           <textarea
+            ref={textareaRef}
             className="jd-textarea jd-modal__textarea"
             placeholder="Paste the full job description here..."
             value={jdText}
@@ -402,7 +413,6 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
                 onDone({ fromPaste: true })
               }, 80)
             }}
-            autoFocus
           />
         </div>
         <div className="jd-modal__footer">
@@ -466,7 +476,7 @@ export default function ResumeEnhancer() {
     setAfterTab(key)
   }, [])
   const scrollToAdded = useCallback(() => {
-    document.getElementById('added-to-resume')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    document.getElementById('added-to-resume')?.scrollIntoView({ behavior: 'auto', block: 'start' })
   }, [])
   const handleDownloadScoreReport = useCallback(async () => {
     if (!sessionId) {
@@ -669,15 +679,10 @@ export default function ResumeEnhancer() {
     || null
   const showResults = step === 'done' && comparison && results
 
-  useEffect(() => {
-    if (showResults) {
-      requestAnimationFrame(() => {
-        document.getElementById('enhancement-results')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-      })
-    }
-  }, [showResults])
+  // Do not auto-scroll when results appear — on mobile this feels like the screen moving by itself.
+  // Users can jump via the explicit "View changes" control (scrollToAdded).
 
-    return (
+  return (
     <div className="service-block service-block--workspace service-block--enhancer">
       <div className="enhancer-topbar">
         <div className="service-block__header">

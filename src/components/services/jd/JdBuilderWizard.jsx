@@ -122,7 +122,7 @@ export default function JdBuilderWizard() {
       return next
     })
     setError('')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'auto' })
   }
 
   function goNext() {
@@ -262,13 +262,13 @@ export default function JdBuilderWizard() {
     const fresh = createEmptyProject()
     setProject(fresh)
     setStep(0)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'auto' })
   }
 
   async function handleBuild() {
     if (!signedIn) {
       setError('Please sign in to build a JD-tailored resume. Use Sign in above, then try again.')
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      window.scrollTo({ top: 0, behavior: 'auto' })
       return
     }
 
@@ -303,7 +303,7 @@ export default function JdBuilderWizard() {
       persist(next, previewIndex)
       return next
     })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: 'auto' })
 
     try {
       const payload = toLegacyBuildPayload(current)

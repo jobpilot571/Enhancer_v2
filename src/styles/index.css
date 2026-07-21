@@ -61,14 +61,19 @@ body,
   min-height: 100%;
   margin: 0;
 }
-html { scroll-behavior: smooth; font-size: 14px; }
+html {
+  scroll-behavior: auto;
+  font-size: 14px;
+  overflow-x: clip;
+}
 body {
   font-family: var(--font-sans);
   color: var(--gray-700);
   background: var(--white);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow-x: clip;
+  overscroll-behavior-y: contain;
 }
 img,
 svg { max-width: 100%; }
@@ -76,6 +81,31 @@ img { display: block; height: auto; }
 a { text-decoration: none; color: inherit; }
 button { cursor: pointer; border: none; background: none; font-family: inherit; }
 input, select, textarea { font-family: inherit; }
+
+/* Prevent iOS focus-zoom (feels like the page auto-scrolls) when controls are < 16px */
+@media (max-width: 900px) {
+  html { scroll-behavior: auto; }
+  input,
+  select,
+  textarea,
+  .form-field__input,
+  .auth-field input,
+  .jd-textarea,
+  .jd-modal__textarea {
+    font-size: 16px !important;
+  }
+  .jd-modal__panel {
+    top: 50% !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: calc(100% - 24px) !important;
+    max-width: 520px !important;
+    max-height: min(85dvh, 680px) !important;
+    margin: 0 !important;
+    transform: translate(-50%, -50%);
+  }
+}
 
 .app {
   width: 100%;
@@ -5260,9 +5290,9 @@ body:has(.service-block--enhancer) .footer__col h4 {
   }
   .service-block--workspace .upload-box__content--docx,
   .service-block--workspace .upload-box__content--jd {
-    height: clamp(300px, 70vh, 78vh);
-    max-height: clamp(300px, 70vh, 78vh);
-    min-height: 55vh;
+    height: clamp(220px, 42vh, 420px);
+    max-height: clamp(220px, 42vh, 420px);
+    min-height: 220px;
   }
   .enhancer-topbar {
     flex-wrap: wrap;
@@ -6593,7 +6623,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
   .upload-box--60 {
     width: 100%;
     min-width: 0;
-    min-height: 48vh;
+    min-height: 220px;
   }
   .upload-box__header {
     flex-wrap: wrap;
@@ -6680,9 +6710,15 @@ body:has(.service-block--enhancer) .footer__col h4 {
   }
   .builder-steps__label { font-size: 0.75rem; }
   .jd-modal__panel {
-    width: calc(100% - 24px);
+    top: 50% !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: calc(100% - 24px) !important;
+    max-width: 520px !important;
+    max-height: min(85dvh, 680px) !important;
     margin: 12px;
-    max-height: calc(100dvh - 24px);
+    transform: translate(-50%, -50%);
   }
   .auth-shell__panel--form { padding: 24px 16px; }
 }
@@ -6699,6 +6735,42 @@ body:has(.service-block--enhancer) .footer__col h4 {
     padding-bottom: 24px;
   }
   .navbar__toggle { display: flex; }
+
+  /* Keep mobile layouts stable — no reveal/hero motion that feels like auto-scroll */
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .hero__content > *,
+  .hero__visual {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .app,
+  .app-shell,
+  .service-page,
+  .service-block {
+    overflow-x: clip;
+  }
+
+  .service-page {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+
+  .jd-wizard__actions,
+  .form-cta--nav,
+  .action-bar {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .docx-viewer {
+    min-height: 280px;
+    max-height: 55vh;
+  }
 }
 
 .app-shell,

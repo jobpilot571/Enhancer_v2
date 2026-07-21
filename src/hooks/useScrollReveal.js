@@ -22,12 +22,18 @@ export default function useScrollReveal() {
 
   useEffect(() => {
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    // Mobile / coarse pointer: skip reveal motion — transforms feel like the page is scrolling itself
+    const isCoarse = window.matchMedia('(hover: none), (pointer: coarse), (max-width: 900px)').matches
     const els = Array.from(document.querySelectorAll(REVEAL_SELECTOR)).filter(
       (el) => !el.closest('.jd-wizard') && !el.classList.contains('form-card--jd-step'),
     )
 
-    if (prefersReduced || !('IntersectionObserver' in window)) {
-      els.forEach((el) => el.classList.add('reveal--visible'))
+    if (prefersReduced || isCoarse || !('IntersectionObserver' in window)) {
+      els.forEach((el) => {
+        el.classList.remove('reveal')
+        el.classList.add('reveal--visible')
+        el.style.removeProperty('--reveal-delay')
+      })
       return
     }
 
@@ -73,10 +79,12 @@ export function useScrollToHash() {
       const id = location.hash.replace('#', '')
       const timer = setTimeout(() => {
         const el = document.getElementById(id)
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        // Instant jump only for explicit hash links — never animate (feels like auto-scroll on mobile)
+        if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' })
       }, 80)
       return () => clearTimeout(timer)
     }
+    // Reset to top on route change only (not hash). Instant — smooth scroll feels like the page is "moving by itself".
     window.scrollTo(0, 0)
   }, [location.pathname, location.hash])
 }
