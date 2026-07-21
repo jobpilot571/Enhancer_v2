@@ -17,6 +17,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.110.8",
     "cors": "^2.8.5",
     "docx": "^9.7.1",
     "docx-preview": "^0.3.3",

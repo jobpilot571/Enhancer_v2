@@ -1,6 +1,16 @@
+/**
+ * Complimentary email whitelist.
+ *
+ * Priority:
+ *   1) Supabase (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)
+ *   2) GitHub Gist (COMPLIMENTARY_GIST_ID + GITHUB_TOKEN)
+ *   3) Local disk (ephemeral on Render)
+ */
+
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { getSupabase, isSupabaseConfigured } from '../supabase/client.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const USER_DATA_DIR = path.join(__dirname, '../user-data')
@@ -26,6 +36,7 @@ const DEFAULT_PLAN_TYPE = 'friend'
 let memory = { entries: [] }
 let ready = false
 let lastPersistError = ''
+let activeBackend = 'local-ephemeral'
 
 function ensureDirs() {
   if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true })
@@ -73,19 +84,22 @@ function gistId() {
 }
 
 export function isDurableComplimentaryStoreConfigured() {
-  return Boolean(gistId() && githubToken())
+  return isSupabaseConfigured() || Boolean(gistId() && githubToken())
 }
 
 export function getComplimentaryStorageStatus() {
   return {
     durable: isDurableComplimentaryStoreConfigured(),
-    backend: isDurableComplimentaryStoreConfigured() ? 'github-gist' : 'local-ephemeral',
+    backend: activeBackend,
     entryCount: Array.isArray(memory.entries) ? memory.entries.length : 0,
     ready,
     lastPersistError: lastPersistError || null,
-    hint: isDurableComplimentaryStoreConfigured()
-      ? 'Emails are saved permanently (GitHub Gist) and survive Render redeploys.'
-      : 'Emails are only on Render’s temporary disk and are wiped on every redeploy. Set COMPLIMENTARY_GIST_ID + GITHUB_TOKEN for permanent storage.',
+    hint:
+      activeBackend === 'supabase'
+        ? 'Emails are saved in Supabase Postgres and survive redeploys.'
+        : activeBackend === 'github-gist'
+          ? 'Emails are saved permanently (GitHub Gist) and survive Render redeploys.'
+          : 'Emails are only on temporary disk and are wiped on every redeploy. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.',
   }
 }
 
@@ -119,6 +133,24 @@ function normalizeData(data) {
     }))
     .filter((e) => e.email)
   return { entries }
+}
+
+function rowToEntry(row) {
+  return {
+    email: normalizeComplimentaryEmail(row.email),
+    planType: normalizePlanType(row.plan_type || row.note),
+    note: planTypeLabel(normalizePlanType(row.plan_type || row.note)),
+    addedAt: row.added_at || null,
+  }
+}
+
+function entryToRow(entry) {
+  return {
+    email: normalizeComplimentaryEmail(entry.email),
+    plan_type: normalizePlanType(entry.planType || entry.note),
+    note: planTypeLabel(normalizePlanType(entry.planType || entry.note)),
+    added_at: entry.addedAt || new Date().toISOString(),
+  }
 }
 
 async function fetchGistData() {
@@ -177,6 +209,45 @@ async function saveGistData(data) {
   return true
 }
 
+async function loadFromSupabase() {
+  const sb = getSupabase()
+  if (!sb) return null
+  const { data, error } = await sb.from('complimentary_emails').select('*')
+  if (error) throw new Error(`Supabase complimentary read failed: ${error.message}`)
+  return normalizeData({ entries: (data || []).map(rowToEntry) })
+}
+
+async function saveToSupabase(data) {
+  const sb = getSupabase()
+  if (!sb) return false
+
+  const entries = normalizeData(data).entries
+  const rows = entries.map(entryToRow)
+
+  // Replace list: delete removed emails, upsert current
+  const { data: existing, error: readErr } = await sb.from('complimentary_emails').select('email')
+  if (readErr) throw new Error(`Supabase complimentary read failed: ${readErr.message}`)
+
+  const nextSet = new Set(rows.map((r) => r.email))
+  const toDelete = (existing || [])
+    .map((r) => r.email)
+    .filter((email) => email && !nextSet.has(email))
+
+  if (toDelete.length > 0) {
+    const { error: delErr } = await sb.from('complimentary_emails').delete().in('email', toDelete)
+    if (delErr) throw new Error(`Supabase complimentary delete failed: ${delErr.message}`)
+  }
+
+  if (rows.length > 0) {
+    const { error: upsertErr } = await sb
+      .from('complimentary_emails')
+      .upsert(rows, { onConflict: 'email' })
+    if (upsertErr) throw new Error(`Supabase complimentary write failed: ${upsertErr.message}`)
+  }
+
+  return true
+}
+
 function readLocalData() {
   if (fs.existsSync(COMPLIMENTARY_PATH)) {
     return normalizeData(readJson(COMPLIMENTARY_PATH, { entries: [] }))
@@ -192,11 +263,27 @@ function readLocalData() {
 
 /**
  * Load durable list into memory. Call once on server boot.
- * Prefers GitHub Gist when configured; otherwise local file (ephemeral on Render).
  */
 export async function initComplimentaryStore() {
   try {
-    if (isDurableComplimentaryStoreConfigured()) {
+    if (isSupabaseConfigured()) {
+      activeBackend = 'supabase'
+      const remote = await loadFromSupabase()
+      memory = remote || { entries: [] }
+      if (memory.entries.length === 0) {
+        const local = readLocalData()
+        if (local.entries.length > 0) {
+          memory = local
+          await saveToSupabase(memory)
+          console.log('[complimentary] seeded Supabase from local disk')
+        }
+      }
+      writeLocal(memory)
+      console.log(
+        `[complimentary] durable store ready (supabase) — ${memory.entries.length} email(s)`,
+      )
+    } else if (gistId() && githubToken()) {
+      activeBackend = 'github-gist'
       const remote = await fetchGistData()
       memory = remote || { entries: [] }
       writeLocal(memory)
@@ -204,16 +291,18 @@ export async function initComplimentaryStore() {
         `[complimentary] durable store ready (gist) — ${memory.entries.length} email(s)`,
       )
     } else {
+      activeBackend = 'local-ephemeral'
       memory = readLocalData()
       console.warn(
         '[complimentary] WARNING: no durable store configured. '
-        + 'Emails reset on Render redeploy. Set COMPLIMENTARY_GIST_ID + GITHUB_TOKEN.',
+        + 'Emails reset on Render redeploy. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.',
       )
       console.log(`[complimentary] local store loaded — ${memory.entries.length} email(s)`)
     }
     lastPersistError = ''
   } catch (err) {
     console.error('[complimentary] init failed, falling back to local:', err.message)
+    activeBackend = 'local-ephemeral'
     memory = readLocalData()
     lastPersistError = err.message
   } finally {
@@ -224,7 +313,6 @@ export async function initComplimentaryStore() {
 
 function getData() {
   if (!ready) {
-    // Sync fallback before init finishes (shouldn't happen often)
     memory = readLocalData()
   }
   return memory
@@ -233,21 +321,38 @@ function getData() {
 async function persist(data) {
   memory = normalizeData(data)
   writeLocal(memory)
-  if (!isDurableComplimentaryStoreConfigured()) {
-    lastPersistError = 'Durable store not configured'
+
+  if (activeBackend === 'supabase' && isSupabaseConfigured()) {
+    try {
+      await saveToSupabase(memory)
+      lastPersistError = ''
+    } catch (err) {
+      lastPersistError = err.message
+      console.error('[complimentary] durable persist failed:', err.message)
+      throw Object.assign(
+        new Error(`Saved locally but permanent storage failed: ${err.message}`),
+        { status: 502 },
+      )
+    }
     return memory
   }
-  try {
-    await saveGistData(memory)
-    lastPersistError = ''
-  } catch (err) {
-    lastPersistError = err.message
-    console.error('[complimentary] durable persist failed:', err.message)
-    throw Object.assign(
-      new Error(`Saved locally but permanent storage failed: ${err.message}`),
-      { status: 502 },
-    )
+
+  if (activeBackend === 'github-gist' && gistId() && githubToken()) {
+    try {
+      await saveGistData(memory)
+      lastPersistError = ''
+    } catch (err) {
+      lastPersistError = err.message
+      console.error('[complimentary] durable persist failed:', err.message)
+      throw Object.assign(
+        new Error(`Saved locally but permanent storage failed: ${err.message}`),
+        { status: 502 },
+      )
+    }
+    return memory
   }
+
+  lastPersistError = 'Durable store not configured'
   return memory
 }
 

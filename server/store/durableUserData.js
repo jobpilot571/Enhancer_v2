@@ -1,14 +1,23 @@
 /**
- * Durable JSON blobs for users + usage (GitHub Gist).
- * Same credentials as complimentary whitelist when USER_DATA_GIST_ID is unset:
- *   GITHUB_TOKEN / GH_TOKEN + COMPLIMENTARY_GIST_ID (or USER_DATA_GIST_ID)
+ * Durable JSON blobs for users + usage.
  *
- * Without a gist, data stays on local disk only (ephemeral on Render).
+ * Priority:
+ *   1) Supabase (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY) — recommended
+ *   2) GitHub Gist (GITHUB_TOKEN + COMPLIMENTARY_GIST_ID / USER_DATA_GIST_ID)
+ *   3) Local disk only (ephemeral on Render)
  */
 
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import {
+  getSupabase,
+  isSupabaseConfigured,
+  rowToUser,
+  userToRow,
+  usageMapToRows,
+  usageRowsToMap,
+} from '../supabase/client.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../user-data')
@@ -20,6 +29,7 @@ const LOCAL_USAGE = path.join(DATA_DIR, 'usage.json')
 
 let ready = false
 let lastPersistError = ''
+let activeBackend = 'local-ephemeral'
 
 /** @type {{ users: any[] }} */
 let usersMemory = { users: [] }
@@ -39,20 +49,24 @@ function gistId() {
 }
 
 export function isDurableUserStoreConfigured() {
-  return Boolean(gistId() && githubToken())
+  return isSupabaseConfigured() || Boolean(gistId() && githubToken())
 }
 
 export function getUserStorageStatus() {
+  const durable = isDurableUserStoreConfigured()
   return {
-    durable: isDurableUserStoreConfigured(),
-    backend: isDurableUserStoreConfigured() ? 'github-gist' : 'local-ephemeral',
+    durable,
+    backend: activeBackend,
     userCount: Array.isArray(usersMemory.users) ? usersMemory.users.length : 0,
     usageKeys: Object.keys(usageMemory.usage || {}).length,
     ready,
     lastPersistError: lastPersistError || null,
-    hint: isDurableUserStoreConfigured()
-      ? 'Users and usage are saved permanently (GitHub Gist) and survive Render redeploys.'
-      : 'Users/usage are on Render’s temporary disk and reset on redeploy. Set GITHUB_TOKEN + COMPLIMENTARY_GIST_ID (or USER_DATA_GIST_ID).',
+    hint:
+      activeBackend === 'supabase'
+        ? 'Users and usage are saved in Supabase Postgres and survive redeploys.'
+        : activeBackend === 'github-gist'
+          ? 'Users and usage are saved permanently (GitHub Gist) and survive Render redeploys.'
+          : 'Users/usage are on temporary disk and reset on redeploy. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (recommended).',
   }
 }
 
@@ -136,22 +150,90 @@ async function patchGistFiles(filesPayload) {
   return true
 }
 
+async function loadFromSupabase() {
+  const sb = getSupabase()
+  if (!sb) return null
+
+  const { data: userRows, error: usersErr } = await sb.from('users').select('*')
+  if (usersErr) throw new Error(`Supabase users read failed: ${usersErr.message}`)
+
+  const { data: usageRows, error: usageErr } = await sb.from('usage_monthly').select('*')
+  if (usageErr) throw new Error(`Supabase usage read failed: ${usageErr.message}`)
+
+  return {
+    users: (userRows || []).map(rowToUser).filter(Boolean),
+    usage: usageRowsToMap(usageRows),
+  }
+}
+
+async function persistToSupabase() {
+  const sb = getSupabase()
+  if (!sb) return false
+
+  const userRows = usersMemory.users.map(userToRow)
+  if (userRows.length > 0) {
+    const { error: usersErr } = await sb.from('users').upsert(userRows, { onConflict: 'id' })
+    if (usersErr) throw new Error(`Supabase users write failed: ${usersErr.message}`)
+  }
+
+  const knownUsers = new Set(usersMemory.users.map((u) => u.id))
+  const usageRows = usageMapToRows(usageMemory.usage).filter((r) => knownUsers.has(r.user_id))
+  if (usageRows.length > 0) {
+    const { error: usageErr } = await sb
+      .from('usage_monthly')
+      .upsert(usageRows, { onConflict: 'user_id,month' })
+    if (usageErr) throw new Error(`Supabase usage write failed: ${usageErr.message}`)
+  }
+
+  return true
+}
+
+function seedFromLocalIfEmpty(users, usage) {
+  const localUsers = normalizeUsers(readLocalJson(LOCAL_USERS, { users: [] }))
+  const localUsage = normalizeUsage(readLocalJson(LOCAL_USAGE, { usage: {} }))
+  let nextUsers = users
+  let nextUsage = usage
+  if (users.length === 0 && localUsers.users.length > 0) {
+    nextUsers = localUsers.users
+  }
+  if (Object.keys(usage).length === 0 && Object.keys(localUsage.usage).length > 0) {
+    nextUsage = localUsage.usage
+  }
+  return { users: nextUsers, usage: nextUsage }
+}
+
 export async function initDurableUserStore() {
   try {
-    if (isDurableUserStoreConfigured()) {
+    if (isSupabaseConfigured()) {
+      activeBackend = 'supabase'
+      const remote = await loadFromSupabase()
+      const seeded = seedFromLocalIfEmpty(remote.users, remote.usage)
+      usersMemory = normalizeUsers({ users: seeded.users })
+      usageMemory = normalizeUsage({ usage: seeded.usage })
+      writeLocalUsers(usersMemory)
+      writeLocalUsage(usageMemory)
+
+      // First-time migrate: push local seed into empty Supabase
+      if (
+        (remote.users.length === 0 && usersMemory.users.length > 0)
+        || (Object.keys(remote.usage).length === 0 && Object.keys(usageMemory.usage).length > 0)
+      ) {
+        await persistToSupabase()
+        console.log('[auth-store] seeded Supabase from local disk')
+      }
+
+      console.log(
+        `[auth-store] durable ready (supabase) — users=${usersMemory.users.length} usageKeys=${Object.keys(usageMemory.usage).length}`,
+      )
+    } else if (gistId() && githubToken()) {
+      activeBackend = 'github-gist'
       const files = await fetchGistFiles()
       usersMemory = normalizeUsers(parseGistFile(files, USERS_FILE, { users: [] }))
       usageMemory = normalizeUsage(parseGistFile(files, USAGE_FILE, { usage: {} }))
 
-      // Seed from local if gist files empty but local has data (first migrate)
-      const localUsers = normalizeUsers(readLocalJson(LOCAL_USERS, { users: [] }))
-      const localUsage = normalizeUsage(readLocalJson(LOCAL_USAGE, { usage: {} }))
-      if (usersMemory.users.length === 0 && localUsers.users.length > 0) {
-        usersMemory = localUsers
-      }
-      if (Object.keys(usageMemory.usage).length === 0 && Object.keys(localUsage.usage).length > 0) {
-        usageMemory = localUsage
-      }
+      const seeded = seedFromLocalIfEmpty(usersMemory.users, usageMemory.usage)
+      usersMemory = normalizeUsers({ users: seeded.users })
+      usageMemory = normalizeUsage({ usage: seeded.usage })
 
       writeLocalUsers(usersMemory)
       writeLocalUsage(usageMemory)
@@ -163,11 +245,12 @@ export async function initDurableUserStore() {
         `[auth-store] durable ready (gist) — users=${usersMemory.users.length} usageKeys=${Object.keys(usageMemory.usage).length}`,
       )
     } else {
+      activeBackend = 'local-ephemeral'
       usersMemory = normalizeUsers(readLocalJson(LOCAL_USERS, { users: [] }))
       usageMemory = normalizeUsage(readLocalJson(LOCAL_USAGE, { usage: {} }))
       console.warn(
         '[auth-store] WARNING: no durable store. Users/usage reset on Render redeploy. '
-          + 'Set GITHUB_TOKEN + COMPLIMENTARY_GIST_ID (or USER_DATA_GIST_ID).',
+          + 'Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (recommended).',
       )
       console.log(
         `[auth-store] local loaded — users=${usersMemory.users.length} usageKeys=${Object.keys(usageMemory.usage).length}`,
@@ -176,6 +259,7 @@ export async function initDurableUserStore() {
     lastPersistError = ''
   } catch (err) {
     console.error('[auth-store] init failed, using local:', err.message)
+    activeBackend = 'local-ephemeral'
     usersMemory = normalizeUsers(readLocalJson(LOCAL_USERS, { users: [] }))
     usageMemory = normalizeUsage(readLocalJson(LOCAL_USAGE, { usage: {} }))
     lastPersistError = err.message
@@ -205,20 +289,33 @@ let persistChain = Promise.resolve()
 async function flushPersist() {
   writeLocalUsers(usersMemory)
   writeLocalUsage(usageMemory)
-  if (!isDurableUserStoreConfigured()) {
-    lastPersistError = 'Durable store not configured'
+
+  if (activeBackend === 'supabase' && isSupabaseConfigured()) {
+    try {
+      await persistToSupabase()
+      lastPersistError = ''
+    } catch (err) {
+      lastPersistError = err.message
+      console.error('[auth-store] durable persist failed:', err.message)
+    }
     return
   }
-  try {
-    await patchGistFiles({
-      [USERS_FILE]: { content: JSON.stringify(usersMemory, null, 2) },
-      [USAGE_FILE]: { content: JSON.stringify(usageMemory, null, 2) },
-    })
-    lastPersistError = ''
-  } catch (err) {
-    lastPersistError = err.message
-    console.error('[auth-store] durable persist failed:', err.message)
+
+  if (activeBackend === 'github-gist' && gistId() && githubToken()) {
+    try {
+      await patchGistFiles({
+        [USERS_FILE]: { content: JSON.stringify(usersMemory, null, 2) },
+        [USAGE_FILE]: { content: JSON.stringify(usageMemory, null, 2) },
+      })
+      lastPersistError = ''
+    } catch (err) {
+      lastPersistError = err.message
+      console.error('[auth-store] durable persist failed:', err.message)
+    }
+    return
   }
+
+  lastPersistError = 'Durable store not configured'
 }
 
 /** Schedule durable persist (debounced). Local disk write is immediate. */
