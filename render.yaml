@@ -7,7 +7,7 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: ALLOWED_ORIGINS
         value: "https://enhancer-v2.vercel.app,https://jobpilot.ai"
       - key: OPENAI_API_KEY

@@ -5,9 +5,12 @@
  * Env:
  *   SUPABASE_URL
  *   SUPABASE_SERVICE_ROLE_KEY
+ *
+ * Node < 22 needs the `ws` package for supabase-js realtime transport.
  */
 
 import { createClient } from '@supabase/supabase-js'
+import ws from 'ws'
 
 let client = null
 
@@ -28,6 +31,8 @@ export function getSupabase() {
           persistSession: false,
           autoRefreshToken: false,
         },
+        // Required on Node 20 (Render default); harmless on Node 22+
+        realtime: { transport: ws },
       },
     )
   }
