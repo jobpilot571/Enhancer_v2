@@ -44,8 +44,8 @@
   --font-display: 'Playfair Display', Georgia, serif;
   --nav-height: 72px;
   --action-bar-height: 80px;
-  /* Industry-style shell: fill the viewport; only proportional side insets (no huge empty gutters) */
-  --page-pad: clamp(20px, 4vw, 72px);
+  /* Fill the viewport; keep only slim side insets (was up to 80px and looked like empty gutters) */
+  --page-pad: clamp(16px, 2vw, 32px);
   --content-max: 1120px;
   --shell-max: 100%;
   --sidebar-width: 280px;
@@ -6523,7 +6523,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 
 @media (min-width: 1536px) {
   :root {
-    --page-pad: clamp(40px, 5vw, 80px);
+    --page-pad: clamp(20px, 2vw, 40px);
     --sidebar-width: 280px;
     --content-max: 1120px;
     --shell-max: 100%;
@@ -6532,7 +6532,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 
 @media (min-width: 1280px) and (max-width: 1535px) {
   :root {
-    --page-pad: clamp(28px, 4vw, 56px);
+    --page-pad: clamp(16px, 1.75vw, 32px);
     --sidebar-width: 260px;
     --content-max: 1040px;
     --shell-max: 100%;
@@ -6541,7 +6541,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
 
 @media (min-width: 1024px) and (max-width: 1279px) {
   :root {
-    --page-pad: clamp(24px, 3.5vw, 40px);
+    --page-pad: clamp(14px, 1.5vw, 24px);
     --sidebar-width: 240px;
     --content-max: 100%;
     --nav-height: 68px;
