@@ -21,13 +21,6 @@ function loadGisScript() {
   })
 }
 
-function measureButtonWidth(el) {
-  const parent = el?.parentElement
-  const raw = Math.floor(parent?.clientWidth || el?.clientWidth || 320)
-  // Google GIS requires an integer width; keep within usable mobile/desktop bounds
-  return Math.max(240, Math.min(400, raw || 320))
-}
-
 export default function GoogleSignInButton({ onCredential, onError, text = 'continue_with' }) {
   const btnRef = useRef(null)
   const [ready, setReady] = useState(false)
@@ -37,7 +30,6 @@ export default function GoogleSignInButton({ onCredential, onError, text = 'cont
 
   useEffect(() => {
     let cancelled = false
-    let resizeObserver = null
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
     // No client ID → hide quietly (email/password still works)
@@ -63,30 +55,16 @@ export default function GoogleSignInButton({ onCredential, onError, text = 'cont
           ux_mode: 'popup',
         })
 
-        const render = () => {
-          if (cancelled || !btnRef.current || !window.google?.accounts?.id) return
-          btnRef.current.innerHTML = ''
-          window.google.accounts.id.renderButton(btnRef.current, {
-            theme: 'outline',
-            size: 'large',
-            shape: 'rectangular',
-            text,
-            width: measureButtonWidth(btnRef.current),
-            logo_alignment: 'left',
-          })
-        }
+        window.google.accounts.id.renderButton(btnRef.current, {
+          theme: 'outline',
+          size: 'large',
+          shape: 'rectangular',
+          text,
+          width: 356,
+          logo_alignment: 'left',
+        })
 
-        render()
         if (!cancelled) setReady(true)
-
-        if (typeof ResizeObserver !== 'undefined' && btnRef.current.parentElement) {
-          let timer = null
-          resizeObserver = new ResizeObserver(() => {
-            clearTimeout(timer)
-            timer = setTimeout(render, 120)
-          })
-          resizeObserver.observe(btnRef.current.parentElement)
-        }
       } catch {
         if (!cancelled) setUnavailable(true)
       }
@@ -95,7 +73,6 @@ export default function GoogleSignInButton({ onCredential, onError, text = 'cont
     init()
     return () => {
       cancelled = true
-      resizeObserver?.disconnect()
     }
   }, [text])
 

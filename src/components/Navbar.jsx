@@ -85,15 +85,7 @@ export default function Navbar() {
             <Link
               to="/#services"
               className={`navbar__link ${isActive('/#services') ? 'navbar__link--active' : ''}`}
-              onClick={(e) => {
-                // Tablet hamburger: expand/collapse services list (submenu is hidden by default)
-                if (typeof window !== 'undefined' && window.matchMedia('(min-width: 768px) and (max-width: 1023px)').matches) {
-                  e.preventDefault()
-                  setDropdownOpen((v) => !v)
-                  return
-                }
-                closeMenu()
-              }}
+              onClick={closeMenu}
             >
               Services
               <svg className="navbar__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
