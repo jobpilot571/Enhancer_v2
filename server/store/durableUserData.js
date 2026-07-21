@@ -202,24 +202,75 @@ function seedFromLocalIfEmpty(users, usage) {
   return { users: nextUsers, usage: nextUsage }
 }
 
+/** One-time: fill empty Supabase from GitHub Gist (then local). */
+async function seedFromGistOrLocalIfEmpty(users, usage) {
+  let nextUsers = users
+  let nextUsage = usage
+  let source = null
+
+  const needUsers = users.length === 0
+  const needUsage = Object.keys(usage).length === 0
+  if (!needUsers && !needUsage) {
+    return { users: nextUsers, usage: nextUsage, source: null }
+  }
+
+  if (gistId() && githubToken()) {
+    try {
+      const files = await fetchGistFiles()
+      const gistUsers = normalizeUsers(parseGistFile(files, USERS_FILE, { users: [] }))
+      const gistUsage = normalizeUsage(parseGistFile(files, USAGE_FILE, { usage: {} }))
+      if (needUsers && gistUsers.users.length > 0) {
+        nextUsers = gistUsers.users
+        source = 'github-gist'
+      }
+      if (needUsage && Object.keys(gistUsage.usage).length > 0) {
+        nextUsage = gistUsage.usage
+        source = source || 'github-gist'
+      }
+    } catch (err) {
+      console.warn('[auth-store] gist migrate read failed:', err.message)
+    }
+  }
+
+  if (needUsers && nextUsers.length === 0) {
+    const localUsers = normalizeUsers(readLocalJson(LOCAL_USERS, { users: [] }))
+    if (localUsers.users.length > 0) {
+      nextUsers = localUsers.users
+      source = source || 'local-disk'
+    }
+  }
+  if (needUsage && Object.keys(nextUsage).length === 0) {
+    const localUsage = normalizeUsage(readLocalJson(LOCAL_USAGE, { usage: {} }))
+    if (Object.keys(localUsage.usage).length > 0) {
+      nextUsage = localUsage.usage
+      source = source || 'local-disk'
+    }
+  }
+
+  return { users: nextUsers, usage: nextUsage, source }
+}
+
 export async function initDurableUserStore() {
   try {
     if (isSupabaseConfigured()) {
       activeBackend = 'supabase'
       const remote = await loadFromSupabase()
-      const seeded = seedFromLocalIfEmpty(remote.users, remote.usage)
+      const seeded = await seedFromGistOrLocalIfEmpty(remote.users, remote.usage)
       usersMemory = normalizeUsers({ users: seeded.users })
       usageMemory = normalizeUsage({ usage: seeded.usage })
       writeLocalUsers(usersMemory)
       writeLocalUsage(usageMemory)
 
-      // First-time migrate: push local seed into empty Supabase
+      // First-time migrate: push seed into empty Supabase
       if (
         (remote.users.length === 0 && usersMemory.users.length > 0)
         || (Object.keys(remote.usage).length === 0 && Object.keys(usageMemory.usage).length > 0)
       ) {
         await persistToSupabase()
-        console.log('[auth-store] seeded Supabase from local disk')
+        console.log(
+          `[auth-store] migrated to Supabase from ${seeded.source || 'seed'} — `
+            + `users=${usersMemory.users.length} usageKeys=${Object.keys(usageMemory.usage).length}`,
+        )
       }
 
       console.log(

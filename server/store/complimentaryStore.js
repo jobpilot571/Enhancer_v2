@@ -271,11 +271,31 @@ export async function initComplimentaryStore() {
       const remote = await loadFromSupabase()
       memory = remote || { entries: [] }
       if (memory.entries.length === 0) {
-        const local = readLocalData()
-        if (local.entries.length > 0) {
-          memory = local
+        let source = null
+        // Prefer GitHub Gist (production history), then local disk
+        if (gistId() && githubToken()) {
+          try {
+            const fromGist = await fetchGistData()
+            if (fromGist?.entries?.length > 0) {
+              memory = fromGist
+              source = 'github-gist'
+            }
+          } catch (err) {
+            console.warn('[complimentary] gist migrate read failed:', err.message)
+          }
+        }
+        if (memory.entries.length === 0) {
+          const local = readLocalData()
+          if (local.entries.length > 0) {
+            memory = local
+            source = 'local-disk'
+          }
+        }
+        if (memory.entries.length > 0) {
           await saveToSupabase(memory)
-          console.log('[complimentary] seeded Supabase from local disk')
+          console.log(
+            `[complimentary] migrated to Supabase from ${source} — ${memory.entries.length} email(s)`,
+          )
         }
       }
       writeLocal(memory)
