@@ -11,6 +11,7 @@ import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
 import { isEmailConfigured } from './services/email.js'
 import { initComplimentaryStore, getComplimentaryStorageStatus } from './store/complimentaryStore.js'
+import { initDurableUserStore, getUserStorageStatus } from './store/durableUserData.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -70,6 +71,7 @@ app.get('/api/health', (_req, res) => {
     emailConfigured: isEmailConfigured(),
     googleAuthConfigured: isGoogleAuthConfigured(),
     complimentaryStorage: getComplimentaryStorageStatus(),
+    userStorage: getUserStorageStatus(),
   })
 })
 
@@ -79,6 +81,7 @@ app.use((err, _req, res, _next) => {
 })
 
 await initComplimentaryStore()
+await initDurableUserStore()
 
 app.listen(PORT, () => {
   console.log(`Resume Enhancer API running on port ${PORT}`)

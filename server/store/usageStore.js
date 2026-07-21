@@ -1,37 +1,16 @@
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { currentUsageMonth, getPlanLimits, FREE_PLAN } from '../services/plans.js'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = path.join(__dirname, '../user-data')
-const USAGE_PATH = path.join(DATA_DIR, 'usage.json')
-
-function ensureDirs() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-}
-
-function readUsage() {
-  ensureDirs()
-  if (!fs.existsSync(USAGE_PATH)) {
-    const empty = { usage: {} }
-    fs.writeFileSync(USAGE_PATH, JSON.stringify(empty, null, 2))
-    return empty
-  }
-  try {
-    return JSON.parse(fs.readFileSync(USAGE_PATH, 'utf8'))
-  } catch {
-    return { usage: {} }
-  }
-}
-
-function saveUsage(data) {
-  ensureDirs()
-  fs.writeFileSync(USAGE_PATH, JSON.stringify(data, null, 2))
-}
+import { getUsageData, setUsageData } from './durableUserData.js'
 
 function emptyMonth() {
   return { enhancer: 0, builder: 0, jdBuilder: 0 }
+}
+
+function readUsage() {
+  return getUsageData()
+}
+
+function saveUsage(data) {
+  setUsageData(data)
 }
 
 export function getUserUsage(userId, planId = FREE_PLAN) {
@@ -80,24 +59,21 @@ export function consumeUsage(userId, planId, usageKey) {
   const used = { ...emptyMonth(), ...(data.usage[key] || {}) }
 
   if (Number.isFinite(limit) && used[usageKey] >= limit) {
-    const labels = {
-      enhancer: 'resume enhancements',
-      builder: 'resume builds',
-      jdBuilder: 'JD-tailored resumes',
-    }
     const err = new Error(
       usageKey === 'enhancer'
-        ? `Free plan allows only ${limit} resume enhancements this month. You have used all ${limit}. Upgrade your plan for more.`
-        : `Free plan limit reached (${limit} ${labels[usageKey]} this month). Upgrade your plan for more.`
+        ? 'You have used all free enhancements for this month.'
+        : usageKey === 'builder'
+          ? 'You have used all free resume builds for this month.'
+          : 'You have used all free JD builds for this month.',
     )
     err.status = 403
-    err.code = 'PLAN_LIMIT'
-    err.usage = getUserUsage(userId, planId)
+    err.code = 'USAGE_LIMIT'
     throw err
   }
 
-  used[usageKey] += 1
+  used[usageKey] = (used[usageKey] || 0) + 1
   data.usage[key] = used
   saveUsage(data)
+
   return getUserUsage(userId, planId)
 }

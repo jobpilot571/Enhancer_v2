@@ -73,7 +73,7 @@ export default function LoginPage() {
     >
       <div className="auth-form-card">
         <h2 className="auth-form-card__title">Sign in</h2>
-        <p className="auth-form-card__desc">Use Google or email. New Google accounts still need a one-time email code.</p>
+        <p className="auth-form-card__desc">Use Google or email. OTP is only for new or unverified accounts — returning users stay signed in.</p>
 
         {showGoogle && (
           <>

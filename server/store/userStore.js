@@ -8,18 +8,21 @@ import {
   normalizePlanType,
   planTypeLabel,
 } from './complimentaryStore.js'
+import { getUsersData, setUsersData } from './durableUserData.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../user-data')
-const USERS_PATH = path.join(DATA_DIR, 'users.json')
 const OTP_PATH = path.join(DATA_DIR, 'otps.json')
-const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json')
 
 const OTP_TTL_MS = 10 * 60 * 1000
 const OTP_MAX_ATTEMPTS = 5
 const OTP_RESEND_COOLDOWN_MS = 45 * 1000
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const SCRYPT_KEYLEN = 64
+
+/** Optional revoke list for logout (in-memory; signed tokens still expire by TTL). */
+/** @type {Set<string>} */
+const revokedSessions = new Set()
 
 function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -64,7 +67,7 @@ function hashOtp(code) {
   return crypto.createHash('sha256').update(String(code)).digest('hex')
 }
 
-function publicUser(user, usage = null) {
+export function publicUser(user, usage = null) {
   if (!user) return null
   const plan = user.plan || 'free'
   const complimentary = Boolean(user.complimentary) || isComplimentaryEmail(user.email)
@@ -162,11 +165,11 @@ function syncComplimentaryPlan(user) {
 }
 
 function getUsers() {
-  return readJson(USERS_PATH, { users: [] })
+  return getUsersData()
 }
 
 function saveUsers(data) {
-  writeJson(USERS_PATH, data)
+  setUsersData(data)
 }
 
 function getOtps() {
@@ -177,12 +180,18 @@ function saveOtps(data) {
   writeJson(OTP_PATH, data)
 }
 
-function getSessions() {
-  return readJson(SESSIONS_PATH, { sessions: {} })
+function getSessionSecret() {
+  return (
+    process.env.AUTH_SECRET?.trim()
+    || process.env.ADMIN_SECRET?.trim()
+    || process.env.ADMIN_PASSWORD?.trim()
+    || process.env.RESEND_API_KEY?.trim()
+    || 'jobpilot-dev-auth-secret'
+  )
 }
 
-function saveSessions(data) {
-  writeJson(SESSIONS_PATH, data)
+function signSessionPayload(payloadB64) {
+  return crypto.createHmac('sha256', getSessionSecret()).update(payloadB64).digest('hex')
 }
 
 function cleanExpiredOtps(otps) {
@@ -197,16 +206,56 @@ function cleanExpiredOtps(otps) {
   return changed
 }
 
-function cleanExpiredSessions(sessions) {
-  const now = Date.now()
-  let changed = false
-  for (const [token, entry] of Object.entries(sessions)) {
-    if (!entry?.expiresAt || entry.expiresAt <= now) {
-      delete sessions[token]
-      changed = true
+export function createSession(userId) {
+  const payload = {
+    uid: userId,
+    exp: Date.now() + SESSION_TTL_MS,
+    jti: crypto.randomBytes(8).toString('hex'),
+  }
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  return `${payloadB64}.${signSessionPayload(payloadB64)}`
+}
+
+export function revokeSession(token) {
+  if (token) revokedSessions.add(token)
+}
+
+export function getSessionUser(token) {
+  if (!token || typeof token !== 'string') return null
+  if (revokedSessions.has(token)) return null
+
+  const parts = token.split('.')
+  if (parts.length !== 2) return null
+  const [payloadB64, mac] = parts
+  if (!payloadB64 || !mac) return null
+
+  const expected = signSessionPayload(payloadB64)
+  const a = Buffer.from(mac)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+
+  let payload
+  try {
+    payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (!payload?.uid || !payload.exp || payload.exp <= Date.now()) return null
+
+  const user = findUserById(payload.uid)
+  if (!user) return null
+  // Lazy-migrate older records
+  if (!user.plan) {
+    user.plan = 'free'
+    const all = getUsers()
+    const idx = all.users.findIndex((u) => u.id === user.id)
+    if (idx >= 0) {
+      all.users[idx].plan = 'free'
+      saveUsers(all)
     }
   }
-  return changed
+  syncComplimentaryPlan(user)
+  return publicUser(user)
 }
 
 export function findUserByEmail(email) {
@@ -454,55 +503,6 @@ export function verifyOtpChallenge(email, code) {
   return true
 }
 
-export function createSession(userId) {
-  const data = getSessions()
-  cleanExpiredSessions(data.sessions)
-  const token = crypto.randomBytes(32).toString('hex')
-  data.sessions[token] = {
-    userId,
-    expiresAt: Date.now() + SESSION_TTL_MS,
-    createdAt: new Date().toISOString(),
-  }
-  saveSessions(data)
-  return token
-}
-
-export function revokeSession(token) {
-  if (!token) return
-  const data = getSessions()
-  if (data.sessions[token]) {
-    delete data.sessions[token]
-    saveSessions(data)
-  }
-}
-
-export function getSessionUser(token) {
-  if (!token) return null
-  const data = getSessions()
-  if (cleanExpiredSessions(data.sessions)) saveSessions(data)
-  const entry = data.sessions[token]
-  if (!entry) return null
-  if (entry.expiresAt <= Date.now()) {
-    delete data.sessions[token]
-    saveSessions(data)
-    return null
-  }
-  const user = findUserById(entry.userId)
-  if (!user) return null
-  // Lazy-migrate older records
-  if (!user.plan) {
-    user.plan = 'free'
-    const all = getUsers()
-    const idx = all.users.findIndex((u) => u.id === user.id)
-    if (idx >= 0) {
-      all.users[idx].plan = 'free'
-      saveUsers(all)
-    }
-  }
-  syncComplimentaryPlan(user)
-  return publicUser(user)
-}
-
 /** Persist Basics + Education only (experience, summary, refs, template stay session-only). */
 function sanitizeBuilderMemory(formData) {
   if (!formData || typeof formData !== 'object') return null
@@ -567,4 +567,4 @@ export function clearBuilderMemory(userId) {
   return { ok: true }
 }
 
-export { publicUser, normalizeEmail }
+export { normalizeEmail }
