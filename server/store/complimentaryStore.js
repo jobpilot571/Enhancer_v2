@@ -80,7 +80,7 @@ function githubToken() {
 }
 
 function gistId() {
-  return (process.env.COMPLIMENTARY_GIST_ID || '').trim()
+  return (process.env.COMPLIMENTARY_GIST_ID || process.env.USER_DATA_GIST_ID || '').trim()
 }
 
 export function isDurableComplimentaryStoreConfigured() {
@@ -94,6 +94,7 @@ export function getComplimentaryStorageStatus() {
     entryCount: Array.isArray(memory.entries) ? memory.entries.length : 0,
     ready,
     lastPersistError: lastPersistError || null,
+    gistConfigured: Boolean(gistId() && githubToken()),
     hint:
       activeBackend === 'supabase'
         ? 'Emails are saved in Supabase Postgres and survive redeploys.'
@@ -283,6 +284,10 @@ export async function initComplimentaryStore() {
           } catch (err) {
             console.warn('[complimentary] gist migrate read failed:', err.message)
           }
+        } else {
+          console.warn(
+            '[complimentary] cannot migrate from Gist — set GITHUB_TOKEN + COMPLIMENTARY_GIST_ID',
+          )
         }
         if (memory.entries.length === 0) {
           const local = readLocalData()
@@ -295,6 +300,11 @@ export async function initComplimentaryStore() {
           await saveToSupabase(memory)
           console.log(
             `[complimentary] migrated to Supabase from ${source} — ${memory.entries.length} email(s)`,
+          )
+        } else {
+          console.warn(
+            '[complimentary] Supabase empty and no Gist/local seed found. '
+              + 'Keep GITHUB_TOKEN + COMPLIMENTARY_GIST_ID set, then redeploy or POST /api/admin/migrate-from-gist',
           )
         }
       }
@@ -446,4 +456,36 @@ export async function removeComplimentaryEmail(email) {
   await persist({ entries: next })
   console.log(`[complimentary] revoked ${normalized}`)
   return { ok: true }
+}
+
+/** Force import complimentary emails from GitHub Gist into Supabase. */
+export async function migrateComplimentaryFromGistToSupabase() {
+  if (!isSupabaseConfigured()) {
+    throw Object.assign(new Error('Supabase is not configured'), { status: 400 })
+  }
+  if (!gistId() || !githubToken()) {
+    throw Object.assign(
+      new Error('Set GITHUB_TOKEN and COMPLIMENTARY_GIST_ID on Render'),
+      { status: 400 },
+    )
+  }
+
+  const fromGist = await fetchGistData()
+  if (!fromGist?.entries?.length) {
+    throw Object.assign(new Error('Gist has no complimentary-emails.json entries to import'), {
+      status: 404,
+    })
+  }
+
+  memory = normalizeData(fromGist)
+  writeLocal(memory)
+  activeBackend = 'supabase'
+  await saveToSupabase(memory)
+  lastPersistError = ''
+
+  const result = { ok: true, source: 'github-gist', entryCount: memory.entries.length }
+  console.log(
+    `[complimentary] force-migrated from Gist → Supabase — ${result.entryCount} email(s)`,
+  )
+  return result
 }

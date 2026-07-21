@@ -22,8 +22,10 @@ import {
   removeComplimentaryEmail,
   COMPLIMENTARY_PLAN_TYPES,
   getComplimentaryStorageStatus,
+  migrateComplimentaryFromGistToSupabase,
 } from '../store/complimentaryStore.js'
 import { setUserComplimentaryAccess } from '../store/userStore.js'
+import { migrateUsersFromGistToSupabase, getUserStorageStatus } from '../store/durableUserData.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
 import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
 
@@ -224,6 +226,42 @@ router.delete('/complimentary/:email', requireAdmin, async (req, res, next) => {
     await removeComplimentaryEmail(email)
     const user = setUserComplimentaryAccess(email, false)
     res.json({ ok: true, userUpdated: Boolean(user), storage: getComplimentaryStorageStatus() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** One-shot: copy Gist users/usage/complimentary → Supabase */
+router.post('/migrate-from-gist', requireAdmin, async (_req, res, next) => {
+  try {
+    const out = { ok: true, complimentary: null, users: null, errors: [] }
+
+    try {
+      out.complimentary = await migrateComplimentaryFromGistToSupabase()
+    } catch (err) {
+      out.errors.push(`complimentary: ${err.message}`)
+    }
+
+    try {
+      out.users = await migrateUsersFromGistToSupabase()
+    } catch (err) {
+      out.errors.push(`users: ${err.message}`)
+    }
+
+    out.storage = {
+      complimentary: getComplimentaryStorageStatus(),
+      users: getUserStorageStatus(),
+    }
+
+    if (!out.complimentary && !out.users) {
+      return res.status(400).json({
+        ok: false,
+        error: out.errors.join(' | ') || 'Nothing migrated',
+        storage: out.storage,
+      })
+    }
+
+    res.json(out)
   } catch (err) {
     next(err)
   }

@@ -61,6 +61,7 @@ export function getUserStorageStatus() {
     usageKeys: Object.keys(usageMemory.usage || {}).length,
     ready,
     lastPersistError: lastPersistError || null,
+    gistConfigured: Boolean(gistId() && githubToken()),
     hint:
       activeBackend === 'supabase'
         ? 'Users and usage are saved in Supabase Postgres and survive redeploys.'
@@ -227,9 +228,18 @@ async function seedFromGistOrLocalIfEmpty(users, usage) {
         nextUsage = gistUsage.usage
         source = source || 'github-gist'
       }
+      if (needUsers && gistUsers.users.length === 0 && needUsage && Object.keys(gistUsage.usage).length === 0) {
+        console.warn(
+          '[auth-store] Gist connected but jobpilot-users.json / jobpilot-usage.json are empty',
+        )
+      }
     } catch (err) {
       console.warn('[auth-store] gist migrate read failed:', err.message)
     }
+  } else if (needUsers || needUsage) {
+    console.warn(
+      '[auth-store] cannot migrate from Gist — set GITHUB_TOKEN + COMPLIMENTARY_GIST_ID (or USER_DATA_GIST_ID)',
+    )
   }
 
   if (needUsers && nextUsers.length === 0) {
@@ -390,6 +400,49 @@ export function setUsageData(data) {
   usageMemory = normalizeUsage(data)
   scheduleUserDataPersist()
   return usageMemory
+}
+
+/** Force import users + usage from GitHub Gist into Supabase (admin / one-shot). */
+export async function migrateUsersFromGistToSupabase() {
+  if (!isSupabaseConfigured()) {
+    throw Object.assign(new Error('Supabase is not configured'), { status: 400 })
+  }
+  if (!gistId() || !githubToken()) {
+    throw Object.assign(
+      new Error('Set GITHUB_TOKEN and COMPLIMENTARY_GIST_ID (or USER_DATA_GIST_ID) on Render'),
+      { status: 400 },
+    )
+  }
+
+  const files = await fetchGistFiles()
+  const gistUsers = normalizeUsers(parseGistFile(files, USERS_FILE, { users: [] }))
+  const gistUsage = normalizeUsage(parseGistFile(files, USAGE_FILE, { usage: {} }))
+
+  if (gistUsers.users.length === 0 && Object.keys(gistUsage.usage).length === 0) {
+    throw Object.assign(
+      new Error('Gist has no jobpilot-users.json / jobpilot-usage.json data to import'),
+      { status: 404 },
+    )
+  }
+
+  usersMemory = gistUsers
+  usageMemory = gistUsage
+  writeLocalUsers(usersMemory)
+  writeLocalUsage(usageMemory)
+  activeBackend = 'supabase'
+  await persistToSupabase()
+  lastPersistError = ''
+
+  const result = {
+    ok: true,
+    source: 'github-gist',
+    userCount: usersMemory.users.length,
+    usageKeys: Object.keys(usageMemory.usage).length,
+  }
+  console.log(
+    `[auth-store] force-migrated from Gist → Supabase — users=${result.userCount} usageKeys=${result.usageKeys}`,
+  )
+  return result
 }
 
 /** Force flush (e.g. before process exit tests). */
