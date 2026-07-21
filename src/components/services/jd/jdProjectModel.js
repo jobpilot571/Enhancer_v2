@@ -69,9 +69,22 @@ export function emptyEducation() {
     major: '',
     school: '',
     location: '',
+    startDate: '',
+    endDate: '',
     graduationYear: '',
     gpa: '',
   }
+}
+
+/** Prefer start/end month-year; fall back to graduation year for older drafts. */
+export function formatEducationDates(edu) {
+  const start = String(edu?.startDate || '').trim()
+  const end = String(edu?.endDate || '').trim()
+  if (start && end) return `${start} – ${end}`
+  if (end) return end
+  if (start) return start
+  const year = String(edu?.graduationYear || '').trim()
+  return year
 }
 
 export function emptyExperience() {
@@ -112,6 +125,13 @@ function experienceDateKey(value, fallbackNow = false) {
     return Date.UTC(Number(m[2]), month, 1)
   }
   return 0
+}
+
+function isCompleteExperienceDate(value, allowPresent = false) {
+  const raw = String(value || '').trim()
+  if (!raw) return false
+  if (allowPresent && /^present$|^current$|^now$/i.test(raw)) return true
+  return /^[A-Za-z]{3,9}\s+\d{4}$/.test(raw)
 }
 
 /** Approximate total years from earliest start → latest end (or now). */
@@ -237,7 +257,12 @@ export function validateStep(project, stepIndex) {
       const e = list[i] || {}
       if (!String(e.companyName || '').trim()) return `Company ${i + 1}: enter the company name.`
       if (!String(e.jobTitle || '').trim()) return `Company ${i + 1}: enter the role.`
-      if (!String(e.startDate || '').trim()) return `Company ${i + 1}: select the start month and year.`
+      if (!isCompleteExperienceDate(e.startDate)) {
+        return `Company ${i + 1}: select the start month and year.`
+      }
+      if (String(e.endDate || '').trim() && !isCompleteExperienceDate(e.endDate, true)) {
+        return `Company ${i + 1}: select a complete end month and year, or check Present.`
+      }
       if (!String(e.city || '').trim()) return `Company ${i + 1}: select the city.`
       if (!String(e.state || '').trim()) return `Company ${i + 1}: select the state.`
       const bullets = Number(e.bulletCount)
@@ -296,7 +321,9 @@ export function toLegacyBuildPayload(project) {
       .map((e) => ({
         school: String(e.school || '').trim(),
         degree: [e.degree, e.major].filter(Boolean).join(' — '),
-        dates: String(e.graduationYear || '').trim(),
+        dates: formatEducationDates(e),
+        startDate: String(e.startDate || '').trim(),
+        endDate: String(e.endDate || '').trim(),
         location: String(e.location || '').trim(),
         gpa: String(e.gpa || '').trim(),
       })),

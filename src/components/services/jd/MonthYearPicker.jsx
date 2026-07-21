@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import FormField from '../FormField'
 
 const MONTHS = [
@@ -34,8 +35,12 @@ export function parseMonthYear(raw) {
     const month = MONTHS.find((x) => x.value.toLowerCase() === short.toLowerCase())?.value || ''
     return { month, year: m[2], present: false }
   }
+  const monthOnly = MONTHS.find(
+    (x) => x.value.toLowerCase() === text.toLowerCase() || x.label.toLowerCase() === text.toLowerCase(),
+  )
+  if (monthOnly) return { month: monthOnly.value, year: '', present: false }
   const yearOnly = text.match(/^(\d{4})$/)
-  if (yearOnly) return { month: 'Jan', year: yearOnly[1], present: false }
+  if (yearOnly) return { month: '', year: yearOnly[1], present: false }
   return { month: '', year: '', present: false }
 }
 
@@ -45,6 +50,13 @@ export function formatMonthYear(month, year, present = false) {
   return `${month} ${year}`
 }
 
+/** True when value is Present (if allowed) or a full "Mon YYYY". */
+export function isCompleteMonthYear(value, { allowPresent = false } = {}) {
+  const p = parseMonthYear(value)
+  if (allowPresent && p.present) return true
+  return Boolean(p.month && p.year)
+}
+
 export function MonthYearPicker({
   label,
   value,
@@ -52,44 +64,92 @@ export function MonthYearPicker({
   allowPresent = false,
   required,
 }) {
-  const parsed = parseMonthYear(value)
-  const present = allowPresent && parsed.present
+  const initial = parseMonthYear(value)
+  const [month, setMonth] = useState(initial.month)
+  const [year, setYear] = useState(initial.year)
+  const [present, setPresent] = useState(allowPresent && initial.present)
 
-  function emit({ month = parsed.month, year = parsed.year, isPresent = present }) {
-    onChange(formatMonthYear(month, year, isPresent))
+  // Sync from parent only when it has a complete value (or Present).
+  // Incomplete parent '' must not wipe in-progress month/year selections.
+  useEffect(() => {
+    const p = parseMonthYear(value)
+    if (allowPresent && p.present) {
+      setPresent(true)
+      setMonth('')
+      setYear('')
+      return
+    }
+    if (p.month && p.year) {
+      setPresent(false)
+      setMonth(p.month)
+      setYear(p.year)
+    }
+  }, [value, allowPresent])
+
+  function commit(nextMonth, nextYear, nextPresent) {
+    if (nextPresent) {
+      onChange('Present')
+      return
+    }
+    if (nextMonth && nextYear) {
+      onChange(formatMonthYear(nextMonth, nextYear, false))
+      return
+    }
+    // Keep local UI; clear parent so validation still requires both parts.
+    onChange('')
   }
 
   return (
     <div className="month-year-picker">
       <span className="form-field__label">{label}{required ? ' *' : ''}</span>
-      <div className="form-grid month-year-picker__row">
-        {allowPresent && (
-          <label className="month-year-picker__present">
-            <input
-              type="checkbox"
-              checked={present}
-              onChange={(e) => emit({ isPresent: e.target.checked })}
-            />
-            Present
-          </label>
-        )}
+      {allowPresent && (
+        <label className="month-year-picker__present">
+          <input
+            type="checkbox"
+            checked={present}
+            onChange={(e) => {
+              const checked = e.target.checked
+              setPresent(checked)
+              if (checked) {
+                setMonth('')
+                setYear('')
+                onChange('Present')
+              } else {
+                onChange('')
+              }
+            }}
+          />
+          Present
+        </label>
+      )}
+      <div className="form-grid form-grid--2 month-year-picker__row">
         <FormField
           label="Month"
           options={MONTHS}
           placeholder="Month"
-          value={present ? '' : parsed.month}
+          value={present ? '' : month}
           disabled={present}
-          required={required && !present}
-          onChange={(e) => emit({ month: e.target.value, isPresent: false })}
+          required={false}
+          onChange={(e) => {
+            const next = e.target.value
+            setMonth(next)
+            setPresent(false)
+            commit(next, year, false)
+          }}
         />
         <FormField
           label="Year"
           options={YEARS}
           placeholder="Year"
-          value={present ? '' : parsed.year}
+          value={present ? '' : year}
           disabled={present}
-          required={required && !present}
-          onChange={(e) => emit({ year: e.target.value, isPresent: false })}
+          required={false}
+          onChange={(e) => {
+            const next = e.target.value
+            setYear(next)
+            setPresent(false)
+            commit(month, next, false)
+          }}
         />
       </div>
     </div>

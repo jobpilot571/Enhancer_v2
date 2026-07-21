@@ -1,6 +1,7 @@
 import FormField from '../../FormField'
 import SelectWithOther from '../SelectWithOther'
 import UsCityStateFields from '../UsCityStateFields'
+import { MonthYearPicker, parseMonthYear } from '../MonthYearPicker'
 import { emptyEducation } from '../jdProjectModel'
 import {
   DEGREE_OPTIONS,
@@ -20,9 +21,15 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
   }
 
   function patchEdu(index, field, value) {
-    const education = (b.education || []).map((e, i) =>
-      i === index ? { ...e, [field]: value } : e,
-    )
+    const education = (b.education || []).map((e, i) => {
+      if (i !== index) return e
+      const next = { ...e, [field]: value }
+      if (field === 'endDate') {
+        const parsed = parseMonthYear(value)
+        next.graduationYear = parsed.present ? '' : (parsed.year || e.graduationYear || '')
+      }
+      return next
+    })
     patch({ education })
   }
 
@@ -154,12 +161,20 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               onChange={(e) => patchEdu(index, 'location', e.target.value)}
               placeholder="City, State"
             />
-            <FormField
-              label="Graduation year"
-              value={edu.graduationYear}
-              onChange={(e) => patchEdu(index, 'graduationYear', e.target.value)}
-              placeholder="e.g. 2020"
-            />
+            <div className="form-field--full">
+              <MonthYearPicker
+                label="Start date"
+                value={edu.startDate}
+                onChange={(v) => patchEdu(index, 'startDate', v)}
+              />
+            </div>
+            <div className="form-field--full">
+              <MonthYearPicker
+                label="End date / graduation"
+                value={edu.endDate || ''}
+                onChange={(v) => patchEdu(index, 'endDate', v)}
+              />
+            </div>
             <FormField
               label="GPA (optional)"
               value={edu.gpa}
@@ -182,11 +197,17 @@ export function normalizeEducationFromExtract(entries) {
     const degree = matchOptionOrOther(e.degree, DEGREE_OPTIONS)
     const major = matchOptionOrOther(e.major, MAJOR_OPTIONS)
     const school = matchOptionOrOther(e.school, US_UNIVERSITY_OPTIONS)
+    const year = String(e.graduationYear || '').replace(/\D/g, '').slice(0, 4)
+    const startDate = String(e.startDate || '').trim()
+    const endDate = String(e.endDate || '').trim() || (year ? `May ${year}` : '')
     return {
       ...e,
       degree: degree.select === 'Other' ? degree.custom : degree.select,
       major: major.select === 'Other' ? major.custom : major.select,
       school: school.select === 'Other' ? school.custom : school.select,
+      startDate,
+      endDate,
+      graduationYear: year || parseMonthYear(endDate).year || '',
     }
   })
 }
