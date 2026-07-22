@@ -93,7 +93,7 @@ const COMPACT_PLAN_SCHEMA = {
           replacement: { type: 'string' },
           rating: {
             type: 'string',
-            enum: ['Perfect', 'Good', 'Weak', 'Very Weak', 'Irrelevant'],
+            enum: ['Perfect', 'Good', 'Weak', 'VeryWeak', 'Irrelevant'],
           },
         },
         required: ['company', 'original', 'replacement', 'rating'],
@@ -137,21 +137,22 @@ Classify EVERY existing experience bullet as exactly one of:
 - Perfect — strong JD fit, technical, impactful, natural. KEEP UNCHANGED. Do NOT emit a rewrite.
 - Good — solid fit with only minor gaps. KEEP UNCHANGED unless a tiny polish is truly necessary.
 - Weak — thin JD relevance, weak technical depth, or weak impact. REWRITE to improve JD fit, technical depth, and impact while keeping the same project story.
-- Very Weak — generic, vague, or poorly aligned. STRONGLY rewrite or replace with a stronger bullet that still fits that company/role/story.
+- VeryWeak — generic, vague, or poorly aligned. STRONGLY rewrite or replace with a stronger bullet that still fits that company/role/story.
 - Irrelevant — does not support the target job. REMOVE (omit from output) or REPLACE only when it cannot support the JD; otherwise rewrite into a relevant achievement for that role.
 
 Rewrite policy (strict):
 - Perfect → do not rewrite; do not list in experienceRewrites.
 - Good → usually do not rewrite; only list if a very small improvement is necessary (keep meaning identical).
-- Weak → must rewrite (original = EXACT existing text, replacement = improved bullet).
-- Very Weak → must strongly rewrite or replace (original = EXACT existing text).
-- Irrelevant → replace with a JD-aligned bullet for that company OR omit (do not list a no-op).
+- Weak → must rewrite (original = EXACT existing text, replacement = improved bullet, rating="Weak").
+- VeryWeak → must strongly rewrite or replace (original = EXACT existing text, rating="VeryWeak").
+- Irrelevant → replace with a JD-aligned bullet for that company OR omit (rating="Irrelevant").
 - Do NOT rewrite every bullet. Do NOT invent unsupported or unrealistic claims.
 - Do NOT copy sentences from the job description.
 - Keep original meaning, company context, role level, and project story.
 - Prefer covering one important JD responsibility + 1–2 relevant JD skills per rewritten bullet.
 - Avoid repeating the same skills, technologies, responsibilities, and action verbs across bullets.
-- Stronger responsibility coverage in experience matters more than stuffing the skills section.`
+- Stronger responsibility coverage in experience matters more than stuffing the skills section.
+- OUTPUT SIZE LIMIT: emit at most 8 experienceRewrites total (prefer the weakest bullets first). At most 2 NEW bullets per company (original=""). Never list Perfect bullets. Keep JSON compact — short replacements only.`
 
 const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or REWRITTEN bullets):
 - Write like a human professional telling a real project story — not AI-generated or generic.
@@ -179,11 +180,11 @@ const JD_BULLET_RULES = `Experience bullet rules (strict — EVERY experience bu
 - No color instructions — content only.`
 
 function normalizeRating(value) {
-  const raw = String(value || '').trim().toLowerCase()
+  const raw = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
   if (raw === 'perfect') return 'Perfect'
   if (raw === 'good') return 'Good'
   if (raw === 'weak') return 'Weak'
-  if (raw === 'very weak' || raw === 'very_weak' || raw === 'veryweak') return 'Very Weak'
+  if (raw === 'veryweak') return 'Very Weak'
   if (raw === 'irrelevant') return 'Irrelevant'
   return ''
 }
@@ -244,8 +245,10 @@ export function normalizeEnhancementPlan(raw) {
     }
   }
 
+  const bulletRewrites = []
   const byCompany = new Map()
   const bulletEvaluations = []
+  let rewriteCount = 0
   for (const r of raw.experienceRewrites || []) {
     const company = String(r.company || '').trim()
     if (!company) continue
@@ -259,14 +262,17 @@ export function normalizeEnhancementPlan(raw) {
       if (rating === 'Perfect') continue
       if (rating === 'Good' && sameBulletText(original, replacement)) continue
       if (sameBulletText(original, replacement)) continue
+      if (rewriteCount >= 8) continue
       bulletRewrites.push({ company, original, replacement })
+      rewriteCount += 1
       if (rating) {
         bulletEvaluations.push({ company, original, rating, action: 'rewrite' })
       }
     } else {
       const list = byCompany.get(company) || []
+      if (list.length >= 2) continue
       list.push(replacement)
-      byCompany.set(company, list.slice(0, 2))
+      byCompany.set(company, list)
       if (rating) {
         bulletEvaluations.push({ company, original: '', rating, action: 'add' })
       }
@@ -416,6 +422,7 @@ export async function createEnhancementPlan(resumeData, jdData, comparison) {
   const limits = {
     maxSummaryItems: 2,
     maxNewBulletsPerCompany: 2,
+    maxExperienceRewrites: 8,
     companiesMustCover: companies,
     maxSkillNames: 12,
     // Aim for strong JD keyword coverage after enhancement
@@ -423,7 +430,7 @@ export async function createEnhancementPlan(resumeData, jdData, comparison) {
   }
 
   const raw = await jsonCompletion(
-    `You are an expert resume writer focused on JD–experience match quality. Return ONE complete enhancement plan as JSON only.
+    `You are an expert resume writer focused on JD–experience match quality. Return ONE complete enhancement plan as JSON only. Keep the JSON compact and complete (never truncate).
 
 STEP 1 — ${BULLET_EVALUATION_RULES}
 
@@ -432,27 +439,16 @@ ${BULLET_RULES}
 
 Output fields:
 - summaryRewrites: 0–2 items. For NEW summary text set original="" and replacement=new sentence/bullet. For rewrite set original to EXACT existing text. summaryFormat="${summaryFormat}".
-- experienceRewrites: ONLY include:
-  (a) rewrites of Weak / Very Weak / Irrelevant existing bullets (original = EXACT existing text, rating = that classification, replacement = improved bullet), OR
-  (b) optional NEW bullets with original="" (1–2 per company max) when gaps.responsibilities are still uncovered after keeping Perfect/Good bullets, OR
-  (c) rare Good bullets with a tiny polish (rating="Good", replacement nearly same meaning).
-  Do NOT include Perfect bullets. Do NOT rewrite Good bullets unless a tiny polish is necessary.
-  company must match the resume exactly.
-- skillAdditions: ONLY concrete tools/hard skills from gaps.missingSkills (e.g. SQL, Tableau, DBT, Power BI). Never put domain phrases, soft outcomes, or years claims in skills (forbidden: "student success", "learner behaviors", "data-driven research", "4+ years"). Use EXISTING category labels only. Never invent "Technical Skills".
+- experienceRewrites: ONLY Weak / VeryWeak / Irrelevant rewrites (and rare Good polish). Max ${limits.maxExperienceRewrites} items total. rating must be one of: Perfect, Good, Weak, VeryWeak, Irrelevant. For NEW bullets use original="" and rating="Good". Do NOT include Perfect bullets. company must match the resume exactly.
+- skillAdditions: ONLY concrete tools/hard skills from gaps.missingSkills. Never put domain phrases or years claims in skills. Use EXISTING category labels only.
 
 Rules:
-- Evaluate ALL experience bullets before deciding what to change. Prefer keeping Perfect/Good bullets as-is.
-- Do not rewrite every bullet. Do not invent unsupported claims.
-- Compare resume vs gaps: add what is missing; do not restate what Perfect/Good bullets already cover.
-- SUMMARY: Do NOT repeat years-of-experience ("4+ years", "X years") if the resume summary already states tenure. Add JD-aligned impact/tools only.
-- DOMAIN KEYWORDS go ONLY into summary/experience bullets — NEVER into skillAdditions. Weave gaps.missingDomainKeywords naturally (target limits.minDomainKeywordsToWeave). Each phrase once.
-- When missingSkills is non-empty: put those tools in skillAdditions AND mention 1–2 of them in rewritten/new experience bullets so they earn evidence credit — without keyword stuffing.
-- Cover gaps.responsibilities primarily by improving Weak/Very Weak/Irrelevant bullets, then by limited new bullets if still thin.
-- Stronger JD responsibility coverage in experience > stuffing the skills section.
-- Do not send education/contact changes.
-- Use allowed vocabulary naturally.
+- Evaluate mentally first; output ONLY the changes. Prefer keeping Perfect/Good bullets as-is.
+- Do not rewrite every bullet. Do not invent unsupported claims. Do not copy the JD.
+- Cover gaps.responsibilities by rewriting the weakest bullets first, then limited new bullets.
+- Stronger JD responsibility coverage in experience > stuffing skills.
 - Empty arrays are allowed when Perfect/Good bullets already cover the JD well.
-- Stay within change limits.`,
+- Stay within change limits. Return valid complete JSON only.`,
     JSON.stringify({
       resume: compactResume,
       gaps,
@@ -461,7 +457,7 @@ Rules:
     }),
     'enhancement_plan',
     COMPACT_PLAN_SCHEMA,
-    { maxTokens: 2200 },
+    { maxTokens: 4096 },
   )
 
   return normalizeEnhancementPlan(raw)

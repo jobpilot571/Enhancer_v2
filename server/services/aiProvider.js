@@ -23,7 +23,25 @@ function extractJson(text) {
     const start = cleaned.indexOf('{')
     const end = cleaned.lastIndexOf('}')
     if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(cleaned.slice(start, end + 1))
+      let slice = cleaned.slice(start, end + 1)
+      // Repair common truncation artifacts from long enhancement plans
+      slice = slice
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/[\u0000-\u001f]+/g, ' ')
+      try {
+        return JSON.parse(slice)
+      } catch {
+        // Truncated mid-array: close open arrays/objects conservatively
+        let repaired = slice.replace(/,\s*$/, '')
+        const opens = (repaired.match(/\[/g) || []).length
+        const closes = (repaired.match(/\]/g) || []).length
+        const openObj = (repaired.match(/\{/g) || []).length
+        const closeObj = (repaired.match(/\}/g) || []).length
+        repaired += ']'.repeat(Math.max(0, opens - closes))
+        repaired += '}'.repeat(Math.max(0, openObj - closeObj))
+        repaired = repaired.replace(/,\s*([}\]])/g, '$1')
+        return JSON.parse(repaired)
+      }
     }
     throw new Error('Provider did not return valid JSON')
   }
