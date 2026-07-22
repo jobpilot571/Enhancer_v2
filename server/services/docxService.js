@@ -2474,23 +2474,36 @@ export function ensureSkillsInBullets(plan, comparison = null, resumeData = null
       ...e,
       bullets: [...(e.bullets || [])],
     })),
+    bulletRewrites: (plan.bulletRewrites || []).map((r) => ({ ...r })),
   }
 
-  // Prefer experience (full credit) over summary (partial credit)
+  // Prefer weaving into an existing rewrite (keeps storytelling; avoids generic adds)
+  if (next.bulletRewrites.length) {
+    const target = next.bulletRewrites[0]
+    target.replacement = clampBulletLength(`${String(target.replacement || '').replace(/\.$/, '')}${clause}.`)
+    return next
+  }
+
+  // Prefer experience additions over inventing a new generic bullet
   if (next.experienceAdditions?.length && next.experienceAdditions[0].bullets?.length) {
     const bullets = next.experienceAdditions[0].bullets
     bullets[0] = clampBulletLength(`${bullets[0].replace(/\.$/, '')}${clause}.`)
     return next
   }
 
-  const firstCompany = resumeData?.experience?.[0]?.company
+  // Last resort: extend a named system/project from the first company's existing bullets
+  const firstExp = resumeData?.experience?.[0]
+  const firstCompany = firstExp?.company
   if (firstCompany) {
+    const named = String(firstExp.bullets?.[0] || '')
+      .match(/\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\s+(?:App|Application|System|Platform|Portal|Suite|Module))\b/)
+    const projectHint = named?.[1] || 'existing operational systems'
     next.experienceAdditions = [
       {
         company: firstCompany,
         bullets: [
           clampBulletLength(
-            `Delivered analysis and reporting${clause} to support operational and stakeholder decisions.`,
+            `Partnered with stakeholders on ${projectHint} requirements and validation${clause} to improve delivery quality.`,
           ),
         ],
       },

@@ -21,6 +21,7 @@ import {
   repairEnhancementPlan,
   isPlanTechnicallyValid,
 } from './openaiService.js'
+import { researchCompanyContexts } from './companyContextService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
 import { beginAiUsageTracking, endAiUsageTracking } from './aiProvider.js'
 import PizZip from 'pizzip'
@@ -123,18 +124,28 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     timer.mark('compare_local')
 
     updateEnhanceJob(jobId, { step: 'writing_plan' })
+    log(jobId, 'researching company/industry context (Groq-first)')
+    const companyContexts = await researchCompanyContexts(resumeData, jdData)
+    log(
+      jobId,
+      companyContexts.length
+        ? `company context: ${companyContexts.map((c) => c.company).join(', ')}`
+        : 'company context: none (continuing without)',
+    )
+    timer.mark('company_context_research')
+
     log(jobId, 'writing complete enhancement plan (1 LLM call)')
     let planRaw
     let repaired = false
     try {
-      planRaw = await createEnhancementPlan(resumeData, jdData, comparison)
+      planRaw = await createEnhancementPlan(resumeData, jdData, comparison, companyContexts)
       if (!isPlanTechnicallyValid(planRaw)) {
         throw new Error('Enhancement plan missing required array fields')
       }
     } catch (err) {
       // Repair ONLY on technical failure — never because arrays are empty
       log(jobId, `plan technical failure — one repair attempt: ${err.message}`)
-      planRaw = await repairEnhancementPlan(resumeData, jdData, comparison, err.message)
+      planRaw = await repairEnhancementPlan(resumeData, jdData, comparison, err.message, companyContexts)
       repaired = true
       if (!isPlanTechnicallyValid(planRaw)) {
         throw new Error(`Enhancement plan invalid after repair: ${err.message}`)
