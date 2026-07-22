@@ -2280,16 +2280,25 @@ body:has(.service-block--enhancer) .footer__col h4 {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
   background: #ffffff;
 }
-.docx-viewer .docx-wrapper span[style*="background"],
+/* Green = newly added bullets only (never blanket all backgrounds — that hid yellow rewrites) */
 .docx-viewer .docx-wrapper [data-highlight="new"],
+.docx-viewer .docx-wrapper span[style*="D1FAE5"],
+.docx-viewer .docx-wrapper span[style*="d1fae5"],
 .docx-viewer .docx-wrapper [style*="D1FAE5"],
-.docx-viewer .docx-wrapper [style*="d1fae5"] {
+.docx-viewer .docx-wrapper [style*="d1fae5"],
+.docx-viewer .docx-wrapper [style*="209, 250, 229"],
+.docx-viewer .docx-wrapper [style*="209,250,229"] {
   background-color: #d1fae5 !important;
   color: inherit !important;
 }
+/* Yellow = rewritten existing bullets */
 .docx-viewer .docx-wrapper [data-highlight="rewrite"],
+.docx-viewer .docx-wrapper span[style*="FEF9C3"],
+.docx-viewer .docx-wrapper span[style*="fef9c3"],
 .docx-viewer .docx-wrapper [style*="FEF9C3"],
-.docx-viewer .docx-wrapper [style*="fef9c3"] {
+.docx-viewer .docx-wrapper [style*="fef9c3"],
+.docx-viewer .docx-wrapper [style*="254, 249, 195"],
+.docx-viewer .docx-wrapper [style*="254,249,195"] {
   background-color: #fef9c3 !important;
   color: inherit !important;
 }
