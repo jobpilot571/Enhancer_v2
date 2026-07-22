@@ -245,7 +245,6 @@ export function normalizeEnhancementPlan(raw) {
     }
   }
 
-  const bulletRewrites = []
   const byCompany = new Map()
   const bulletEvaluations = []
   let rewriteCount = 0
