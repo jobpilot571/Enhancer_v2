@@ -163,8 +163,12 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     log(
       jobId,
       `plan: ${enhancementPlan.summaryBullets?.length || 0} summary, `
-      + `${enhancementPlan.experienceAdditions?.length || 0} companies with bullets, `
+      + `${enhancementPlan.bulletRewrites?.length || 0} bullet rewrites, `
+      + `${enhancementPlan.experienceAdditions?.length || 0} companies with new bullets, `
       + `${enhancementPlan.skillsToAdd?.length || 0} skills`
+      + (enhancementPlan.bulletEvaluations?.length
+        ? ` (eval actions: ${enhancementPlan.bulletEvaluations.length})`
+        : '')
       + (repaired ? ' (repaired)' : ''),
     )
     log(jobId, 'patching DOCX')
