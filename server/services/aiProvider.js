@@ -369,10 +369,10 @@ export function getConfiguredProviders() {
 
 export function getScoringEngineInfo() {
   return {
-    name: 'JoBPilot Hybrid ATS Scorer',
+    name: 'JoBPilot ATS Score',
     version: '4.0',
-    method: 'Local 40/40/20 + Groq/Ollama LLM JD-match (atsFriendly / readability / attractiveness)',
-    note: 'Final displayed score merges deterministic coverage with LLM JD-selection scoring (Groq/Ollama preferred).',
+    method: 'JoBPilot ATS Score',
+    note: 'JoBPilot ATS Score',
     categories: {
       skills: 24,
       keywords: 16,

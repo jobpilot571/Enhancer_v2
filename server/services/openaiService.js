@@ -168,8 +168,10 @@ const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or
 - Selection mission: include JD skills/tools even if the original resume omitted them — phrase as experience in that role/company.
 - Include measurable impact where believable (%, time, volume, users) — prefer metrics for stronger ATS impact score.
 - Use strong action verbs (Led, Built, Designed, Automated, Optimized, Delivered) — vary verbs across bullets.
-- Each bullet: one clear achievement, complete thought, about 18–28 words / 1–2 lines. Never exceed ~2 lines.
+- Each bullet MUST be a complete sentence ending with a period — never truncate mid-phrase (no endings like "and using." or "improving transparency and.").
+- Each bullet: one clear achievement, about 20–30 words / 1–2 lines.
 - Do NOT start bullets with a bullet character (•). Plain sentence text only.
+- skillAdditions: ONLY concrete tools/platforms (SQL, Jira, Azure DevOps, Power BI, Tableau, Salesforce). NEVER soft fluff (Iterative, facilitation skills, reporting, customer service).
 - Reject generic lines like "Delivered analysis and reporting to support decisions" unless tied to a named system, company domain, and JD skill.`
 
 /** Stricter rules for JD-tailored resume builds. */
@@ -452,7 +454,7 @@ STEP 3 — Use companyContexts for industry/products/initiatives/systems when fr
 Output fields:
 - summaryRewrites: 0–3 items. For NEW summary text set original="" and replacement=new sentence/bullet. For rewrite set original to EXACT existing text. summaryFormat="${summaryFormat}".
 - experienceRewrites: Weak / VeryWeak / Irrelevant rewrites plus NEW bullets. Max ${limits.maxExperienceRewrites} items total. rating must be one of: Perfect, Good, Weak, VeryWeak, Irrelevant. For NEW bullets use original="" and rating="Good". Do NOT include Perfect bullets. company must match the resume exactly. MUST include at least one NEW bullet (original="") for EVERY company in companiesMustCover when any JD gaps remain.
-- skillAdditions: concrete tools/hard skills from gaps.missingSkills AND JD tools — add aggressively for selection. Use EXISTING category labels only.
+- skillAdditions: ONLY concrete tools/platforms from gaps.missingSkills and JD tools (SQL, Jira, Azure DevOps, Power BI, Tableau, Salesforce, Confluence). NEVER add soft fluff: Iterative, facilitation skills, reporting, customer service, manufacturing processes. Use EXISTING category labels only.
 
 Rules:
 - Cover gaps.responsibilities across ALL companies (not only the first one).

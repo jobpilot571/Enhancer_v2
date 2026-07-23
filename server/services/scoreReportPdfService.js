@@ -1,5 +1,4 @@
 import PDFDocument from 'pdfkit'
-import { getScoringEngineInfo } from './aiProvider.js'
 
 const COLORS = {
   ink: '#0f172a',
@@ -30,14 +29,14 @@ function round1(n) {
 
 function matchLevel(score) {
   if (score >= 90) return { stars: 5, label: 'Excellent Match' }
-  if (score >= 80) return { stars: 4, label: 'Very Good Match' }
+  if (score >= 80) return { stars: 4, label: 'Strong Match' }
   if (score >= 70) return { stars: 3, label: 'Good Match' }
   if (score >= 55) return { stars: 2, label: 'Fair Match' }
   return { stars: 1, label: 'Needs Work' }
 }
 
-function stars(n) {
-  return `${'★'.repeat(n)}${'☆'.repeat(5 - n)}`
+function starsLabel(n) {
+  return `${n}/5`
 }
 
 function drawRoundedRect(doc, x, y, w, h, r = 8) {
@@ -116,7 +115,6 @@ export function buildScoreReportPdf({
   const breakdown = scoreReport.breakdown || {}
   const processingMeta = matchAnalysis.processingMeta || scoreReport.processingMeta || {}
   const usage = aiUsage || processingMeta.aiUsage || null
-  const engine = getScoringEngineInfo()
 
   const beforeScore = scoreReport.beforeScore ?? comparisonBefore.atsScore ?? 0
   const afterScore = scoreReport.afterScore ?? comparison.atsScore ?? matchAnalysis.afterScore ?? 0
@@ -236,7 +234,7 @@ export function buildScoreReportPdf({
   for (const [label, val] of summaryLines) {
     doc.fillColor(COLORS.muted).text(label, left + leftCardW + 22, sy, { lineBreak: false })
     doc.fillColor(COLORS.ink).font('Helvetica-Bold')
-      .text(String(val), left + leftCardW + rightCardW - 28, sy, { width: 20, align: 'right', lineBreak: false })
+      .text(String(val), left + leftCardW + 22, sy, { width: rightCardW - 40, align: 'right', lineBreak: false })
     doc.font('Helvetica')
     sy += 13
   }
@@ -253,8 +251,9 @@ export function buildScoreReportPdf({
   let by = sectionLabel(doc, left + 12, y + 10, 'Score Breakdown')
   doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted)
     .text('Category', left + 14, by, { lineBreak: false })
-    .text('Before → After', left + breakW - 130, by, { lineBreak: false })
-    .text('Δ', left + breakW - 28, by, { lineBreak: false })
+    .text('Before', left + breakW - 118, by, { width: 36, align: 'right', lineBreak: false })
+    .text('After', left + breakW - 78, by, { width: 36, align: 'right', lineBreak: false })
+    .text('Change', left + breakW - 40, by, { width: 32, align: 'right', lineBreak: false })
   by += 12
   for (const [label, key, maxDefault] of catRows) {
     const b = breakdown[key] || {}
@@ -263,10 +262,13 @@ export function buildScoreReportPdf({
     const max = b.max ?? maxDefault
     const change = round1(b.change ?? (after - before))
     doc.font('Helvetica').fontSize(8).fillColor(COLORS.body)
-      .text(`${label} (${max})`, left + 14, by, { width: breakW - 150, lineBreak: false })
-    doc.fillColor(COLORS.ink).text(`${before} → ${after}`, left + breakW - 130, by, { lineBreak: false })
+      .text(`${label} (${max})`, left + 14, by, { width: breakW - 160, lineBreak: false })
+    doc.fillColor(COLORS.ink)
+      .text(String(before), left + breakW - 118, by, { width: 36, align: 'right', lineBreak: false })
+      .text(String(after), left + breakW - 78, by, { width: 36, align: 'right', lineBreak: false })
     doc.fillColor(change > 0 ? COLORS.green : COLORS.muted).font('Helvetica-Bold')
-      .text(change > 0 ? `+${change}` : String(change), left + breakW - 36, by, { width: 28, align: 'right', lineBreak: false })
+      .text(change > 0 ? `+${change}` : String(change), left + breakW - 40, by, { width: 32, align: 'right', lineBreak: false })
+    doc.font('Helvetica')
     by += 14
   }
 
@@ -309,23 +311,21 @@ export function buildScoreReportPdf({
     }
   }
 
-  let my = sectionLabel(doc, left + respW + 22, y + 10, 'AI & Processing Details')
+  let my = sectionLabel(doc, left + respW + 22, y + 10, 'Processing Details')
   const provider = usage?.primaryProvider || usage?.summary?.[0]?.provider || 'Not recorded'
   const model = usage?.primaryModel || usage?.summary?.[0]?.model || '—'
   const duration = processingMeta.durationSec != null ? `${processingMeta.durationSec}s` : '—'
   const metaLines = [
     ['AI Provider', provider],
-    ['Model Used', model],
+    ['Model', model],
     ['Processing Time', duration],
-    ['Scoring Engine', engine.version ? `${engine.name} v${engine.version}` : 'ATS Hybrid v4.0'],
-    ['AI used for', 'Parse + enhance + LLM score'],
-    ['Score calculated by', processingMeta?.scoringEngine || 'Local 40/40/20 + Groq/Ollama LLM'],
+    ['Scoring', 'JoBPilot ATS Score'],
   ]
   doc.font('Helvetica').fontSize(8)
   for (const [k, v] of metaLines) {
-    doc.fillColor(COLORS.muted).text(k, left + respW + 22, my, { lineBreak: false })
+    doc.fillColor(COLORS.muted).text(k, left + respW + 22, my, { width: 90, lineBreak: false })
     doc.fillColor(COLORS.ink).font('Helvetica-Bold')
-      .text(safe(v, 28), left + respW + 22, my, { width: metaW - 34, align: 'right', lineBreak: false })
+      .text(safe(v, 26), left + respW + 112, my, { width: metaW - 130, align: 'right', lineBreak: false })
     doc.font('Helvetica')
     my += 13
   }
@@ -341,7 +341,7 @@ export function buildScoreReportPdf({
   doc.text(`Responsibilities  ${round1(respCoveredScore)}/${respTotal} (${respPct}%)`, left + respW + 22, my)
   my += 14
   doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.teal)
-    .text(`JD Match  ${stars(level.stars)}  ${level.label}`, left + respW + 22, my)
+    .text(`JD Match  ${starsLabel(level.stars)}  ${level.label}`, left + respW + 22, my)
 
   const marks = comparison?.atsMarks || matchAnalysis?.atsMarks || processingMeta?.atsMarks || null
   if (marks) {
@@ -389,7 +389,7 @@ export function buildScoreReportPdf({
   // ── Footer note ──
   doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted)
     .text(
-      `${engine.name} — ${engine.method}. Same formula for before & after. Score rises only when real JD coverage improves.`,
+      'JoBPilot ATS Score  ·  Confidential match report',
       left,
       y,
       { width: contentW, align: 'center' },
@@ -413,18 +413,15 @@ export function buildScoreReportPdf({
       ey += 14
     } else {
       for (const ev of evidence) {
-        if (ey > y + 290) break
+        if (ey > y + 285) break
+        const req = safe(ev.requirement, 70)
         doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.ink)
-          .text(safe(ev.requirement, 70), left + 14, ey, { width: contentW - 28 })
-        ey += 11
+          .text(req, left + 14, ey, { width: contentW - 28, lineBreak: false })
+        ey += 12
+        const detail = `${safe(ev.resumeEvidence, 95)}  |  ${ev.section || '—'}  |  ${ev.matchType || '—'}  |  ${ev.pointsAwarded ?? '—'} pts`
         doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.body)
-          .text(
-            `${safe(ev.resumeEvidence, 110)}  ·  ${ev.section || '—'}  ·  ${ev.matchType || '—'}  ·  ${ev.pointsAwarded ?? '—'} pts`,
-            left + 14,
-            ey,
-            { width: contentW - 28 },
-          )
-        ey += 14
+          .text(detail, left + 14, ey, { width: contentW - 28, lineBreak: false })
+        ey += 16
       }
     }
 
@@ -438,22 +435,22 @@ export function buildScoreReportPdf({
     } else {
       for (const p of penalties.slice(0, 5)) {
         doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.red)
-          .text(`• [${p.type}] ${safe(p.detail || p.item, 60)} (−${p.amount ?? 0})`, left + 14, py, { width: contentW * 0.48 - 28 })
-        py += 12
+          .text(`• [${p.type}] ${safe(p.detail || p.item, 60)} (-${p.amount ?? 0})`, left + 14, py, { width: contentW * 0.48 - 28, lineBreak: false })
+        py += 14
       }
     }
 
     let rsy = sectionLabel(doc, left + contentW * 0.48 + 22, y + 10, 'Scoring reasons')
     for (const reason of reasons.slice(0, 6)) {
       doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.body)
-        .text(`• ${safe(reason, 70)}`, left + contentW * 0.48 + 22, rsy, { width: contentW * 0.52 - 40 })
-      rsy += 12
+        .text(`• ${safe(reason, 68)}`, left + contentW * 0.48 + 22, rsy, { width: contentW * 0.52 - 40, lineBreak: false })
+      rsy += 14
     }
 
     y += 132
     doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted)
       .text(
-        'Page 2 of 2  ·  JoBPilot.AI confidential score report  ·  Hybrid scoring (local 40/40/20 + Groq/Ollama LLM)',
+        'Page 2 of 2  ·  JoBPilot.AI  ·  JoBPilot ATS Score',
         left,
         y,
         { width: contentW, align: 'center' },

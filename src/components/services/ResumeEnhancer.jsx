@@ -912,8 +912,8 @@ export default function ResumeEnhancer() {
       >
         {enhancedBlob && (
           <p className="comparison-legend">
-            <span className="comparison-legend__item comparison-legend__item--green">Green = new or replaced bullet</span>
-            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = edited existing bullet</span>
+            <span className="comparison-legend__item comparison-legend__item--green">Green = newly added bullet</span>
+            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = rewritten existing bullet</span>
           </p>
         )}
 

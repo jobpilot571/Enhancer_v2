@@ -1,4 +1,5 @@
 import PizZip from 'pizzip'
+import { SOFT_SKILLS, KNOWN_TOOLS } from './scoringDictionary.js'
 
 const SECTION_ANCHORS = {
   summary: ['professional summary', 'summary', 'profile', 'objective'],
@@ -163,13 +164,17 @@ function stripLeadingBulletGlyphs(text) {
 /**
  * Keep summary/experience bullets short (~2 lines in typical resume fonts).
  */
-function clampBulletLength(text, maxChars = 155) {
+function clampBulletLength(text, maxChars = 175) {
   let t = stripLeadingBulletGlyphs(text)
   if (!t) return ''
+  // Drop incomplete trailing glue left by skill-weaving / truncation
+  t = t.replace(/\s+(and|or|with|using|via|for|to|of|in)\s*[.,;:]*$/i, '').trim()
+  if (!/[.!?]$/.test(t)) t = `${t}.`
   if (t.length <= maxChars) return t
   const cut = t.slice(0, maxChars)
   const at = Math.max(cut.lastIndexOf(';'), cut.lastIndexOf(','), cut.lastIndexOf(' '))
-  const trimmed = (at > 80 ? cut.slice(0, at) : cut).trim().replace(/[,;:\-–—]+$/, '')
+  let trimmed = (at > 80 ? cut.slice(0, at) : cut).trim().replace(/[,;:\-–—]+$/, '')
+  trimmed = trimmed.replace(/\s+(and|or|with|using|via|for|to|of|in)$/i, '').trim()
   return `${trimmed}.`
 }
 
@@ -203,24 +208,39 @@ function isValidSkillName(skill) {
     'payment integrity', 'hospital billing', 'claims editing',
     'reimbursement methodologies', 'payer reimbursement',
     'state and federal', 'years of experience', '4+ years', '5+ years',
+    // Soft / adjective / process fluff (not concrete tools)
+    'iterative', 'facilitation', 'facilitation skills', 'reporting',
+    'manufacturing processes', 'order-to-cash workflows', 'enterprise integrations',
+    'customer service', 'data security', 'system administration',
+    'continuous improvement', 'stakeholder management', 'change management',
+    'user adoption', 'user adoption support', 'testing coordination',
   ]
-  if (banned.some((b) => lower.includes(b))) return false
-  // Outcome / research / behavior phrasing is not a tool
-  if (/\b(success|behavior|behaviours?|research|initiative|outcomes?|alignment|engagement|culture|mindset)\b/i.test(lower)) {
+  if (banned.some((b) => (b.includes(' ') ? lower.includes(b) : lower === b))) return false
+  if (SOFT_SKILLS.has(lower)) return false
+  // Outcome / research / behavior / soft-skill phrasing is not a tool
+  if (/\b(success|behavior|behaviours?|research|initiative|outcomes?|alignment|engagement|culture|mindset|facilitation|iterative)\b/i.test(lower)) {
     return false
   }
   // Soft/generic fluff that is not a concrete tool
-  if (/^(cloud|software|hardware|systems?|applications?|platforms?|tools?|technologies|environments?|deployments?|services?|products?|dashboards?)$/i.test(s)) {
+  if (/^(cloud|software|hardware|systems?|applications?|platforms?|tools?|technologies|environments?|deployments?|services?|products?|dashboards?|reporting|etl)$/i.test(s)) {
     return false
   }
   if (!/[a-z0-9]/i.test(s)) return false
   // Prefer concrete tools: known tool, acronym, or short technical token
-  // Allow multi-word only when it looks technical (Power BI, Azure Data Factory, etc.)
   const words = lower.split(/\s+/)
-  if (words.length >= 3 && !/\b(sql|api|aws|azure|bi|etl|dbt|qa|uat|ci|cd|ml|ai|data)\b/i.test(lower)) {
+  if (words.length >= 3 && !/\b(sql|api|aws|azure|bi|dbt|qa|uat|ci|cd|ml|ai|data|power|office|dynamics)\b/i.test(lower)) {
     return false
   }
-  return true
+  // Allow ETL as part of a compound only (Azure Data Factory, Informatica ETL) — not alone
+  if (lower === 'etl' || lower === 'reporting') return false
+  // Prefer known tools when available; still allow short technical tokens / acronyms
+  if (KNOWN_TOOLS.has(lower)) return true
+  if (/^[A-Z]{2,6}$/.test(s)) return true // SQL, JIRA, UAT, etc.
+  if (words.length === 1 && s.length <= 18) return true
+  if (/\b(sql|jira|azure|aws|power bi|tableau|python|excel|visio|confluence|sharepoint|salesforce|dynamics|sap|oracle|snowflake|databricks|dbt|informatica|ssis|ssrs|qlik|looker|figma|miro|postman|selenium|cucumber)\b/i.test(lower)) {
+    return true
+  }
+  return false
 }
 
 /**
@@ -233,11 +253,8 @@ function hardMissingSkillCandidates(comparison) {
     ...(comparison?.report?.missingRequiredSkills || []),
     ...(comparison?.report?.missingTools || []),
   ]
-  // Fall back to comparison.missing but still run isValidSkillName
-  if (!pool.length) {
-    return (comparison?.missing || [])
-  }
-  return pool
+  // Do NOT fall back to comparison.missing — that list includes soft/domain fluff
+  return pool.filter((s) => isValidSkillName(s))
 }
 
 /** Expand a plan skill entry that may be a comma-dump into individual candidates. */
@@ -2233,7 +2250,7 @@ function isDuplicateBullet(newBullet, existingBullets) {
 
 /**
  * Yellow = light edit of an existing bullet (skills/keywords woven in).
- * Green = brand-new bullet OR substantial replacement of the original.
+ * Kept for callers/tests; patchDocx always uses yellow for full rewrites.
  */
 export function isPolishRewrite(original, replacement) {
   const a = bulletTokens(original)
@@ -2242,7 +2259,6 @@ export function isPolishRewrite(original, replacement) {
   let overlap = 0
   for (const t of a) if (b.has(t)) overlap += 1
   const ratio = overlap / Math.min(a.size, b.size)
-  // Keep yellow only when the story is clearly the same bullet with edits
   return ratio >= 0.5
 }
 
@@ -2495,7 +2511,11 @@ export function ensureSkillsInBullets(plan, comparison = null, resumeData = null
   // Prefer weaving into an existing rewrite (keeps storytelling; avoids generic adds)
   if (next.bulletRewrites.length) {
     const target = next.bulletRewrites[0]
-    target.replacement = clampBulletLength(`${String(target.replacement || '').replace(/\.$/, '')}${clause}.`)
+    let base = String(target.replacement || '').replace(/\.$/, '').trim()
+    base = base.replace(/\s+(and|or|with|using|via)\s*$/i, '').trim()
+    if (!new RegExp(`\\b${missingInBullets[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(base)) {
+      target.replacement = clampBulletLength(`${base}${clause}.`)
+    }
     return next
   }
 
@@ -2705,28 +2725,34 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
       next.experienceAdditions.push(entry)
     }
 
-    const need = entry.bullets.length >= 1 ? 0 : 2
-    if (need <= 0 && entry.bullets.length >= 1) return
+    if (entry.bullets.length >= 1) return
 
+    const company = exp.company
+    const title = exp.title || 'Business Analyst'
     const named = String(exp.bullets?.[0] || '')
       .match(/\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\s+(?:App|Application|System|Platform|Portal|Suite|Module|ERP|CRM))\b/)
-    const projectHint = named?.[1] || 'core operational systems'
+    const projectHint = named?.[1]
+      || String(exp.bullets?.[0] || '')
+        .split(/[,.]/)
+        .map((p) => p.trim())
+        .find((p) => p.length > 18 && p.length < 70)
+      || `${company} delivery initiatives`
     const resp = responsibilities[(expIdx) % Math.max(responsibilities.length, 1)]
       || 'gather and validate business requirements'
-    const shortResp = resp.replace(/^(to\s+|and\s+)/i, '').slice(0, 72)
+    const shortResp = resp.replace(/^(to\s+|and\s+)/i, '').slice(0, 58)
     const skillA = tools[(expIdx * 2) % Math.max(tools.length, 1)] || 'Jira'
     const skillB = tools[(expIdx * 2 + 1) % Math.max(tools.length, 1)] || 'SQL'
     const candidates = [
       clampBulletLength(
-        `Delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, improving delivery cycle time by 20%.`,
+        `As ${title} at ${company}, delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, cutting cycle time by 20%.`,
       ),
       clampBulletLength(
-        `Partnered with stakeholders on ${projectHint} to advance ${shortResp} with ${skillA}, raising process accuracy by 15%.`,
+        `Partnered with ${company} stakeholders on ${projectHint} to advance ${shortResp} with ${skillA}, improving accuracy by 15%.`,
       ),
     ]
 
     for (const bullet of candidates) {
-      if (entry.bullets.length >= 3) break
+      if (entry.bullets.length >= 2) break
       if (!bullet || isDuplicateBullet(bullet, [...allExisting, ...entry.bullets])) continue
       entry.bullets.push(bullet)
       allExisting.push(bullet)
@@ -2963,11 +2989,8 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     // Reuse bold keyword phrases from nearby bullets in the same range
     const nearbyEnds = getBulletParagraphEnds(xml, rangeStart, rangeEnd)
     const sectionPhrases = collectBoldPhrasesFromEnds(xml, nearbyEnds)
-    // Yellow only for light polish of the same bullet; full replace / new story → green
-    const markKind = isPolishRewrite(found.plain || rewrite.original, rewrite.replacement)
-      ? rewriteMark
-      : mark
-    const newPara = rewriteParagraph(found.para, rewrite.replacement, markKind, sectionPhrases)
+    // Yellow = rewrite of an existing bullet; green is only for brand-new inserts
+    const newPara = rewriteParagraph(found.para, rewrite.replacement, rewriteMark, sectionPhrases)
     xml = xml.slice(0, found.start) + newPara + xml.slice(found.end)
 
     if (section === 'summary') {
