@@ -4,9 +4,10 @@ import AuthShell from '../components/AuthShell'
 import GoogleSignInButton from '../components/GoogleSignInButton'
 import { useAuth } from '../context/AuthContext'
 import { stashOtpHint } from '../api/otpHint'
+import { isLocalDevHost, shouldShowGoogleAuth } from '../utils/googleAuthUi'
 
 export default function LoginPage() {
-  const { login, loginWithGoogle, isAuthenticated } = useAuth()
+  const { login, loginWithGoogle, loginLocalDev, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [email, setEmail] = useState(searchParams.get('email') || '')
@@ -15,7 +16,8 @@ export default function LoginPage() {
   const [notRegisteredEmail, setNotRegisteredEmail] = useState('')
   const [needsVerifyEmail, setNeedsVerifyEmail] = useState('')
   const [loading, setLoading] = useState(false)
-  const showGoogle = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+  const showGoogle = shouldShowGoogleAuth()
+  const localDev = isLocalDevHost()
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true })
@@ -65,6 +67,19 @@ export default function LoginPage() {
     }
   }
 
+  async function handleLocalDev() {
+    setError('')
+    setLoading(true)
+    try {
+      await loginLocalDev()
+      navigate('/', { replace: true })
+    } catch (err) {
+      setError(err.message || 'Local dev sign-in failed. Set LOCAL_DEV_AUTH=true in .env and restart the server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <AuthShell
       eyebrow="Welcome back"
@@ -73,7 +88,27 @@ export default function LoginPage() {
     >
       <div className="auth-form-card">
         <h2 className="auth-form-card__title">Sign in</h2>
-        <p className="auth-form-card__desc">Use Google or email. OTP is only for new or unverified accounts — returning users stay signed in.</p>
+        <p className="auth-form-card__desc">
+          {showGoogle
+            ? 'Use Google or email. OTP is only for new or unverified accounts — returning users stay signed in.'
+            : 'Sign in with email and password to use Resume Enhancer and other services.'}
+        </p>
+
+        {localDev && (
+          <div className="auth-callout" style={{ marginBottom: 16 }}>
+            <p style={{ marginBottom: 10 }}>
+              Local development: Google is disabled here (origin mismatch). Use the button below for unlimited local access, or email sign-in.
+            </p>
+            <button
+              type="button"
+              className="btn btn--primary btn--full"
+              disabled={loading}
+              onClick={handleLocalDev}
+            >
+              Continue as local developer
+            </button>
+          </div>
+        )}
 
         {showGoogle && (
           <>

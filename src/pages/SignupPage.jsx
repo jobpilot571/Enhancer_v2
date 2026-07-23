@@ -4,9 +4,10 @@ import AuthShell from '../components/AuthShell'
 import GoogleSignInButton from '../components/GoogleSignInButton'
 import { useAuth } from '../context/AuthContext'
 import { stashOtpHint } from '../api/otpHint'
+import { isLocalDevHost, shouldShowGoogleAuth } from '../utils/googleAuthUi'
 
 export default function SignupPage() {
-  const { signup, loginWithGoogle, isAuthenticated } = useAuth()
+  const { signup, loginWithGoogle, loginLocalDev, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [name, setName] = useState('')
@@ -15,7 +16,8 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const showGoogle = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+  const showGoogle = shouldShowGoogleAuth()
+  const localDev = isLocalDevHost()
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true })
@@ -66,6 +68,19 @@ export default function SignupPage() {
     }
   }
 
+  async function handleLocalDev() {
+    setError('')
+    setLoading(true)
+    try {
+      await loginLocalDev()
+      navigate('/', { replace: true })
+    } catch (err) {
+      setError(err.message || 'Local dev sign-in failed. Set LOCAL_DEV_AUTH=true in .env and restart the server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <AuthShell
       eyebrow="Free plan"
@@ -75,8 +90,26 @@ export default function SignupPage() {
       <div className="auth-form-card">
         <h2 className="auth-form-card__title">Sign up</h2>
         <p className="auth-form-card__desc">
-          Google and email signups both require a 6-digit email code once. Free plan includes <strong>10 resume enhancements</strong> per month.
+          {showGoogle
+            ? <>Google and email signups both require a 6-digit email code once. Free plan includes <strong>10 resume enhancements</strong> per month.</>
+            : <>Create an account with email. Free plan includes <strong>10 resume enhancements</strong> per month.</>}
         </p>
+
+        {localDev && (
+          <div className="auth-callout" style={{ marginBottom: 16 }}>
+            <p style={{ marginBottom: 10 }}>
+              Local development: skip signup and use unlimited local access.
+            </p>
+            <button
+              type="button"
+              className="btn btn--primary btn--full"
+              disabled={loading}
+              onClick={handleLocalDev}
+            >
+              Continue as local developer
+            </button>
+          </div>
+        )}
 
         {showGoogle && (
           <>

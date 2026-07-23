@@ -58,7 +58,7 @@ async function request(path, options = {}) {
     throw new Error('Cannot reach the auth API. Is the server running?')
   }
 
-  if (res.status === 401 && path !== '/login' && path !== '/signup' && path !== '/google') {
+  if (res.status === 401 && path !== '/login' && path !== '/signup' && path !== '/google' && path !== '/local-dev') {
     clearAuthStorage()
   }
 
@@ -99,6 +99,15 @@ export async function login({ email, password }) {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
+  if (data.token && data.user) {
+    setAuthToken(data.token)
+    setStoredUser(data.user)
+  }
+  return data
+}
+
+export async function loginLocalDev() {
+  const data = await request('/local-dev', { method: 'POST' })
   if (data.token && data.user) {
     setAuthToken(data.token)
     setStoredUser(data.user)

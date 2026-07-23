@@ -198,6 +198,11 @@ export const KNOWN_TOOLS = new Set([
   'cucumber', 'testrail', 'zephyr', 'hp alm', 'jenkins', 'git', 'github', 'gitlab',
   'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'splunk', 'dynatrace',
   'microsoft azure fabric', 'azure fabric',
+  // AI / Salesforce FDE stack
+  'agentforce', 'apex', 'java', 'javascript', 'typescript', 'langchain', 'llamaindex',
+  'cursor', 'claude', 'openai', 'anthropic', 'gemini', 'bigquery', 'terraform',
+  'salesforce data 360', 'data 360', 'vibes', 'salesforce vibes', 'langgraph',
+  'vector search', 'rag', 'fastapi', 'flask', 'kubernetes', 'helm', 'argo cd',
 ])
 
 /** Stop / filler words to exclude from keyword extraction */
@@ -274,3 +279,53 @@ export const JD_NOISE_PATTERNS = [
   /paid time off|pto\b/gi,
   /work from home|remote[- ]friendly/gi,
 ]
+
+/**
+ * Scan JD/resume text for known tool names (Agentforce, Cursor, Snowflake, etc.).
+ */
+export function extractKnownToolsFromText(text) {
+  const hay = String(text || '')
+  if (!hay.trim()) return []
+  const found = []
+  const seen = new Set()
+  const phrases = [...KNOWN_TOOLS].sort((a, b) => b.length - a.length)
+  for (const phrase of phrases) {
+    if (phrase.length < 2) continue
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, 'i')
+    if (!re.test(hay)) continue
+    const key = phrase.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const display = ({
+      agentforce: 'Agentforce',
+      apex: 'Apex',
+      java: 'Java',
+      javascript: 'JavaScript',
+      typescript: 'TypeScript',
+      langchain: 'LangChain',
+      llamaindex: 'LlamaIndex',
+      cursor: 'Cursor',
+      claude: 'Claude',
+      openai: 'OpenAI',
+      snowflake: 'Snowflake',
+      databricks: 'Databricks',
+      bigquery: 'BigQuery',
+      terraform: 'Terraform',
+      'salesforce data 360': 'Salesforce Data 360',
+      'data 360': 'Salesforce Data 360',
+      vibes: 'Salesforce Vibes',
+      'salesforce vibes': 'Salesforce Vibes',
+      python: 'Python',
+      salesforce: 'Salesforce',
+      docker: 'Docker',
+      kubernetes: 'Kubernetes',
+    })[key] || phrase.replace(/\b\w/g, (c) => c.toUpperCase())
+    const displayKey = display.toLowerCase()
+    if (seen.has(displayKey)) continue
+    seen.add(key)
+    seen.add(displayKey)
+    found.push(display)
+  }
+  return found
+}

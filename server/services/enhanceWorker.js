@@ -13,6 +13,8 @@ import {
   ensureSkillsInBullets,
   ensureDomainKeywordsInBullets,
   ensureAggressiveJdCoverage,
+  reclassifySummaryChanges,
+  dedupeExperienceAdditionsAcrossCompanies,
   detectSummaryFormat,
 } from './docxService.js'
 import { ensureEnhancedResumeQuality } from './resumeQaService.js'
@@ -156,7 +158,9 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     timer.mark('enhancement_plan_llm')
 
     let enhancementPlan = filterEnhancementPlan(planRaw, resumeData, comparison)
+    enhancementPlan = reclassifySummaryChanges(enhancementPlan, resumeData)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
+    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan)
     enhancementPlan.summaryBullets = (enhancementPlan.summaryBullets || []).slice(0, 3)
 
     // Local validation / skill weaving — no extra LLM calls for empty coverage
@@ -164,8 +168,10 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     enhancementPlan = ensureSkillsInBullets(enhancementPlan, comparison, resumeData)
     enhancementPlan = ensureDomainKeywordsInBullets(enhancementPlan, comparison, 10)
     enhancementPlan = ensureAggressiveJdCoverage(enhancementPlan, resumeData, jdData, comparison)
+    enhancementPlan = reclassifySummaryChanges(enhancementPlan, resumeData)
     enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
+    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan)
     timer.mark('validate_plan_local')
 
     if (!(enhancementPlan.summaryBullets?.length) && !(enhancementPlan.bulletRewrites || []).some((r) => {

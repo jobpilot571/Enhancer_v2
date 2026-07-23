@@ -46,10 +46,12 @@ export default function Navbar() {
   const firstName = user?.name?.split(/\s+/)[0] || 'Account'
   const enhancerLeft = user?.usage?.remaining?.enhancer
   const enhancerLimit = user?.usage?.limits?.enhancer
-  const usageLabel =
-    enhancerLeft == null || !Number.isFinite(enhancerLimit)
-      ? 'Unlimited enhancements'
-      : `${enhancerLeft} of ${enhancerLimit} enhancements left`
+  const isUnlimited = enhancerLeft == null || !Number.isFinite(enhancerLimit)
+  const usageShort = isUnlimited ? 'Unlimited' : `${enhancerLeft} left`
+  const usageFull = isUnlimited
+    ? 'Unlimited enhancements'
+    : `${enhancerLeft} of ${enhancerLimit} enhancements left`
+  const usageTitle = user?.planLabel ? `${user.planLabel} · ${usageFull}` : usageFull
 
   return (
     <header className="navbar">
@@ -121,44 +123,49 @@ export default function Navbar() {
             {!loading && isAuthenticated ? (
               <>
                 <span className="navbar__user navbar__user--mobile">Hi, {firstName}</span>
-                <span className="navbar__usage navbar__usage--mobile">{usageLabel}</span>
+                <span className="navbar__usage navbar__usage--mobile" title={usageTitle}>
+                  {usageFull}
+                </span>
                 <button type="button" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={handleLogout}>
                   Sign out
                 </button>
               </>
             ) : (
-              <Link to="/login" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={closeMenu}>
-                Sign In
-              </Link>
+              <>
+                <Link to="/login" className="btn btn--ghost navbar__signin navbar__signin--mobile" onClick={closeMenu}>
+                  Sign In
+                </Link>
+                <Link to="/signup" className="btn btn--primary navbar__cta navbar__cta--mobile" onClick={closeMenu}>
+                  Sign Up
+                </Link>
+              </>
             )}
-            <Link to={isAuthenticated ? '/#services' : '/signup'} className="btn btn--primary navbar__cta navbar__cta--mobile" onClick={closeMenu}>
-              {isAuthenticated ? 'Get Started' : 'Sign Up'}
-            </Link>
           </div>
         </nav>
 
-        <div className="navbar__actions">
+        <div className={`navbar__actions${isAuthenticated ? ' navbar__actions--authed' : ''}`}>
           {!loading && isAuthenticated ? (
             <>
-              <span
-                className="navbar__usage"
-                title={user?.planLabel || 'Free plan monthly limit'}
-              >
-                {usageLabel}
+              <span className="navbar__usage" title={usageTitle}>
+                {usageShort}
               </span>
-              <span className="navbar__user">Hi, {firstName}</span>
+              <span className="navbar__user" title={user?.name || firstName}>
+                {firstName}
+              </span>
               <button type="button" className="btn btn--ghost navbar__signin" onClick={handleLogout}>
                 Sign out
               </button>
             </>
           ) : (
-            <Link to="/login" className="btn btn--ghost navbar__signin">
-              Sign In
-            </Link>
+            <>
+              <Link to="/login" className="btn btn--ghost navbar__signin">
+                Sign In
+              </Link>
+              <Link to="/signup" className="btn btn--primary navbar__cta">
+                Sign Up
+              </Link>
+            </>
           )}
-          <Link to={isAuthenticated ? '/#services' : '/signup'} className="btn btn--primary navbar__cta">
-            {isAuthenticated ? 'Get Started' : 'Sign Up'}
-          </Link>
           <button
             className="navbar__toggle"
             aria-label="Toggle menu"

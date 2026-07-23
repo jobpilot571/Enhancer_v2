@@ -1,5 +1,6 @@
 import { structuredJSON } from './aiProvider.js'
 import { cleanJobDescription, getCachedJdAnalysis, setCachedJdAnalysis } from './jdCleaner.js'
+import { extractKnownToolsFromText } from './scoringDictionary.js'
 
 /**
  * @param {object} [options]
@@ -328,6 +329,19 @@ Never invent bullets from a paragraph summary.`,
   )
 }
 
+function enrichJdWithExtractedTools(jdData, jdText) {
+  if (!jdData || typeof jdData !== 'object') return jdData
+  const extracted = extractKnownToolsFromText(jdText)
+  if (!extracted.length) return jdData
+  const merge = (arr) => [...new Set([...(arr || []), ...extracted].map((s) => String(s).trim()).filter(Boolean))]
+  return {
+    ...jdData,
+    toolsTechnologies: merge(jdData.toolsTechnologies).slice(0, 28),
+    requiredSkills: merge(jdData.requiredSkills).slice(0, 28),
+    preferredSkills: [...new Set([...(jdData.preferredSkills || []), ...extracted])].slice(0, 20),
+  }
+}
+
 /**
  * Analyze a cleaned JD (or raw — will clean). Uses disk/memory cache by content hash.
  * @returns {{ data: object, cached: boolean, cacheKey: string, source: string|null }}
@@ -337,21 +351,28 @@ export async function analyzeJd(jdText) {
   const cached = getCachedJdAnalysis(jdText)
   if (cached.data) {
     console.log(`[AI] jd_analysis cache hit (${cached.source}) key=${cached.key.slice(0, 12)}`)
-    return { data: cached.data, cached: true, cacheKey: cached.key, source: cached.source }
+    return {
+      data: enrichJdWithExtractedTools(cached.data, cleaned),
+      cached: true,
+      cacheKey: cached.key,
+      source: cached.source,
+    }
   }
 
   const data = await jsonCompletion(
     `Extract structured hiring signal from this cleaned job description.
 Return ONLY JSON. Keep lists short and concrete (skills/tools as short names, not sentences).
+Always include concrete tools/platforms named in the JD (e.g. Agentforce, Cursor, Claude, Apex, LangChain, Snowflake, Databricks, BigQuery, Salesforce Data 360, Python, TypeScript, Java).
 Ignore any residual salary, benefits, location, EEO, or apply instructions.`,
     `Cleaned JD:\n${cleaned.slice(0, 6000)}`,
     'jd_analysis',
     JD_SCHEMA,
-    { maxTokens: 800 },
+    { maxTokens: 1200 },
   )
 
-  const cacheKey = setCachedJdAnalysis(jdText, data)
-  return { data, cached: false, cacheKey, source: null }
+  const enriched = enrichJdWithExtractedTools(data, cleaned)
+  const cacheKey = setCachedJdAnalysis(jdText, enriched)
+  return { data: enriched, cached: false, cacheKey, source: null }
 }
 
 /** @deprecated Prefer analyzeJd — kept for callers that expect bare JD object */
@@ -458,6 +479,7 @@ Output fields:
 
 Rules:
 - Cover gaps.responsibilities across ALL companies (not only the first one).
+- Each company MUST get DISTINCT bullets — never copy the same bullet (or near-paraphrase) to two companies. Vary projects, systems, and tools per employer.
 - Put missingSkills into skillAdditions AND evidence them inside rewritten/new experience bullets (full ATS credit).
 - Prefer metrics in bullets for impact score.
 - Stay within change limits. Return valid complete JSON only.`,

@@ -15,11 +15,21 @@ import {
   findUserByEmail,
   upsertGoogleUser,
   publicUser,
+  ensureLocalDevUser,
 } from '../store/userStore.js'
 import { getBearerToken } from '../middleware/userAuth.js'
 import { withEntitlements } from '../services/entitlements.js'
 
 const router = Router()
+
+/** LOCAL_DEV_AUTH=true in .env only — never set on Render. */
+export function isLocalDevAuthEnabled() {
+  const flag = String(process.env.LOCAL_DEV_AUTH || '').trim().toLowerCase()
+  if (flag !== '1' && flag !== 'true' && flag !== 'yes') return false
+  // Hard block on hosted platforms even if someone mis-sets the flag
+  if (process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.VERCEL) return false
+  return true
+}
 
 function withUsage(user) {
   if (!user) return null
@@ -101,7 +111,28 @@ router.get('/status', (_req, res) => {
     emailConfigured: isEmailConfigured(),
     googleConfigured: isGoogleAuthConfigured(),
     signupEnabled: true,
+    localDevAuth: isLocalDevAuthEnabled(),
   })
+})
+
+/**
+ * Instant verified Professional session for local development.
+ * Enabled only when LOCAL_DEV_AUTH=true (blocked on Render/Vercel).
+ */
+router.post('/local-dev', (req, res, next) => {
+  try {
+    if (!isLocalDevAuthEnabled()) {
+      return res.status(404).json({ error: 'Local dev auth is disabled.' })
+    }
+    const user = ensureLocalDevUser()
+    return res.json({
+      ...sessionResponse(user),
+      localDev: true,
+      message: 'Signed in as local developer (unlimited). Not available in production.',
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
 router.post('/signup', async (req, res, next) => {

@@ -1,5 +1,5 @@
 import PizZip from 'pizzip'
-import { SOFT_SKILLS, KNOWN_TOOLS } from './scoringDictionary.js'
+import { SOFT_SKILLS, KNOWN_TOOLS, extractKnownToolsFromText } from './scoringDictionary.js'
 
 const SECTION_ANCHORS = {
   summary: ['professional summary', 'summary', 'profile', 'objective'],
@@ -228,7 +228,7 @@ function isValidSkillName(skill) {
   if (!/[a-z0-9]/i.test(s)) return false
   // Prefer concrete tools: known tool, acronym, or short technical token
   const words = lower.split(/\s+/)
-  if (words.length >= 3 && !/\b(sql|api|aws|azure|bi|dbt|qa|uat|ci|cd|ml|ai|data|power|office|dynamics)\b/i.test(lower)) {
+  if (words.length >= 3 && !/\b(sql|api|aws|azure|bi|dbt|qa|uat|ci|cd|ml|ai|data|power|office|dynamics|salesforce|agentforce|snowflake|databricks)\b/i.test(lower)) {
     return false
   }
   // Allow ETL as part of a compound only (Azure Data Factory, Informatica ETL) — not alone
@@ -237,7 +237,7 @@ function isValidSkillName(skill) {
   if (KNOWN_TOOLS.has(lower)) return true
   if (/^[A-Z]{2,6}$/.test(s)) return true // SQL, JIRA, UAT, etc.
   if (words.length === 1 && s.length <= 18) return true
-  if (/\b(sql|jira|azure|aws|power bi|tableau|python|excel|visio|confluence|sharepoint|salesforce|dynamics|sap|oracle|snowflake|databricks|dbt|informatica|ssis|ssrs|qlik|looker|figma|miro|postman|selenium|cucumber)\b/i.test(lower)) {
+  if (/\b(sql|jira|azure|aws|power bi|tableau|python|excel|visio|confluence|sharepoint|salesforce|dynamics|sap|oracle|snowflake|databricks|dbt|informatica|ssis|ssrs|qlik|looker|figma|miro|postman|selenium|cucumber|agentforce|apex|langchain|llamaindex|cursor|claude|openai|bigquery|terraform|typescript|javascript|java)\b/i.test(lower)) {
     return true
   }
   return false
@@ -661,12 +661,64 @@ function normalizePageMargins(xml) {
 }
 
 function normalizeParagraphIndents(xml) {
-  // Process per paragraph so we can preserve tab-column skills layouts
-  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+  // Skills-section geometry must match the original resume. Post-enhance repair used to
+  // crush left/hanging indents on category lines (left>1440 → 720), which made the
+  // Technical Skills block look differently indented vs the uploaded DOCX.
+  const skillsStart = findSectionStart(xml, SECTION_ANCHORS.skills)
+  const skillsEnd = skillsStart === -1 ? -1 : findNextSectionStart(xml, skillsStart)
+
+  let cursor = 0
+  let out = ''
+  const paraRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
+  let m
+  while ((m = paraRe.exec(xml))) {
+    out += xml.slice(cursor, m.index)
+    const para = m[0]
+    const paraStart = m.index
+    const inSkillsSection = skillsStart !== -1
+      && paraStart >= skillsStart
+      && paraStart < skillsEnd
+
+    if (inSkillsSection) {
+      // Soft-touch only: clamp absurd >5" indents; never rewrite designed skill columns
+      out += para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+        const get = (name) => {
+          const mm = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+          return mm ? parseInt(mm[1], 10) : null
+        }
+        let left = get('w:left')
+        let hanging = get('w:hanging')
+        let firstLine = get('w:firstLine')
+        let right = get('w:right')
+        let changed = false
+        if (left != null && left > 7200) {
+          left = 2880
+          changed = true
+        }
+        if (hanging != null && hanging > 7200) {
+          hanging = left != null ? Math.min(left, 2880) : 2880
+          changed = true
+        }
+        if (right != null && right > 2880) {
+          right = 0
+          changed = true
+        }
+        if (!changed) return tag
+        const parts = []
+        if (left != null) parts.push(`w:left="${left}"`)
+        if (hanging != null) parts.push(`w:hanging="${hanging}"`)
+        if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
+        if (right != null) parts.push(`w:right="${right}"`)
+        return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
+      })
+      cursor = paraRe.lastIndex
+      continue
+    }
+
     const hasTabLayout = /<w:tabs\b/.test(para) || /<w:tab[\s/>]/.test(para)
     const tabPosMatch = [...para.matchAll(/<w:tab\b[^>]*w:pos="(\d+)"/g)]
     const designedCol = tabPosMatch.length
-      ? Math.max(...tabPosMatch.map((m) => parseInt(m[1], 10)))
+      ? Math.max(...tabPosMatch.map((tm) => parseInt(tm[1], 10)))
       : null
 
     // Classic skills layout: left indent ≈ hanging indent (both large) to align wrapped lines
@@ -680,13 +732,20 @@ function normalizeParagraphIndents(xml) {
       if (hanging >= 720 && left >= hanging - 240) isHangingColumn = true
     }
 
+    // Also treat colon skill-category lines as protected columns even outside section markers
+    const plain = getPlainTextFromParagraph(para)
+    const looksLikeSkillCategory = !isSkillsSectionTitle(plain)
+      && /^[^:]{2,48}:\s*.+/.test(plain.trim())
+      && !plain.includes('|')
+      && plain.length < 400
+
     // Skills / two-column lines: never crush hanging indent — that causes the
     // "label then huge gap then skills / wrapped lines misaligned" mess.
-    if (hasTabLayout || isHangingColumn || designedCol) {
-      return para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+    if (hasTabLayout || isHangingColumn || designedCol || looksLikeSkillCategory) {
+      out += para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
         const get = (name) => {
-          const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
-          return m ? parseInt(m[1], 10) : null
+          const mm = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+          return mm ? parseInt(mm[1], 10) : null
         }
         let left = get('w:left')
         let hanging = get('w:hanging')
@@ -695,10 +754,11 @@ function normalizeParagraphIndents(xml) {
         let changed = false
         const col = designedCol || hanging || left || 2880
 
-        // Restore hanging if a prior pass destroyed the column align
-        if (designedCol && (hanging == null || hanging < designedCol * 0.55)) {
+        // Only restore hanging when it is completely missing (broken wrap), never invent
+        // a larger column from tab pos — that shifts alignment vs the original.
+        if (designedCol && hanging == null && (left == null || left < 120)) {
           hanging = designedCol
-          left = Math.max(left || 0, designedCol)
+          left = designedCol
           changed = true
         }
         // Only clamp absurd >5" indents
@@ -723,13 +783,15 @@ function normalizeParagraphIndents(xml) {
         if (right != null) parts.push(`w:right="${right}"`)
         return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
       })
+      cursor = paraRe.lastIndex
+      continue
     }
 
     // Non-column body text: clamp extreme shove-right indents only
-    return para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
+    out += para.replace(/<w:ind\b[^/]*\/>/g, (tag) => {
       const get = (name) => {
-        const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
-        return m ? parseInt(m[1], 10) : null
+        const mm = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+        return mm ? parseInt(mm[1], 10) : null
       }
       let left = get('w:left')
       let hanging = get('w:hanging')
@@ -766,16 +828,19 @@ function normalizeParagraphIndents(xml) {
       if (firstLine != null && hanging == null) parts.push(`w:firstLine="${firstLine}"`)
       if (right != null) parts.push(`w:right="${right}"`)
       for (const name of ['w:start', 'w:end']) {
-        const m = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
-        if (m) {
-          let v = parseInt(m[1], 10)
+        const mm = new RegExp(`\\b${name}="(\\d+)"`).exec(tag)
+        if (mm) {
+          let v = parseInt(mm[1], 10)
           if (v > 1440) v = 720
           parts.push(`${name}="${v}"`)
         }
       }
       return parts.length ? `<w:ind ${parts.join(' ')}/>` : tag
     })
-  })
+    cursor = paraRe.lastIndex
+  }
+  out += xml.slice(cursor)
+  return out
 }
 
 /**
@@ -2328,6 +2393,66 @@ function isSummaryRewrite(rewrite) {
   return !company || company === 'summary' || company === 'professional summary'
 }
 
+/**
+ * If a "summary rewrite" does not closely match any existing summary bullet,
+ * treat it as a NEW summary bullet (green) instead of a yellow rewrite.
+ */
+export function reclassifySummaryChanges(plan, resumeData) {
+  const existingSummary = resumeData?.summaryBullets || []
+  const summaryBullets = [...(plan.summaryBullets || [])]
+  const bulletRewrites = []
+
+  for (const r of plan.bulletRewrites || []) {
+    if (!isSummaryRewrite(r) || !r.replacement) {
+      bulletRewrites.push(r)
+      continue
+    }
+    const original = String(r.original || '').trim()
+    const replacement = clampBulletLength(r.replacement)
+    if (!replacement) continue
+
+    const matchedExisting = existingSummary.some((sb) => {
+      if (normalizeText(sb) === normalizeText(original)) return true
+      return isPolishRewrite(sb, replacement) || isPolishRewrite(original || sb, replacement)
+    })
+
+    // No solid match to an existing summary line → brand-new summary bullet (green insert)
+    if (!original || !matchedExisting) {
+      if (!isDuplicateBullet(replacement, [...existingSummary, ...summaryBullets])) {
+        summaryBullets.push(replacement)
+      }
+      continue
+    }
+
+    bulletRewrites.push({ ...r, original, replacement })
+  }
+
+  return {
+    ...plan,
+    summaryBullets: summaryBullets.slice(0, 3),
+    bulletRewrites,
+  }
+}
+
+/**
+ * Never reuse the same (or near-duplicate) new bullet across two companies.
+ */
+export function dedupeExperienceAdditionsAcrossCompanies(plan) {
+  const seen = []
+  const experienceAdditions = []
+  for (const entry of plan.experienceAdditions || []) {
+    const bullets = []
+    for (const raw of entry.bullets || []) {
+      const b = clampBulletLength(raw)
+      if (!b || isDuplicateBullet(b, seen)) continue
+      bullets.push(b)
+      seen.push(b)
+    }
+    if (bullets.length) experienceAdditions.push({ company: entry.company, bullets })
+  }
+  return { ...plan, experienceAdditions }
+}
+
 function emptyApplied() {
   return {
     skills: [],
@@ -2659,10 +2784,13 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
     skillsToAdd: [...(plan.skillsToAdd || [])],
   }
 
-  const missingSkills = hardMissingSkillCandidates(comparison)
+  const missingSkills = [
+    ...hardMissingSkillCandidates(comparison),
+    ...extractKnownToolsFromText(JSON.stringify(jdData || {})),
+  ]
     .flatMap(expandSkillCandidates)
     .filter((s) => isValidSkillName(s))
-    .slice(0, 16)
+    .slice(0, 20)
 
   const existingSkillSet = new Set(
     [
@@ -2702,10 +2830,14 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
     ...missingSkills,
     ...(jdData?.toolsTechnologies || []),
     ...(jdData?.requiredSkills || []),
+    ...extractKnownToolsFromText(JSON.stringify(jdData || {})),
   ]
     .map((s) => String(s || '').trim())
     .filter((s) => isValidSkillName(s))
-    .slice(0, 10)
+
+  // Prefer a wider unique tool pool so each company gets different skills
+  const uniqueTools = [...new Set(tools.map((t) => t))]
+  const toolPool = uniqueTools.length ? uniqueTools : ['Python', 'SQL', 'Jira']
 
   const companies = resumeData?.experience || []
   const allExisting = [
@@ -2740,14 +2872,15 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
     const resp = responsibilities[(expIdx) % Math.max(responsibilities.length, 1)]
       || 'gather and validate business requirements'
     const shortResp = resp.replace(/^(to\s+|and\s+)/i, '').slice(0, 58)
-    const skillA = tools[(expIdx * 2) % Math.max(tools.length, 1)] || 'Jira'
-    const skillB = tools[(expIdx * 2 + 1) % Math.max(tools.length, 1)] || 'SQL'
+    const skillA = toolPool[expIdx % toolPool.length]
+    const skillB = toolPool[(expIdx + 2) % toolPool.length]
+    const skillC = toolPool[(expIdx + 4) % toolPool.length]
     const candidates = [
       clampBulletLength(
         `As ${title} at ${company}, delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, cutting cycle time by 20%.`,
       ),
       clampBulletLength(
-        `Partnered with ${company} stakeholders on ${projectHint} to advance ${shortResp} with ${skillA}, improving accuracy by 15%.`,
+        `Partnered with ${company} stakeholders on ${projectHint} to advance ${shortResp} with ${skillC}, improving accuracy by 15%.`,
       ),
     ]
 
@@ -2761,7 +2894,7 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
 
   next.experienceAdditions = next.experienceAdditions.filter((e) => e.company && e.bullets?.length)
   next.skillsToAdd = [...new Set(next.skillsByCategory.flatMap((e) => e.skills || []))]
-  return next
+  return dedupeExperienceAdditionsAcrossCompanies(next)
 }
 
 export function buildMatchAnalysis(beforeComparison, afterComparison, applied, processingMeta = null) {

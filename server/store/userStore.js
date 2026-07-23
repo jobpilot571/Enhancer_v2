@@ -434,6 +434,41 @@ export function markEmailVerified(email) {
   return publicUser(user)
 }
 
+/**
+ * Local-only developer account (verified + professional). Used when LOCAL_DEV_AUTH=true.
+ * Never enable LOCAL_DEV_AUTH on Render/production.
+ */
+export function ensureLocalDevUser() {
+  const email = 'local-dev@jobpilot.local'
+  const data = getUsers()
+  let user = data.users.find((u) => u.email === email)
+  if (!user) {
+    const { salt, hash } = hashPassword('local-dev-password-not-for-prod')
+    user = {
+      id: crypto.randomUUID(),
+      name: 'Local Developer',
+      email,
+      passwordSalt: salt,
+      passwordHash: hash,
+      googleId: null,
+      plan: 'professional',
+      complimentary: true,
+      complimentaryPlanType: 'friend',
+      emailVerifiedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    }
+    data.users.push(user)
+  } else {
+    user.plan = 'professional'
+    user.complimentary = true
+    user.complimentaryPlanType = user.complimentaryPlanType || 'friend'
+    user.emailVerifiedAt = user.emailVerifiedAt || new Date().toISOString()
+    user.name = user.name || 'Local Developer'
+  }
+  saveUsers(data)
+  return user
+}
+
 export function createOtpChallenge(email, { force = false } = {}) {
   const normalized = normalizeEmail(email)
   const data = getOtps()

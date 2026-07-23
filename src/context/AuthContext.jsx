@@ -2,9 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import {
   clearAuthStorage,
   fetchMe,
+  getAuthStatus,
   getAuthToken,
   getStoredUser,
   login as apiLogin,
+  loginLocalDev as apiLoginLocalDev,
   loginWithGoogle as apiLoginWithGoogle,
   logout as apiLogout,
   setStoredUser,
@@ -12,39 +14,50 @@ import {
   verifyOtp as apiVerifyOtp,
   resendOtp as apiResendOtp,
 } from '../api/auth'
+import { isLocalDevHost } from '../utils/googleAuthUi'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => getStoredUser())
-  const [loading, setLoading] = useState(() => Boolean(getAuthToken()))
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = getAuthToken()
-    if (!token) {
-      setLoading(false)
-      return
+    let cancelled = false
+
+    async function boot() {
+      const token = getAuthToken()
+      if (token) {
+        try {
+          const data = await fetchMe()
+          if (!cancelled) setUser(data.user)
+        } catch {
+          if (!cancelled) {
+            clearAuthStorage()
+            setUser(null)
+          }
+        }
+        if (!cancelled) setLoading(false)
+        return
+      }
+
+      // Local-only: auto sign-in as unlimited developer when server allows it
+      if (isLocalDevHost()) {
+        try {
+          const status = await getAuthStatus()
+          if (status?.localDevAuth) {
+            const data = await apiLoginLocalDev()
+            if (!cancelled && data?.user) setUser(data.user)
+          }
+        } catch {
+          /* server may be down or LOCAL_DEV_AUTH off — fall through */
+        }
+      }
+
+      if (!cancelled) setLoading(false)
     }
 
-    let cancelled = false
-    fetchMe()
-      .then((data) => {
-        if (!cancelled) setUser(data.user)
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          if (err?.needsVerification) {
-            clearAuthStorage()
-          } else {
-            clearAuthStorage()
-          }
-          setUser(null)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-
+    boot()
     return () => {
       cancelled = true
     }
@@ -71,6 +84,15 @@ export function AuthProvider({ children }) {
   const loginWithGoogle = useCallback(async (credential) => {
     const data = await apiLoginWithGoogle(credential)
     if (data.user && !data.needsVerification) {
+      setUser(data.user)
+      setStoredUser(data.user)
+    }
+    return data
+  }, [])
+
+  const loginLocalDev = useCallback(async () => {
+    const data = await apiLoginLocalDev()
+    if (data.user) {
       setUser(data.user)
       setStoredUser(data.user)
     }
@@ -107,12 +129,13 @@ export function AuthProvider({ children }) {
       signup,
       login,
       loginWithGoogle,
+      loginLocalDev,
       verifyOtp,
       resendOtp,
       logout,
       refreshUser,
     }),
-    [user, loading, signup, login, loginWithGoogle, verifyOtp, resendOtp, logout, refreshUser]
+    [user, loading, signup, login, loginWithGoogle, loginLocalDev, verifyOtp, resendOtp, logout, refreshUser]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
