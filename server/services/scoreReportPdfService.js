@@ -289,7 +289,7 @@ export function buildScoreReportPdf({
   y += row2H + 12
 
   // ── Row 3: Responsibilities + AI details + coverage ──
-  const row3H = 175
+  const row3H = 210
   const respW = contentW * 0.55
   const metaW = contentW - respW - 10
   card(doc, left, y, respW, row3H, COLORS.white)
@@ -317,9 +317,9 @@ export function buildScoreReportPdf({
     ['AI Provider', provider],
     ['Model Used', model],
     ['Processing Time', duration],
-    ['Scoring Engine', 'ATS 40/40/20 v3.0'],
-    ['AI used for', 'Parse + enhance plan'],
-    ['Score calculated by', 'Local rules (no LLM)'],
+    ['Scoring Engine', engine.version ? `${engine.name} v${engine.version}` : 'ATS Hybrid v4.0'],
+    ['AI used for', 'Parse + enhance + LLM score'],
+    ['Score calculated by', processingMeta?.scoringEngine || 'Local 40/40/20 + Groq/Ollama LLM'],
   ]
   doc.font('Helvetica').fontSize(8)
   for (const [k, v] of metaLines) {
@@ -342,6 +342,23 @@ export function buildScoreReportPdf({
   my += 14
   doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.teal)
     .text(`JD Match  ${stars(level.stars)}  ${level.label}`, left + respW + 22, my)
+
+  const marks = comparison?.atsMarks || matchAnalysis?.atsMarks || processingMeta?.atsMarks || null
+  if (marks) {
+    my += 16
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.ink).text('ATS Friendly Marks', left + respW + 22, my)
+    my += 12
+    doc.font('Helvetica').fontSize(8).fillColor(COLORS.body)
+    const markLines = [
+      marks.atsFriendly != null ? `ATS Friendly  ${marks.atsFriendly}/100` : null,
+      marks.readability != null ? `Readability  ${marks.readability}/100` : null,
+      marks.attractiveness != null ? `Attractiveness  ${marks.attractiveness}/100` : null,
+    ].filter(Boolean)
+    for (const line of markLines) {
+      doc.text(line, left + respW + 22, my)
+      my += 11
+    }
+  }
 
   y += row3H + 12
 
@@ -436,7 +453,7 @@ export function buildScoreReportPdf({
     y += 132
     doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted)
       .text(
-        'Page 2 of 2  ·  JoBPilot.AI confidential score report  ·  Deterministic scoring (no LLM for final score)',
+        'Page 2 of 2  ·  JoBPilot.AI confidential score report  ·  Hybrid scoring (local 40/40/20 + Groq/Ollama LLM)',
         left,
         y,
         { width: contentW, align: 'center' },

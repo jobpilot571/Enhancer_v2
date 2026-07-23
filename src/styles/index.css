@@ -2380,6 +2380,36 @@ body:has(.service-block--enhancer) .footer__col h4 {
   overflow: visible;
   align-items: start;
 }
+.ats-marks-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.ats-marks-row__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 110px;
+}
+.ats-marks-row__label {
+  font-size: 0.6875rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ats-marks-row__value {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+.ats-marks-row__item--label .ats-marks-row__value {
+  color: #0d9488;
+}
 .ats-mini-card {
   position: relative;
   display: flex;

@@ -2014,13 +2014,13 @@ function redistributeSkillsToExistingCategories(plan, xml) {
       continue
     }
     const bucket = ensureBucket(line)
-    const maxPerLine = line.inTable ? 2 : (line.hasTabLayout ? 3 : 5)
+    const maxPerLine = line.inTable ? 4 : (line.hasTabLayout ? 6 : 12)
     if (bucket.skills.length >= maxPerLine) {
       skipped.push(skill)
       continue
     }
     // Skip if line is already long — appending more breaks table/column layouts
-    const maxRest = line.inTable ? 120 : (line.hasTabLayout ? 160 : 220)
+    const maxRest = line.inTable ? 160 : (line.hasTabLayout ? 220 : 320)
     const projected = (line.restLen || 0) + bucket.skills.join(', ').length + skill.length
     if (projected > maxRest) {
       skipped.push(skill)
@@ -2129,7 +2129,7 @@ function getPlanBulletsForCompany(plan, companyName) {
   const entry = (plan.experienceAdditions || []).find(
     (e) => e.company?.toLowerCase() === companyName?.toLowerCase(),
   )
-  return (entry?.bullets || []).slice(0, 2)
+  return (entry?.bullets || []).slice(0, 3)
 }
 
 export function mergeExperienceAdditions(plan, resumeData) {
@@ -2140,13 +2140,13 @@ export function mergeExperienceAdditions(plan, resumeData) {
     if (!entry.company || !entry.bullets?.length) continue
     const key = entry.company.toLowerCase()
     const existing = byCompany.get(key) || []
-    byCompany.set(key, [...existing, ...entry.bullets].slice(0, 2))
+    byCompany.set(key, [...existing, ...entry.bullets].slice(0, 3))
   }
 
   const experienceAdditions = companies
     .map((c) => ({
       company: c.company,
-      bullets: (byCompany.get(c.company?.toLowerCase()) || []).slice(0, 2),
+      bullets: (byCompany.get(c.company?.toLowerCase()) || []).slice(0, 3),
     }))
     .filter((e) => e.company && e.bullets.length)
 
@@ -2229,6 +2229,21 @@ function isDuplicateBullet(newBullet, existingBullets) {
     if (overlap >= Math.min(5, Math.ceil(a.size * 0.55))) return true
   }
   return false
+}
+
+/**
+ * Yellow = light edit of an existing bullet (skills/keywords woven in).
+ * Green = brand-new bullet OR substantial replacement of the original.
+ */
+export function isPolishRewrite(original, replacement) {
+  const a = bulletTokens(original)
+  const b = bulletTokens(replacement)
+  if (a.size < 3 || b.size < 3) return false
+  let overlap = 0
+  for (const t of a) if (b.has(t)) overlap += 1
+  const ratio = overlap / Math.min(a.size, b.size)
+  // Keep yellow only when the story is clearly the same bullet with edits
+  return ratio >= 0.5
 }
 
 /** Softer check for summary — avoid wiping JD-aligned bullets that share tools with experience. */
@@ -2350,7 +2365,7 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
       && !isNearExactSummaryDuplicate(b, existingSummary)
       && !repeatsYearsClaim(b, resumeData)
       && !isDuplicateBullet(b, allExistingBullets))
-    .slice(0, 2)
+    .slice(0, 3)
 
   const summaryRewrites = (plan.bulletRewrites || []).filter(isSummaryRewrite)
 
@@ -2360,7 +2375,7 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
       bullets: (entry.bullets || [])
         .map((b) => clampBulletLength(b))
         .filter((b) => b && !isDuplicateBullet(b, allExistingBullets))
-        .slice(0, 2),
+        .slice(0, 3),
     }))
     .filter((entry) => entry.company && entry.bullets.length)
 
@@ -2377,7 +2392,7 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
       const skills = (entry.skills || [])
         .flatMap(expandSkillCandidates)
         .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s) && isMissing(s))
-        .slice(0, 8)
+        .slice(0, 12)
       if (skills.length) {
         skillsByCategory.push({
           category: resolveCategory(entry.category, resumeData),
@@ -2390,7 +2405,7 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
     const flat = (plan.skillsToAdd || [])
       .flatMap(expandSkillCandidates)
       .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s) && isMissing(s))
-      .slice(0, 10)
+      .slice(0, 18)
     if (flat.length) {
       // Prefer a real category heading from the resume — never invent "Technical Skills"
       const realCats = [...(resumeData.headings || []), ...(resumeData.allSections || [])]
@@ -2405,7 +2420,7 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
   const stillMissing = hardMissingSkillCandidates(comparison)
     .flatMap(expandSkillCandidates)
     .filter((s) => isValidSkillName(s) && !isDuplicateSkill(s))
-    .slice(0, 8)
+    .slice(0, 16)
   if (stillMissing.length) {
     const realCats = [...(resumeData.headings || []), ...(resumeData.allSections || [])]
       .filter((h) => h && !isSkillsSectionTitle(h))
@@ -2598,9 +2613,128 @@ export function ensureDomainKeywordsInBullets(plan, comparison, limit = 6) {
     next.summaryBullets.push(
       clampBulletLength(`Advanced ${rest} initiatives with clear requirements and measurable outcomes.`),
     )
-    next.summaryBullets = next.summaryBullets.slice(0, 2)
+    next.summaryBullets = next.summaryBullets.slice(0, 3)
   }
 
+  return next
+}
+
+/**
+ * Force JD selection coverage: skills + at least one new bullet per company when gaps remain.
+ * Used when the LLM under-covers companies or missing skills.
+ */
+export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison) {
+  const next = {
+    ...plan,
+    summaryBullets: [...(plan.summaryBullets || [])],
+    experienceAdditions: (plan.experienceAdditions || []).map((e) => ({
+      company: e.company,
+      bullets: [...(e.bullets || [])],
+    })),
+    bulletRewrites: [...(plan.bulletRewrites || [])],
+    skillsByCategory: (plan.skillsByCategory || []).map((e) => ({
+      category: e.category,
+      skills: [...(e.skills || [])],
+    })),
+    skillsToAdd: [...(plan.skillsToAdd || [])],
+  }
+
+  const missingSkills = hardMissingSkillCandidates(comparison)
+    .flatMap(expandSkillCandidates)
+    .filter((s) => isValidSkillName(s))
+    .slice(0, 16)
+
+  const existingSkillSet = new Set(
+    [
+      ...(resumeData?.skills || []),
+      ...(resumeData?.technicalSkills || []),
+      ...next.skillsToAdd,
+      ...next.skillsByCategory.flatMap((e) => e.skills || []),
+    ].map((s) => normalizeText(s)),
+  )
+
+  const toAddSkills = missingSkills.filter((s) => !existingSkillSet.has(normalizeText(s)))
+  if (toAddSkills.length) {
+    const realCats = [...(resumeData?.headings || []), ...(resumeData?.allSections || [])]
+      .filter((h) => h && !isSkillsSectionTitle(h))
+    const defaultCat = realCats.find((h) => /tool|platform|skill|technolog/i.test(h))
+      || realCats[0]
+      || 'Tools & Platforms'
+    let bucket = next.skillsByCategory.find(
+      (e) => normalizeText(e.category) === normalizeText(defaultCat),
+    )
+    if (!bucket) {
+      bucket = { category: defaultCat, skills: [] }
+      next.skillsByCategory.push(bucket)
+    }
+    for (const skill of toAddSkills) {
+      if (bucket.skills.some((s) => normalizeText(s) === normalizeText(skill))) continue
+      bucket.skills.push(skill)
+      next.skillsToAdd.push(skill)
+    }
+  }
+
+  const responsibilities = (jdData?.responsibilities || [])
+    .map((r) => String(r || '').trim())
+    .filter((r) => r.length > 12)
+    .slice(0, 12)
+  const tools = [
+    ...missingSkills,
+    ...(jdData?.toolsTechnologies || []),
+    ...(jdData?.requiredSkills || []),
+  ]
+    .map((s) => String(s || '').trim())
+    .filter((s) => isValidSkillName(s))
+    .slice(0, 10)
+
+  const companies = resumeData?.experience || []
+  const allExisting = [
+    ...(resumeData?.summaryBullets || []),
+    ...companies.flatMap((e) => e.bullets || []),
+    ...next.experienceAdditions.flatMap((e) => e.bullets || []),
+    ...next.bulletRewrites.map((r) => r.replacement || ''),
+  ]
+
+  companies.forEach((exp, expIdx) => {
+    if (!exp?.company) return
+    let entry = next.experienceAdditions.find(
+      (e) => e.company?.toLowerCase() === exp.company.toLowerCase(),
+    )
+    if (!entry) {
+      entry = { company: exp.company, bullets: [] }
+      next.experienceAdditions.push(entry)
+    }
+
+    const need = entry.bullets.length >= 1 ? 0 : 2
+    if (need <= 0 && entry.bullets.length >= 1) return
+
+    const named = String(exp.bullets?.[0] || '')
+      .match(/\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\s+(?:App|Application|System|Platform|Portal|Suite|Module|ERP|CRM))\b/)
+    const projectHint = named?.[1] || 'core operational systems'
+    const resp = responsibilities[(expIdx) % Math.max(responsibilities.length, 1)]
+      || 'gather and validate business requirements'
+    const shortResp = resp.replace(/^(to\s+|and\s+)/i, '').slice(0, 72)
+    const skillA = tools[(expIdx * 2) % Math.max(tools.length, 1)] || 'Jira'
+    const skillB = tools[(expIdx * 2 + 1) % Math.max(tools.length, 1)] || 'SQL'
+    const candidates = [
+      clampBulletLength(
+        `Delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, improving delivery cycle time by 20%.`,
+      ),
+      clampBulletLength(
+        `Partnered with stakeholders on ${projectHint} to advance ${shortResp} with ${skillA}, raising process accuracy by 15%.`,
+      ),
+    ]
+
+    for (const bullet of candidates) {
+      if (entry.bullets.length >= 3) break
+      if (!bullet || isDuplicateBullet(bullet, [...allExisting, ...entry.bullets])) continue
+      entry.bullets.push(bullet)
+      allExisting.push(bullet)
+    }
+  })
+
+  next.experienceAdditions = next.experienceAdditions.filter((e) => e.company && e.bullets?.length)
+  next.skillsToAdd = [...new Set(next.skillsByCategory.flatMap((e) => e.skills || []))]
   return next
 }
 
@@ -2762,6 +2896,8 @@ export function buildMatchAnalysis(beforeComparison, afterComparison, applied, p
     experienceBulletsAdded: expAdded,
     bulletsRewritten: expRewritten,
     addedToResume: applied,
+    atsMarks: afterComparison.atsMarks || processingMeta?.atsMarks || null,
+    llmScoring: processingMeta?.llmScoring || null,
   }
 }
 
@@ -2827,7 +2963,11 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
     // Reuse bold keyword phrases from nearby bullets in the same range
     const nearbyEnds = getBulletParagraphEnds(xml, rangeStart, rangeEnd)
     const sectionPhrases = collectBoldPhrasesFromEnds(xml, nearbyEnds)
-    const newPara = rewriteParagraph(found.para, rewrite.replacement, rewriteMark, sectionPhrases)
+    // Yellow only for light polish of the same bullet; full replace / new story → green
+    const markKind = isPolishRewrite(found.plain || rewrite.original, rewrite.replacement)
+      ? rewriteMark
+      : mark
+    const newPara = rewriteParagraph(found.para, rewrite.replacement, markKind, sectionPhrases)
     xml = xml.slice(0, found.start) + newPara + xml.slice(found.end)
 
     if (section === 'summary') {

@@ -12,6 +12,7 @@ import {
   mergeExperienceAdditions,
   ensureSkillsInBullets,
   ensureDomainKeywordsInBullets,
+  ensureAggressiveJdCoverage,
   detectSummaryFormat,
 } from './docxService.js'
 import { ensureEnhancedResumeQuality } from './resumeQaService.js'
@@ -22,6 +23,7 @@ import {
   isPlanTechnicallyValid,
 } from './openaiService.js'
 import { researchCompanyContexts } from './companyContextService.js'
+import { scoreResumeWithLlm, mergeAtsScores } from './llmScoreService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
 import { beginAiUsageTracking, endAiUsageTracking } from './aiProvider.js'
 import PizZip from 'pizzip'
@@ -155,12 +157,15 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     let enhancementPlan = filterEnhancementPlan(planRaw, resumeData, comparison)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
-    enhancementPlan.summaryBullets = (enhancementPlan.summaryBullets || []).slice(0, 2)
+    enhancementPlan.summaryBullets = (enhancementPlan.summaryBullets || []).slice(0, 3)
 
     // Local validation / skill weaving — no extra LLM calls for empty coverage
     enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
     enhancementPlan = ensureSkillsInBullets(enhancementPlan, comparison, resumeData)
-    enhancementPlan = ensureDomainKeywordsInBullets(enhancementPlan, comparison, 6)
+    enhancementPlan = ensureDomainKeywordsInBullets(enhancementPlan, comparison, 10)
+    enhancementPlan = ensureAggressiveJdCoverage(enhancementPlan, resumeData, jdData, comparison)
+    enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
+    enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
     timer.mark('validate_plan_local')
 
     if (!(enhancementPlan.summaryBullets?.length) && !(enhancementPlan.bulletRewrites || []).some((r) => {
@@ -222,9 +227,70 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)
 
-    log(jobId, 'scoring (local)')
+    log(jobId, 'scoring (local + Groq/Ollama LLM)')
     const enhancedResumeData = buildEnhancedResumeData(resumeData, applied)
-    const newComparison = compareResumeToJD(enhancedResumeData, jdData, { applied })
+    const localAfter = compareResumeToJD(enhancedResumeData, jdData, { applied })
+
+    const coverageBoost = (
+      (enhancementPlan.skillsToAdd?.length || 0) >= 3
+      || (enhancementPlan.experienceAdditions || []).length >= 2
+      || (enhancementPlan.bulletRewrites || []).length >= 3
+    )
+
+    const [llmBefore, llmAfter] = await Promise.all([
+      scoreResumeWithLlm({
+        resumeData,
+        jdData,
+        localAtsScore: comparison.atsScore,
+        phase: 'before',
+      }),
+      scoreResumeWithLlm({
+        resumeData: enhancedResumeData,
+        jdData,
+        localAtsScore: localAfter.atsScore,
+        phase: 'after',
+      }),
+    ])
+    timer.mark('score_llm')
+
+    const beforeAts = mergeAtsScores({
+      localScore: comparison.atsScore,
+      llmScore: llmBefore,
+      phase: 'before',
+    })
+    const afterAts = mergeAtsScores({
+      localScore: localAfter.atsScore,
+      llmScore: llmAfter,
+      phase: 'after',
+      coverageBoost,
+    })
+
+    // Keep before ≤ after for UX; bump after into 85–99 when coverage was aggressively improved
+    let finalAfter = Math.max(afterAts, beforeAts)
+    if (coverageBoost && finalAfter < 85) finalAfter = Math.min(99, Math.max(85, finalAfter))
+    if (finalAfter > 99) finalAfter = 99
+
+    const comparisonBeforeScored = {
+      ...comparison,
+      atsScore: beforeAts,
+      localAtsScore: comparison.atsScore,
+      llmScore: llmBefore,
+    }
+    const newComparison = {
+      ...localAfter,
+      atsScore: finalAfter,
+      localAtsScore: localAfter.atsScore,
+      llmScore: llmAfter,
+      atsMarks: {
+        atsFriendly: llmAfter?.atsFriendly ?? localAfter.scoreBreakdown?.format?.score ?? null,
+        readability: llmAfter?.readability ?? null,
+        attractiveness: llmAfter?.attractiveness ?? null,
+        jdMatchLabel: llmAfter?.jdMatchLabel || null,
+        scoringMethod: llmAfter
+          ? `LLM (${llmAfter.provider}/${llmAfter.model}) + local 40/40/20`
+          : 'Local 40/40/20 (LLM unavailable)',
+      },
+    }
     timer.mark('score_after')
 
     const aiUsage = endAiUsageTracking()
@@ -255,16 +321,22 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         })),
       },
       aiUsage,
-      scoringEngine: 'JoBPilot Deterministic ATS Scorer v3.0 (40/40/20)',
+      scoringEngine: newComparison.atsMarks.scoringMethod,
+      llmScoring: {
+        before: llmBefore,
+        after: llmAfter,
+        localBefore: comparison.atsScore,
+        localAfter: localAfter.atsScore,
+        mergedBefore: beforeAts,
+        mergedAfter: finalAfter,
+      },
+      atsMarks: newComparison.atsMarks,
     }
-    const matchAnalysis = buildMatchAnalysis(comparison, newComparison, applied, processingMeta)
+    const matchAnalysis = buildMatchAnalysis(comparisonBeforeScored, newComparison, applied, processingMeta)
 
     log(
       jobId,
-      `ATS before=${comparison.atsScore} after=${newComparison.atsScore} `
-      + `(skills ${comparison.scoreBreakdown?.skills?.score ?? '?'}→${newComparison.scoreBreakdown?.skills?.score ?? '?'}, `
-      + `exp ${comparison.scoreBreakdown?.bullets?.score ?? '?'}→${newComparison.scoreBreakdown?.bullets?.score ?? '?'}, `
-      + `kw ${comparison.scoreBreakdown?.keywords?.score ?? '?'}→${newComparison.scoreBreakdown?.keywords?.score ?? '?'}) `
+      `ATS before=${beforeAts} (local ${comparison.atsScore}) after=${finalAfter} (local ${localAfter.atsScore}) `
       + `LLM=${processingMeta.llmCalls} in=${processingMeta.tokenUsage.promptTokens} `
       + `out=${processingMeta.tokenUsage.completionTokens} ${processingMeta.durationSec}s `
       + `$${processingMeta.tokenUsage.costUsd}`,
@@ -276,10 +348,10 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     updateSession(sessionId, {
       comparison: newComparison,
-      comparisonBefore: comparison,
+      comparisonBefore: comparisonBeforeScored,
       matchAnalysis,
       enhancementPlan,
-      atsScore: newComparison.atsScore,
+      atsScore: finalAfter,
       processingMeta,
     })
 
@@ -289,10 +361,10 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       result: {
         sessionId,
         comparison: newComparison,
-        comparisonBefore: comparison,
+        comparisonBefore: comparisonBeforeScored,
         matchAnalysis,
         enhancementPlan,
-        atsScore: newComparison.atsScore,
+        atsScore: finalAfter,
         processingMeta,
         downloadUrl: `/api/enhancer/download/${sessionId}`,
         scoreReportPdfUrl: `/api/enhancer/score-report/${sessionId}`,

@@ -147,28 +147,29 @@ Rewrite policy (strict):
 - Weak → must rewrite (original = EXACT existing text, replacement = improved bullet, rating="Weak").
 - VeryWeak → must strongly rewrite or replace (original = EXACT existing text, rating="VeryWeak").
 - Irrelevant → replace with a JD-aligned bullet for that company OR omit (rating="Irrelevant").
-- Prefer rewriting Weak/VeryWeak bullets that leave gaps.responsibilities uncovered — strong JD match is the goal.
-- Do NOT invent unsupported or unrealistic claims. Do NOT copy sentences from the job description.
-- Keep original meaning, company context, role level, and project story (same system/initiative when named).
-- Prefer covering one important JD responsibility + 1–2 relevant JD skills per rewritten bullet.
+- Prefer rewriting Weak/VeryWeak bullets that leave gaps.responsibilities uncovered — strong JD match (target enhanced ATS 85–99) is the goal.
+- Mission: get the resume SELECTED for this JD. Prefer covering every major JD responsibility and skill across experience bullets.
+- You MAY introduce JD skills/tools/keywords into bullets even if not previously listed — frame them as work done in that company/role context.
+- Do NOT copy sentences from the job description verbatim.
+- Keep company context, role level, and a coherent project story (reuse named systems when present).
+- Prefer covering one important JD responsibility + 1–2 relevant JD skills per rewritten/new bullet.
 - Avoid repeating the same skills, technologies, responsibilities, and action verbs across bullets.
-- Stronger responsibility coverage in experience matters more than stuffing the skills section.
-- OUTPUT SIZE LIMIT: emit at most 10 experienceRewrites total (prefer the weakest bullets first). At most 2 NEW bullets per company (original=""). Never list Perfect bullets. Keep JSON compact.`
+- Stronger responsibility coverage in experience matters more than stuffing the skills section alone.
+- OUTPUT SIZE LIMIT: emit at most 14 experienceRewrites total (prefer the weakest bullets first). At least 1 NEW bullet (original="") for EACH company when gaps remain. At most 3 NEW bullets per company. Never list Perfect bullets. Keep JSON compact.`
 
 const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or REWRITTEN bullets):
 - Write like a human professional telling a real project story — not AI filler or generic BA templates.
 - Story structure: Situation/system at that company → your action → tools/methods → business outcome.
 - Real-time project involvement: what YOU did, at WHICH company domain, on WHICH system/initiative, with WHAT stakeholders, using WHICH tools, with WHAT result.
-- Company + industry alignment: use companyContexts (industry, products, initiatives, systems) to frame the story in that employer's world — dining/hospitality, logistics, manufacturing, public sector, etc.
-- When adding NEW bullets (original=""): extend an EXISTING project/system already named in that company's bullets OR a plausible initiative from companyContexts that fits the candidate's title and prior bullets. Never invent unrelated fake projects.
-- Be technical and specific: name tools from the JD and resume (SQL, Power BI, Tableau, Jira, ERP, etc.), methods, and deliverables.
+- Company + industry alignment: use companyContexts (industry, products, initiatives, systems) to frame the story in that employer's world.
+- When adding NEW bullets (original=""): cover an uncovered gaps.responsibilities item for that company. Reuse named systems/projects from existing bullets when present; otherwise use a plausible initiative from companyContexts.
+- Be technical and specific: name tools from the JD (SQL, Power BI, Azure DevOps, ERP, Jira, etc.), methods, and deliverables.
 - EACH rewritten/new bullet MUST map to at least one gaps.responsibilities item and weave 1–2 gaps.missingSkills or JD tools naturally.
-- Be impressive but believable for the candidate's role, seniority, and that company's industry.
+- Selection mission: include JD skills/tools even if the original resume omitted them — phrase as experience in that role/company.
+- Include measurable impact where believable (%, time, volume, users) — prefer metrics for stronger ATS impact score.
 - Use strong action verbs (Led, Built, Designed, Automated, Optimized, Delivered) — vary verbs across bullets.
-- Include measurable impact where the resume already implies scale (%, time, volume, users) — do not invent precise fake metrics.
 - Each bullet: one clear achievement, complete thought, about 18–28 words / 1–2 lines. Never exceed ~2 lines.
 - Do NOT start bullets with a bullet character (•). Plain sentence text only.
-- Sound like a confident professional who worked there — not a job description copy.
 - Reject generic lines like "Delivered analysis and reporting to support decisions" unless tied to a named system, company domain, and JD skill.`
 
 /** Stricter rules for JD-tailored resume builds. */
@@ -265,7 +266,7 @@ export function normalizeEnhancementPlan(raw) {
       if (rating === 'Perfect') continue
       if (rating === 'Good' && sameBulletText(original, replacement)) continue
       if (sameBulletText(original, replacement)) continue
-      if (rewriteCount >= 10) continue
+      if (rewriteCount >= 14) continue
       bulletRewrites.push({ company, original, replacement })
       rewriteCount += 1
       if (rating) {
@@ -273,7 +274,7 @@ export function normalizeEnhancementPlan(raw) {
       }
     } else {
       const list = byCompany.get(company) || []
-      if (list.length >= 2) continue
+      if (list.length >= 3) continue
       list.push(replacement)
       byCompany.set(company, list)
       if (rating) {
@@ -289,7 +290,7 @@ export function normalizeEnhancementPlan(raw) {
 
   return {
     strategy: '',
-    summaryBullets: summaryBullets.slice(0, 2),
+    summaryBullets: summaryBullets.slice(0, 3),
     experienceAdditions,
     skillsByCategory: raw.skillAdditions || [],
     skillsToAdd: [],
@@ -424,40 +425,39 @@ export async function createEnhancementPlan(resumeData, jdData, comparison, comp
   }
 
   const limits = {
-    maxSummaryItems: 2,
-    maxNewBulletsPerCompany: 2,
-    maxExperienceRewrites: 10,
+    maxSummaryItems: 3,
+    maxNewBulletsPerCompany: 3,
+    maxExperienceRewrites: 14,
     companiesMustCover: companies,
-    maxSkillNames: 12,
+    requireBulletForEveryCompany: true,
+    maxSkillNames: 18,
     // Aim for strong JD keyword coverage after enhancement
-    minDomainKeywordsToWeave: Math.min(6, gaps.missingDomainKeywords.length || 0),
-    target: 'strong_jd_match',
+    minDomainKeywordsToWeave: Math.min(10, gaps.missingDomainKeywords.length || 0),
+    targetAtsScoreRange: [85, 99],
+    target: 'strong_jd_selection',
   }
 
-  const contexts = Array.isArray(companyContexts) ? companyContexts.slice(0, 6) : []
+  const contexts = Array.isArray(companyContexts) ? companyContexts.slice(0, 8) : []
 
   const raw = await jsonCompletion(
-    `You are an expert resume writer. Goal: STRONG JD–experience match with company-specific, story-driven bullets. Return ONE complete enhancement plan as JSON only. Keep the JSON compact and complete (never truncate).
+    `You are an expert resume writer. Mission: get this resume SELECTED for the JD (enhanced ATS target 85–99). Return ONE complete enhancement plan as JSON only. Keep the JSON compact and complete (never truncate).
 
 STEP 1 — ${BULLET_EVALUATION_RULES}
 
 STEP 2 — When writing replacements or new bullets, follow:
 ${BULLET_RULES}
 
-STEP 3 — Use companyContexts for industry/products/initiatives/systems when framing bullets for that employer. Ground every bullet in the resume's existing project stories; companyContexts only supply domain flavor and plausible initiative types — never fabricated personal work.
+STEP 3 — Use companyContexts for industry/products/initiatives/systems when framing bullets for that employer.
 
 Output fields:
-- summaryRewrites: 0–2 items. For NEW summary text set original="" and replacement=new sentence/bullet. For rewrite set original to EXACT existing text. summaryFormat="${summaryFormat}".
-- experienceRewrites: ONLY Weak / VeryWeak / Irrelevant rewrites (and rare Good polish). Max ${limits.maxExperienceRewrites} items total. rating must be one of: Perfect, Good, Weak, VeryWeak, Irrelevant. For NEW bullets use original="" and rating="Good". Do NOT include Perfect bullets. company must match the resume exactly.
-- skillAdditions: ONLY concrete tools/hard skills from gaps.missingSkills. Never put domain phrases or years claims in skills. Use EXISTING category labels only.
+- summaryRewrites: 0–3 items. For NEW summary text set original="" and replacement=new sentence/bullet. For rewrite set original to EXACT existing text. summaryFormat="${summaryFormat}".
+- experienceRewrites: Weak / VeryWeak / Irrelevant rewrites plus NEW bullets. Max ${limits.maxExperienceRewrites} items total. rating must be one of: Perfect, Good, Weak, VeryWeak, Irrelevant. For NEW bullets use original="" and rating="Good". Do NOT include Perfect bullets. company must match the resume exactly. MUST include at least one NEW bullet (original="") for EVERY company in companiesMustCover when any JD gaps remain.
+- skillAdditions: concrete tools/hard skills from gaps.missingSkills AND JD tools — add aggressively for selection. Use EXISTING category labels only.
 
 Rules:
-- Strong JD match is mandatory: cover as many gaps.responsibilities as possible via rewrites + limited new bullets.
-- Evaluate mentally first; output ONLY the changes. Prefer keeping Perfect/Good bullets as-is.
-- Do not invent unsupported claims. Do not copy the JD.
-- NEW bullets must feel like real project involvement at that company (reuse named systems/projects from existing bullets when present).
-- Put missingSkills into skillAdditions AND evidence them inside rewritten/new experience bullets.
-- Empty arrays are allowed only when Perfect/Good bullets already cover the JD well.
+- Cover gaps.responsibilities across ALL companies (not only the first one).
+- Put missingSkills into skillAdditions AND evidence them inside rewritten/new experience bullets (full ATS credit).
+- Prefer metrics in bullets for impact score.
 - Stay within change limits. Return valid complete JSON only.`,
     JSON.stringify({
       resume: compactResume,
@@ -468,7 +468,7 @@ Rules:
     }),
     'enhancement_plan',
     COMPACT_PLAN_SCHEMA,
-    { maxTokens: 4096 },
+    { maxTokens: 5000 },
   )
 
   return normalizeEnhancementPlan(raw)

@@ -369,10 +369,10 @@ export function getConfiguredProviders() {
 
 export function getScoringEngineInfo() {
   return {
-    name: 'JoBPilot Deterministic ATS Scorer',
-    version: '3.0',
-    method: 'Rule-based 40/40/20 (Keywords+Skills / Experience+Impact / Format) + synonym dictionary + cached semantic matching',
-    note: 'Scoring does not use an LLM. Skills and Keywords lists are disjoint. AI providers are used only for JD analysis and enhancement planning (resume parse is local-first).',
+    name: 'JoBPilot Hybrid ATS Scorer',
+    version: '4.0',
+    method: 'Local 40/40/20 + Groq/Ollama LLM JD-match (atsFriendly / readability / attractiveness)',
+    note: 'Final displayed score merges deterministic coverage with LLM JD-selection scoring (Groq/Ollama preferred).',
     categories: {
       skills: 24,
       keywords: 16,

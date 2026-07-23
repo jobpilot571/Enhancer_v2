@@ -812,6 +812,34 @@ export default function ResumeEnhancer() {
             />
           </div>
 
+          {(results.atsMarks || comparison?.atsMarks) && (
+            <div className="ats-marks-row" aria-label="ATS friendly marks">
+              {[
+                { key: 'atsFriendly', label: 'ATS Friendly' },
+                { key: 'readability', label: 'Readability' },
+                { key: 'attractiveness', label: 'Attractiveness' },
+              ].map((item) => {
+                const marks = results.atsMarks || comparison?.atsMarks || {}
+                const val = marks[item.key]
+                if (val == null) return null
+                return (
+                  <div key={item.key} className="ats-marks-row__item">
+                    <span className="ats-marks-row__label">{item.label}</span>
+                    <span className="ats-marks-row__value">{val}/100</span>
+                  </div>
+                )
+              })}
+              {(results.atsMarks?.jdMatchLabel || comparison?.atsMarks?.jdMatchLabel) && (
+                <div className="ats-marks-row__item ats-marks-row__item--label">
+                  <span className="ats-marks-row__label">JD Match</span>
+                  <span className="ats-marks-row__value">
+                    {results.atsMarks?.jdMatchLabel || comparison?.atsMarks?.jdMatchLabel}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           <article id="added-to-resume" className="added-panel">
             <div className="added-panel__head">
               <h3 className="added-panel__title">
@@ -884,8 +912,8 @@ export default function ResumeEnhancer() {
       >
         {enhancedBlob && (
           <p className="comparison-legend">
-            <span className="comparison-legend__item comparison-legend__item--green">Green = newly added</span>
-            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = rewritten</span>
+            <span className="comparison-legend__item comparison-legend__item--green">Green = new or replaced bullet</span>
+            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = edited existing bullet</span>
           </p>
         )}
 
