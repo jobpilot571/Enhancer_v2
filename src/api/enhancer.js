@@ -15,7 +15,7 @@ const ENHANCE_STEP_LABELS = {
   comparing: 'Comparing skills…',
   writing_plan: 'Writing enhancement plan…',
   updating_resume: 'Updating resume…',
-  preparing_preview: 'Preparing enhanced preview…',
+  preparing_preview: 'Verifying layout (gaps, indentation, pages)…',
 }
 
 async function readErrorPayload(res) {

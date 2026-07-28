@@ -561,7 +561,9 @@ function sanitizeDocumentPagination(xml) {
       }
       if (!plain) {
         const spacing = getParagraphSpacingMetrics(para)
-        if (spacing.after > 120 || spacing.before > 120) return ''
+        // Drop empty spacers aggressively — they create half/full page gaps in Word
+        if (spacing.after > 40 || spacing.before > 40 || spacing.after + spacing.before > 0) return ''
+        return ''
       }
       return para
     },
@@ -614,11 +616,130 @@ export function normalizeDocxGeometry(xml) {
   let out = xml
   out = normalizePageMargins(out)
   out = normalizeParagraphIndents(out)
+  out = normalizeBulletIndentConsistency(out)
   out = normalizeTableGeometry(out)
   out = relocateSkinnySidebarText(out)
   out = ensureTableCellsHaveParagraph(out)
   out = splitMashedSkillCategoryParagraphs(out)
   out = normalizeHeadingBorders(out)
+  return out
+}
+
+/**
+ * Force bullets in the same experience block to share the majority left/hanging indent.
+ * Stops the "one bullet shoved right / left" mismatch vs the original resume.
+ */
+function normalizeBulletIndentConsistency(xml) {
+  const paraRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
+  const paras = []
+  let m
+  while ((m = paraRe.exec(xml))) {
+    paras.push({ start: m.index, end: m.index + m[0].length, xml: m[0] })
+  }
+  if (!paras.length) return xml
+
+  const plainOf = (para) => getPlainTextFromParagraph(para).trim()
+  const isBullet = (para) => {
+    const plain = plainOf(para)
+    if (!plain || plain.length < 12) return false
+    if (/w:numPr/.test(para)) return true
+    return Boolean(detectLiteralBulletPrefix(para))
+  }
+  const isHeadingLike = (para) => {
+    const plain = plainOf(para)
+    if (!plain || plain.length > 90) return false
+    if (isBullet(para)) return false
+    if (/^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience|certifications)/i.test(plain)) {
+      return true
+    }
+    return plain.length < 90
+  }
+  const parseInd = (para) => {
+    const ind = para.match(/<w:ind\b[^/]*\/>/)?.[0]
+    if (!ind) return { left: null, hanging: null }
+    const left = /w:left="(\d+)"/.exec(ind)
+    const hanging = /w:hanging="(\d+)"/.exec(ind)
+    return {
+      left: left ? parseInt(left[1], 10) : null,
+      hanging: hanging ? parseInt(hanging[1], 10) : null,
+    }
+  }
+  const keyOf = (para) => {
+    const { left, hanging } = parseInd(para)
+    const ilvl = /w:ilvl\s[^>]*w:val="(\d+)"/.exec(para)
+    return [
+      /w:numPr/.test(para) ? '1' : '0',
+      ilvl ? ilvl[1] : 'x',
+      left == null ? 'x' : String(left),
+      hanging == null ? 'x' : String(hanging),
+    ].join(':')
+  }
+  const applyInd = (para, left, hanging) => {
+    if (left == null) return para
+    const parts = [`w:left="${left}"`]
+    if (hanging != null) parts.push(`w:hanging="${hanging}"`)
+    const indXml = `<w:ind ${parts.join(' ')}/>`
+    if (/<w:ind\b[^/]*\/>/.test(para)) {
+      return para.replace(/<w:ind\b[^/]*\/>/, indXml)
+    }
+    if (/<w:pPr\b[\s\S]*?<\/w:pPr>/.test(para)) {
+      return para.replace(/<\/w:pPr>/, `${indXml}</w:pPr>`)
+    }
+    return para.replace(/^<w:p\b[^>]*>/, (open) => `${open}<w:pPr>${indXml}</w:pPr>`)
+  }
+
+  let changed = false
+  let blockIdx = []
+  const flush = () => {
+    if (blockIdx.length < 3) {
+      blockIdx = []
+      return
+    }
+    const keys = blockIdx.map((i) => keyOf(paras[i].xml))
+    const counts = new Map()
+    for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1)
+    const majorityKey = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    const parts = majorityKey.split(':')
+    const majLeft = parts[2] === 'x' ? null : parseInt(parts[2], 10)
+    const majHang = parts[3] === 'x' ? null : parseInt(parts[3], 10)
+    if (majLeft == null) {
+      blockIdx = []
+      return
+    }
+    for (let n = 0; n < blockIdx.length; n += 1) {
+      const i = blockIdx[n]
+      if (keys[n] === majorityKey) continue
+      const cur = parseInd(paras[i].xml)
+      if (cur.left != null && Math.abs(cur.left - majLeft) < 180) continue
+      paras[i].xml = applyInd(paras[i].xml, majLeft, majHang)
+      changed = true
+    }
+    blockIdx = []
+  }
+
+  for (let i = 0; i < paras.length; i += 1) {
+    const para = paras[i].xml
+    if (isHeadingLike(para)) {
+      flush()
+      continue
+    }
+    if (isBullet(para)) {
+      blockIdx.push(i)
+      continue
+    }
+    flush()
+  }
+  flush()
+
+  if (!changed) return xml
+  let out = ''
+  let cursor = 0
+  for (const p of paras) {
+    out += xml.slice(cursor, p.start)
+    out += p.xml
+    cursor = p.end
+  }
+  out += xml.slice(cursor)
   return out
 }
 

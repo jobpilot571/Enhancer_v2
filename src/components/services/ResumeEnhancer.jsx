@@ -451,6 +451,8 @@ export default function ResumeEnhancer() {
   const [jdEditorOpen, setJdEditorOpen] = useState(false)
   const [originalBlob, setOriginalBlob] = useState(null)
   const [enhancedBlob, setEnhancedBlob] = useState(null)
+  const [layoutQa, setLayoutQa] = useState(null)
+  const [readyForDownload, setReadyForDownload] = useState(false)
   const [comparison, setComparison] = useState(null)
   const [comparisonBefore, setComparisonBefore] = useState(null)
   const [matchAnalysis, setMatchAnalysis] = useState(null)
@@ -540,6 +542,8 @@ export default function ResumeEnhancer() {
     setFileType(isPdf ? 'pdf' : 'docx')
     setOriginalBlob(file)
     setEnhancedBlob(null)
+    setLayoutQa(null)
+    setReadyForDownload(false)
     setComparison(null)
     setComparisonBefore(null)
     setMatchAnalysis(null)
@@ -623,6 +627,19 @@ export default function ResumeEnhancer() {
       setAtsScore(result.atsScore)
       if (result.comparisonBefore) {
         setComparisonBefore(result.comparisonBefore)
+      }
+
+      const qa = result.layoutQa || null
+      const canDownload = Boolean(result.readyForDownload && qa?.ok !== false)
+      setLayoutQa(qa)
+      setReadyForDownload(canDownload)
+
+      if (!canDownload) {
+        setEnhancedBlob(null)
+        throw new Error(
+          result.error
+          || 'Enhanced resume failed layout quality checks (gaps / indentation). Download stays locked — please enhance again.',
+        )
       }
 
       const enhanced = await fetchFileBlob(sessionId, 'enhanced')
@@ -955,8 +972,20 @@ export default function ResumeEnhancer() {
           </div>
         </div>
 
-        {enhancedBlob && sessionId && (
-          <div className="service-cta-row">
+        {enhancedBlob && sessionId && readyForDownload && (
+          <div className="service-cta-row service-cta-row--download-ready">
+            <div className="layout-qa-badge" role="status">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+              <div>
+                <strong>Layout verified — ready to download</strong>
+                <span>
+                  Checked page gaps, blank spacers, margins, skills layout, and bullet indentation
+                  {layoutQa?.rebuilds ? ` · auto-rebuilt ${layoutQa.rebuilds}×` : ''}
+                </span>
+              </div>
+            </div>
             <a
               href={getDownloadUrl(sessionId)}
               className="btn btn--primary btn--xl"
@@ -970,6 +999,11 @@ export default function ResumeEnhancer() {
               Download Enhanced DOCX
             </a>
           </div>
+        )}
+        {enhancing && (
+          <p className="layout-qa-progress" role="status">
+            Enhancing and verifying layout (gaps, indentation, pages) before download unlocks…
+          </p>
         )}
       </section>
 

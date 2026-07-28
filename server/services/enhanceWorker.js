@@ -203,33 +203,81 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     timer.mark('patch_docx')
 
     updateEnhanceJob(jobId, { step: 'preparing_preview' })
-    log(jobId, 'qa checking enhanced resume')
-    const qaResult = ensureEnhancedResumeQuality(
+    log(jobId, 'qa checking enhanced resume (layout gate)')
+    let qaResult = ensureEnhancedResumeQuality(
       originalBuffer,
       patchedPreview,
       resumeData,
       {
         maxAttempts: 2,
+        maxRebuilds: 1,
+        rebuild: () => {
+          log(jobId, 'qa rebuild: re-patching DOCX from original')
+          const { buffer: rebuilt } = patchDocx(originalBuffer, enhancementPlan, {
+            highlight: true,
+            resumeData,
+          })
+          return rebuilt
+        },
         log: (msg) => log(jobId, msg),
       },
     )
     let previewBuffer = qaResult.buffer
     if (qaResult.repaired) {
-      log(jobId, `qa auto-repaired: ${qaResult.history.slice(1).map((h) => (h.actions || []).join('+')).join(' | ')}`)
+      log(jobId, `qa auto-repaired: ${qaResult.history.map((h) => `${h.attempt}:${(h.actions || []).join('+') || 'none'}`).join(' | ')}`)
     }
-    if (!qaResult.qa.ok) {
-      log(jobId, `qa warning: remaining defects ${qaResult.qa.defects.map((d) => d.code).join(', ')}`)
-    } else {
-      log(jobId, 'qa: enhanced resume verified')
+
+    // Final hard gate — never hand users a download with high-severity layout defects
+    if (!qaResult.readyForDownload || !qaResult.qa.ok) {
+      const codes = qaResult.qa.defects
+        .filter((d) => d.severity === 'high')
+        .map((d) => d.code)
+      throw new Error(
+        `Resume layout QA failed after repair/rebuild (${codes.join(', ') || 'unknown'}). `
+        + 'Please try Enhance again — download stays locked until the resume passes page-gap and indentation checks.',
+      )
     }
+    log(jobId, 'qa: enhanced resume verified — download unlocked')
     timer.mark('qa')
 
     const downloadZip = new PizZip(previewBuffer)
     const downloadXml = downloadZip.file('word/document.xml').asText()
       .replace(/<w:shd[^/]*\/>/g, '')
     downloadZip.file('word/document.xml', downloadXml)
-    const downloadBuffer = downloadZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
+    let downloadBuffer = downloadZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
+
+    // Re-verify download copy after highlight strip (layout must still pass)
+    const finalQa = ensureEnhancedResumeQuality(originalBuffer, downloadBuffer, resumeData, {
+      maxAttempts: 1,
+      maxRebuilds: 0,
+      log: (msg) => log(jobId, `final-${msg}`),
+    })
+    if (!finalQa.readyForDownload || !finalQa.qa.ok) {
+      throw new Error('Resume failed final layout verification after highlight cleanup. Please enhance again.')
+    }
+    downloadBuffer = finalQa.buffer
+    previewBuffer = qaResult.buffer
+
+    const layoutQa = {
+      ok: true,
+      readyForDownload: true,
+      highCount: 0,
+      mediumCount: finalQa.qa.mediumCount || 0,
+      defects: finalQa.qa.defects || [],
+      rebuilds: qaResult.rebuilds || 0,
+      checks: [
+        'page_gaps',
+        'blank_spacers',
+        'indentation',
+        'bullet_alignment',
+        'margins',
+        'skills_layout',
+        'content_preservation',
+      ],
+    }
+
     setEnhancedDocx(sessionId, downloadBuffer, previewBuffer)
+    updateSession(sessionId, { layoutQa })
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)
 
@@ -359,6 +407,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       enhancementPlan,
       atsScore: finalAfter,
       processingMeta,
+      layoutQa,
     })
 
     updateEnhanceJob(jobId, {
@@ -372,6 +421,8 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         enhancementPlan,
         atsScore: finalAfter,
         processingMeta,
+        layoutQa,
+        readyForDownload: true,
         downloadUrl: `/api/enhancer/download/${sessionId}`,
         scoreReportPdfUrl: `/api/enhancer/score-report/${sessionId}`,
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,

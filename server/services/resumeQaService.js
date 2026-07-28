@@ -38,6 +38,146 @@ function isKeepLinesEnabled(tag) {
 }
 
 /**
+ * Detect empty / spacer paragraphs that create visible half-page or full-page gaps.
+ */
+export function findBlankGapDefects(xml) {
+  const defects = []
+  const paras = [...xml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map((m) => m[0])
+  let emptyRun = 0
+  let gapParas = 0
+  let largeContentSpacing = 0
+
+  for (const para of paras) {
+    const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+    const spacingTag = para.match(/<w:spacing\b[^/]*\/>/)?.[0] || ''
+    const after = /(?:^|\s)w:after="(\d+)"/.exec(spacingTag)
+    const before = /(?:^|\s)w:before="(\d+)"/.exec(spacingTag)
+    const a = after ? parseInt(after[1], 10) : 0
+    const b = before ? parseInt(before[1], 10) : 0
+
+    if (!plain) {
+      emptyRun += 1
+      if (a >= 200 || b >= 200 || emptyRun >= 2) gapParas += 1
+      continue
+    }
+    emptyRun = 0
+
+    const isBullet = /w:numPr/.test(para) || /^[•\u2022\-–]/.test(plain)
+    // Mid-size spacing on real content still looks like a resume "gap" in Word
+    if (isBullet && (a >= 240 || b >= 240)) largeContentSpacing += 1
+    else if (a >= 400 || b >= 400) largeContentSpacing += 1
+  }
+
+  if (gapParas > 0) {
+    defects.push({
+      code: 'blank_page_gap',
+      severity: 'high',
+      message: `Blank/spacer paragraphs creating page gaps (${gapParas})`,
+    })
+  }
+  if (largeContentSpacing > 0) {
+    defects.push({
+      code: 'resume_gap_spacing',
+      severity: 'high',
+      message: `Oversized spacing on content lines (${largeContentSpacing}) — likely resume gaps`,
+    })
+  }
+
+  return defects
+}
+
+/**
+ * Detect bullet indent stagger within the same experience block (original vs enhanced drift).
+ */
+export function findIndentConsistencyDefects(xml) {
+  const defects = []
+  const paras = [...xml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map((m) => m[0])
+
+  const layoutKey = (para) => {
+    const ilvl = /w:ilvl\s[^>]*w:val="(\d+)"/.exec(para)
+    const left = /w:ind\b[^>]*w:left="(\d+)"/.exec(para)
+    const hanging = /w:ind\b[^>]*w:hanging="(\d+)"/.exec(para)
+    const hasNum = /w:numPr/.test(para) ? '1' : '0'
+    return [
+      hasNum,
+      ilvl ? ilvl[1] : 'x',
+      left ? left[1] : 'x',
+      hanging ? hanging[1] : 'x',
+    ].join(':')
+  }
+
+  const isBulletPara = (para) => {
+    const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+    if (!plain || plain.length < 12) return false
+    if (/w:numPr/.test(para)) return true
+    return /^[•\u2022\-–]\s?/.test(plain)
+  }
+
+  const isHeadingLike = (para) => {
+    const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+    if (!plain || plain.length > 80) return false
+    if (/^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience)/i.test(plain)) {
+      return true
+    }
+    // Company / role lines usually not bullets and short-ish
+    return !isBulletPara(para) && plain.length < 90 && !/^[•\u2022]/.test(plain)
+  }
+
+  let block = []
+  const flush = () => {
+    if (block.length < 3) {
+      block = []
+      return
+    }
+    const counts = new Map()
+    for (const key of block) counts.set(key, (counts.get(key) || 0) + 1)
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+    const [majorityKey, majorityCount] = sorted[0]
+    const minority = block.length - majorityCount
+    if (minority >= 1 && majorityCount >= 2 && sorted.length >= 2) {
+      // Ignore pure "no indent vs indent" only when both are rare; flag real stagger
+      const lefts = sorted.map(([k]) => {
+        const leftPart = k.split(':')[2]
+        return leftPart === 'x' ? null : parseInt(leftPart, 10)
+      }).filter((n) => Number.isFinite(n))
+      if (lefts.length >= 2) {
+        const min = Math.min(...lefts)
+        const max = Math.max(...lefts)
+        if (max - min >= 180) {
+          defects.push({
+            code: 'indent_inconsistency',
+            severity: 'high',
+            message: `Bullet indent stagger in a block (${minority}/${block.length} off majority ${majorityKey})`,
+          })
+        }
+      }
+    }
+    block = []
+  }
+
+  for (const para of paras) {
+    if (isHeadingLike(para)) {
+      flush()
+      continue
+    }
+    if (isBulletPara(para)) {
+      block.push(layoutKey(para))
+      continue
+    }
+    flush()
+  }
+  flush()
+
+  // Dedupe identical messages
+  const seen = new Set()
+  return defects.filter((d) => {
+    if (seen.has(d.message)) return false
+    seen.add(d.message)
+    return true
+  })
+}
+
+/**
  * Detect XML pagination traps that commonly create half/full blank pages in Word.
  */
 export function findPaginationDefects(xml) {
@@ -137,6 +277,8 @@ export function findPaginationDefects(xml) {
 
   // Geometry traps: huge left margins / skinny columns / extreme indents
   defects.push(...findGeometryDefects(xml))
+  defects.push(...findBlankGapDefects(xml))
+  defects.push(...findIndentConsistencyDefects(xml))
 
   return defects
 }
@@ -366,6 +508,9 @@ export function repairEnhancedResume(enhancedBuffer, qaResult) {
     'text_direction',
     'extreme_indent',
     'skills_mashed',
+    'blank_page_gap',
+    'resume_gap_spacing',
+    'indent_inconsistency',
   ].some((c) => codes.has(c))
 
   if (needsLayout || !qaResult?.ok) {
@@ -403,38 +548,82 @@ function stripSoftSkillDumpPhrases(docxBuffer) {
 }
 
 /**
- * Run QA → repair → re-QA up to maxAttempts.
- * Always returns a buffer safe to download (best effort).
+ * Run QA → repair → re-QA (and optional rebuild) until the resume is download-ready.
+ * Returns readyForDownload=true only when high-severity defects are gone.
  */
 export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resumeData, {
   maxAttempts = 2,
+  rebuild = null,
+  maxRebuilds = 1,
   log = () => {},
 } = {}) {
   // Permanent: always run layout repair once after enhance — do not wait for QA failure.
-  // Many resumes pass soft QA while still having letter-wrap / mashed-skills defects.
   let buffer = repairDocxLayout(enhancedBuffer)
   let qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
   const history = [{ attempt: 0, ok: qa.ok, defects: qa.defects.map((d) => d.code), actions: ['layout_sanitize'] }]
 
-  if (qa.ok) {
-    log('qa: passed (after mandatory layout repair)')
-    return { buffer, qa, repaired: true, history }
+  const runRepairLoop = (startAttempt = 1) => {
+    for (let attempt = startAttempt; attempt <= maxAttempts; attempt += 1) {
+      if (qa.ok) break
+      const { buffer: next, actions } = repairEnhancedResume(buffer, qa)
+      buffer = next
+      qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
+      history.push({
+        attempt,
+        ok: qa.ok,
+        actions,
+        defects: qa.defects.map((d) => d.code),
+      })
+      log(`qa repair #${attempt}: ${actions.join('+') || 'none'} → ${qa.ok ? 'pass' : qa.defects.map((d) => d.code).join(',')}`)
+    }
   }
 
-  log(`qa: failed (${qa.defects.map((d) => d.code).join(', ')}) — repairing`)
+  if (qa.ok) {
+    log('qa: passed (after mandatory layout repair)')
+  } else {
+    log(`qa: failed (${qa.defects.map((d) => d.code).join(', ')}) — repairing`)
+    runRepairLoop(1)
+  }
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const { buffer: next, actions } = repairEnhancedResume(buffer, qa)
-    buffer = next
-    qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
-    history.push({
-      attempt,
-      ok: qa.ok,
-      actions,
-      defects: qa.defects.map((d) => d.code),
-    })
-    log(`qa repair #${attempt}: ${actions.join('+') || 'none'} → ${qa.ok ? 'pass' : qa.defects.map((d) => d.code).join(',')}`)
-    if (qa.ok) break
+  // If still failing, rebuild from original DOCX + same plan, then re-check
+  let rebuilds = 0
+  while (!qa.ok && typeof rebuild === 'function' && rebuilds < maxRebuilds) {
+    rebuilds += 1
+    log(`qa: rebuilding enhanced DOCX from original (attempt ${rebuilds})`)
+    try {
+      const rebuilt = rebuild({ attempt: rebuilds, qa, buffer })
+      if (!rebuilt) break
+      buffer = repairDocxLayout(rebuilt)
+      qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
+      history.push({
+        attempt: `rebuild-${rebuilds}`,
+        ok: qa.ok,
+        actions: ['rebuild_from_original', 'layout_sanitize'],
+        defects: qa.defects.map((d) => d.code),
+      })
+      if (!qa.ok) {
+        log(`qa: rebuild #${rebuilds} still failing — ${qa.defects.map((d) => d.code).join(', ')}`)
+        runRepairLoop(1)
+      } else {
+        log(`qa: rebuild #${rebuilds} passed`)
+      }
+    } catch (err) {
+      log(`qa: rebuild #${rebuilds} error — ${err.message}`)
+      history.push({
+        attempt: `rebuild-${rebuilds}`,
+        ok: false,
+        actions: ['rebuild_error'],
+        defects: [err.message],
+      })
+      break
+    }
+  }
+
+  const readyForDownload = Boolean(qa.ok)
+  if (readyForDownload) {
+    log('qa: resume verified — ready for download')
+  } else {
+    log(`qa: blocked download — remaining defects: ${qa.defects.filter((d) => d.severity === 'high').map((d) => d.code).join(', ')}`)
   }
 
   return {
@@ -442,5 +631,7 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
     qa,
     repaired: true,
     history,
+    readyForDownload,
+    rebuilds,
   }
 }

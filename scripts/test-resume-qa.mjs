@@ -4,6 +4,8 @@ import {
   ensureEnhancedResumeQuality,
   findPaginationDefects,
   findGeometryDefects,
+  findBlankGapDefects,
+  findIndentConsistencyDefects,
 } from '../server/services/resumeQaService.js'
 import { patchDocx, normalizeDocxGeometry } from '../server/services/docxService.js'
 
@@ -286,5 +288,39 @@ assert(verticalQa.repaired, 'permanent repair ran for Business sidebar resume')
 assert(!/<w:textDirection\b/.test(verticalOut), 'QA path strips textDirection')
 assert(!/w:w="480"/.test(verticalOut), 'QA path clears 480-twip column')
 assert(verticalOut.includes('Business'), 'Business label text preserved')
+
+// --- Permanent: blank page gaps + indent stagger must fail QA until repaired ---
+const gapHeavy = [
+  '<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Analyst — Acme</w:t></w:r></w:p>',
+  bullet('Delivered analytics dashboards for stakeholders across regions.'),
+  '<w:p><w:pPr><w:spacing w:before="0" w:after="600"/></w:pPr></w:p>',
+  '<w:p><w:pPr><w:spacing w:before="400" w:after="400"/></w:pPr></w:p>',
+  bullet('Partnered with engineering on API integrations and reporting.'),
+].join('')
+const gapXmlDoc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${gapHeavy}</w:body></w:document>`
+assert(findBlankGapDefects(gapXmlDoc).some((d) => d.code === 'blank_page_gap'), 'detects blank page gap spacers')
+
+const staggerBody = [
+  '<w:p><w:r><w:t>Test User</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Analyst — Acme Corp</w:t></w:r></w:p>',
+  bullet('Built reporting pipelines with SQL and Python for leadership.'),
+  bullet('Automated weekly KPI packs reducing manual effort by 30 percent.'),
+  `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>`
+    + `<w:r><w:t>Created stakeholder dashboards that improved decision speed.</w:t></w:r></w:p>`,
+  bullet('Supported release planning and cross-team delivery ceremonies.'),
+].join('')
+const staggerXml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${staggerBody}</w:body></w:document>`
+assert(findIndentConsistencyDefects(staggerXml).some((d) => d.code === 'indent_inconsistency'), 'detects bullet indent stagger')
+
+const staggerBuf = makeDocx(staggerBody)
+const staggerQa = ensureEnhancedResumeQuality(staggerBuf, staggerBuf, {
+  name: 'Test User',
+  experience: [{ company: 'Acme' }],
+}, { maxAttempts: 2 })
+assert(staggerQa.readyForDownload === true, 'indent stagger repaired to readyForDownload')
+const staggerOut = new PizZip(staggerQa.buffer).file('word/document.xml').asText()
+assert(!findIndentConsistencyDefects(staggerOut).some((d) => d.code === 'indent_inconsistency'), 'indent stagger cleared after repair')
 
 console.log('ALL QA TESTS PASSED')

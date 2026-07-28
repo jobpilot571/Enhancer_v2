@@ -156,7 +156,11 @@ router.get('/enhance-status/:jobId', (req, res, next) => {
       payload.enhancementPlan = job.result.enhancementPlan
       payload.atsScore = job.result.atsScore
       payload.sessionId = job.result.sessionId
-      payload.downloadUrl = job.result.downloadUrl
+      payload.layoutQa = job.result.layoutQa || null
+      payload.readyForDownload = Boolean(job.result.readyForDownload && job.result.layoutQa?.ok !== false)
+      payload.downloadUrl = job.result.readyForDownload === false
+        ? null
+        : job.result.downloadUrl
       payload.enhancedPreviewUrl = job.result.enhancedPreviewUrl
     }
 
@@ -194,7 +198,17 @@ router.get('/file/:sessionId/:type', (req, res, next) => {
 router.get('/download/:sessionId', (req, res, next) => {
   try {
     const session = getSession(req.params.sessionId)
-    if (!session?.enhancedPath) return res.status(404).json({ error: 'Enhanced file not ready' })
+    if (!session?.enhancedPath) {
+      return res.status(404).json({
+        error: 'Enhanced file not ready. Wait until layout QA passes, then download.',
+      })
+    }
+    if (session.layoutQa && session.layoutQa.ok === false) {
+      return res.status(409).json({
+        error: 'Download locked — resume failed layout quality checks. Enhance again.',
+        layoutQa: session.layoutQa,
+      })
+    }
 
     const buffer = fs.readFileSync(session.enhancedPath)
     const base = session.fileName.replace(/\.(docx|pdf)$/i, '')
