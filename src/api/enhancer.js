@@ -202,3 +202,17 @@ export async function fetchFileBlob(sessionId, type = 'original') {
   if (!res.ok) throw new Error(await readErrorMessage(res))
   return res.blob()
 }
+
+/** Report a layout issue (text + optional screenshot/docx) and auto-repair. */
+export async function reportLayoutIssue(sessionId, { message = '', evidence = null } = {}) {
+  const form = new FormData()
+  form.append('sessionId', sessionId)
+  form.append('message', message || '')
+  if (evidence) form.append('evidence', evidence)
+  const res = await request('/layout-fix', {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(120000),
+  })
+  return res.json()
+}

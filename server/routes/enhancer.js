@@ -13,6 +13,7 @@ import { runEnhanceJob } from '../services/enhanceWorker.js'
 import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
 import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
 import { getLastResumeParseSnapshot } from '../services/resumeParseCache.js'
+import { fixReportedLayoutIssue } from '../services/layoutIssueService.js'
 import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
 
 const router = Router()
@@ -23,6 +24,26 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const type = detectFileType(file.originalname, file.mimetype)
     cb(type ? null : new Error('Only .docx and .pdf files are allowed'), !!type)
+  },
+})
+
+const evidenceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = (file.originalname || '').toLowerCase()
+    const mime = (file.mimetype || '').toLowerCase()
+    const ok = (
+      name.endsWith('.docx')
+      || name.endsWith('.png')
+      || name.endsWith('.jpg')
+      || name.endsWith('.jpeg')
+      || name.endsWith('.webp')
+      || name.endsWith('.gif')
+      || mime.includes('image/')
+      || mime.includes('officedocument.wordprocessingml')
+    )
+    cb(ok ? null : new Error('Upload a screenshot (PNG/JPG/WebP) or a .docx file'), ok)
   },
 })
 
@@ -275,11 +296,53 @@ router.get('/score-report/:sessionId', async (req, res, next) => {
   }
 })
 
+// User reports layout issue (text + optional screenshot/docx) → auto repair/rebuild
+router.post(
+  '/layout-fix',
+  requireUser,
+  evidenceUpload.single('evidence'),
+  async (req, res, next) => {
+    try {
+      const sessionId = req.body?.sessionId
+      const message = (req.body?.message || '').trim()
+      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' })
+      if (!message && !req.file) {
+        return res.status(400).json({
+          error: 'Describe the issue (e.g. blank page / bad indent) or attach a screenshot/.docx.',
+        })
+      }
+
+      const result = await fixReportedLayoutIssue({
+        sessionId,
+        message: message || 'Layout issue from uploaded evidence',
+        evidenceFile: req.file || null,
+        log: (msg) => console.log(`[layout-fix:${String(sessionId).slice(0, 8)}] ${msg}`),
+      })
+
+      res.json({
+        ok: result.ok,
+        readyForDownload: result.readyForDownload,
+        reply: result.reply,
+        layoutQa: result.layoutQa,
+        classification: result.classification,
+        downloadUrl: result.readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
+        enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
+      })
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message })
+      next(err)
+    }
+  },
+)
+
 router.use((err, _req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: err.message })
   }
   if (err?.message === 'Only .docx and .pdf files are allowed') {
+    return res.status(400).json({ error: err.message })
+  }
+  if (err?.message === 'Upload a screenshot (PNG/JPG/WebP) or a .docx file') {
     return res.status(400).json({ error: err.message })
   }
   next(err)

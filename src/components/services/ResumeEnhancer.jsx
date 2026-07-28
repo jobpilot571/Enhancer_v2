@@ -11,8 +11,133 @@ import {
   downloadScoreReportPdf,
   checkApiHealth,
   setJD,
+  reportLayoutIssue,
 } from '../../api/enhancer'
 import { useAuth } from '../../context/AuthContext'
+
+function LayoutIssueChat({
+  sessionId,
+  disabled,
+  onFixed,
+}) {
+  const [open, setOpen] = useState(false)
+  const [message, setMessage] = useState('')
+  const [evidence, setEvidence] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [thread, setThread] = useState([])
+  const [localError, setLocalError] = useState('')
+  const fileRef = useRef(null)
+
+  const send = async () => {
+    if (!sessionId || busy) return
+    const text = message.trim()
+    if (!text && !evidence) {
+      setLocalError('Describe the issue or attach a screenshot/.docx.')
+      return
+    }
+    setLocalError('')
+    setBusy(true)
+    const userLine = {
+      role: 'user',
+      text: text || '(attached file)',
+      fileName: evidence?.name || null,
+    }
+    setThread((prev) => [...prev, userLine])
+    try {
+      const result = await reportLayoutIssue(sessionId, { message: text, evidence })
+      setThread((prev) => [...prev, { role: 'assistant', text: result.reply || 'Done.' }])
+      setMessage('')
+      setEvidence(null)
+      if (fileRef.current) fileRef.current.value = ''
+      if (result.readyForDownload) {
+        await onFixed?.(result)
+      }
+    } catch (err) {
+      setThread((prev) => [...prev, {
+        role: 'assistant',
+        text: err.message || 'Could not repair layout. Try again.',
+      }])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!sessionId) return null
+
+  return (
+    <section className="layout-issue-chat" aria-label="Report layout issue">
+      <button
+        type="button"
+        className="layout-issue-chat__toggle"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+      >
+        {open ? 'Hide layout help' : 'See a layout problem? Report & auto-fix'}
+      </button>
+
+      {open && (
+        <div className="layout-issue-chat__panel">
+          <p className="layout-issue-chat__hint">
+            Describe gaps, blank pages, or bad indentation — optionally attach a screenshot or the problem DOCX.
+            We repair and re-check immediately; download unlocks only if layout QA passes.
+          </p>
+
+          <div className="layout-issue-chat__thread" role="log" aria-live="polite">
+            {thread.length === 0 && (
+              <p className="layout-issue-chat__empty">
+                Examples: “blank page after experience”, “skills indentation wrong”, “huge gap between bullets”
+              </p>
+            )}
+            {thread.map((item, idx) => (
+              <div
+                key={`${item.role}-${idx}`}
+                className={`layout-issue-chat__bubble layout-issue-chat__bubble--${item.role}`}
+              >
+                <p>{item.text}</p>
+                {item.fileName && <small>Attached: {item.fileName}</small>}
+              </div>
+            ))}
+          </div>
+
+          <label className="layout-issue-chat__label" htmlFor="layout-issue-message">
+            What’s wrong?
+          </label>
+          <textarea
+            id="layout-issue-message"
+            className="layout-issue-chat__input"
+            rows={3}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="e.g. Indentation broken in Technical Skills / blank page in the middle"
+            disabled={busy || disabled}
+          />
+
+          <div className="layout-issue-chat__actions">
+            <label className="layout-issue-chat__file">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                onChange={(e) => setEvidence(e.target.files?.[0] || null)}
+                disabled={busy || disabled}
+              />
+              <span>{evidence ? evidence.name : 'Attach screenshot or DOCX'}</span>
+            </label>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={send}
+              disabled={busy || disabled}
+            >
+              {busy ? 'Fixing…' : 'Fix now'}
+            </button>
+          </div>
+          {localError && <p className="layout-issue-chat__error">{localError}</p>}
+        </div>
+      )}
+    </section>
+  )
+}
 
 function ScoreRing({ score, label = '/ 100', gradId = 'scoreGrad', size = 'sm' }) {
   const pct = Math.min(100, Math.max(0, Number(score) || 0))
@@ -1004,6 +1129,20 @@ export default function ResumeEnhancer() {
           <p className="layout-qa-progress" role="status">
             Enhancing and verifying layout (gaps, indentation, pages) before download unlocks…
           </p>
+        )}
+
+        {sessionId && enhancedBlob && (
+          <LayoutIssueChat
+            sessionId={sessionId}
+            disabled={enhancing || uploading}
+            onFixed={async (result) => {
+              setLayoutQa(result.layoutQa || null)
+              setReadyForDownload(Boolean(result.readyForDownload))
+              setError('')
+              const enhanced = await fetchFileBlob(sessionId, 'enhanced')
+              setEnhancedBlob(enhanced)
+            }}
+          />
         )}
       </section>
 
