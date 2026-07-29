@@ -1818,10 +1818,15 @@ function resolveExperienceInsertPoint(xml, block) {
 function insertBulletsAt(xml, insertAt, bullets, template, mark, appliedList) {
   if (!template) return xml
   const toInsert = []
+  const already = [...(appliedList || [])]
   for (const bullet of bullets) {
-    toInsert.push(buildParagraph(bullet, template, { mark }))
-    appliedList.push(bullet)
+    const cleaned = clampBulletLength(bullet)
+    if (!cleaned || isDuplicateBullet(cleaned, already)) continue
+    toInsert.push(buildParagraph(cleaned, template, { mark }))
+    already.push(cleaned)
+    appliedList.push(cleaned)
   }
+  if (!toInsert.length) return xml
   return xml.slice(0, insertAt) + toInsert.join('') + xml.slice(insertAt)
 }
 
@@ -2263,55 +2268,83 @@ function findParagraphContaining(xml, searchText, rangeStart, rangeEnd) {
   return null
 }
 
-function companySearchTerms(companyName, title) {
+function companySearchTerms(companyName) {
   const terms = new Set()
-  if (companyName) {
-    terms.add(companyName.trim())
-    const primary = companyName.split(/[•|,]/)[0].trim()
-    if (primary) terms.add(primary)
-    const words = primary.split(/\s+/).filter((w) => w.length > 3)
-    if (words[0]) terms.add(words[0])
-  }
-  if (title) terms.add(title.trim())
+  if (!companyName) return []
+  const trimmed = String(companyName).trim()
+  if (!trimmed) return []
+  terms.add(trimmed)
+  const primary = trimmed.split(/[•|,]/)[0].trim()
+  if (primary) terms.add(primary)
+  // Brand token only — never job titles (titles appear inside other companies' bullets)
+  const words = primary.split(/\s+/).filter((w) => w.length > 3)
+  if (words[0]) terms.add(words[0].replace(/\.+$/, ''))
   return [...terms]
 }
 
+/** Prefer employer headers over long bullets that mention another company by name. */
+function isLikelyCompanyHeaderParagraph(chunk, plain) {
+  if (!chunk || !plain) return false
+  if (isBulletParagraph(chunk) || detectLiteralBulletPrefix(chunk)) return false
+  // Long narrative lines are bullets/prose, not employer headers
+  if (plain.length > 110) return false
+  if (/^(delivered|led|built|developed|designed|implemented|partnered|collaborated|managed|created|owned)\b/i.test(plain)) {
+    return false
+  }
+  return true
+}
+
+function paragraphMentionsCompany(plain, companyName) {
+  const text = normalizeText(plain)
+  if (!text) return false
+  for (const term of companySearchTerms(companyName)) {
+    const t = normalizeText(term)
+    if (t.length >= 4 && text.includes(t)) return true
+  }
+  return false
+}
+
+/**
+ * Locate the employer header paragraph for a company inside experience.
+ * Ignores bullet bodies that casually mention another employer (cross-contamination).
+ */
+function findCompanyHeaderIndex(xml, companyName, searchFrom, rangeEnd = xml.length) {
+  let pos = searchFrom
+  while (pos < rangeEnd) {
+    const pStart = findNextParagraphStart(xml, pos, rangeEnd)
+    if (pStart === -1) break
+    const pEnd = xml.indexOf('</w:p>', pStart)
+    if (pEnd === -1 || pEnd >= rangeEnd) break
+    const para = xml.slice(pStart, pEnd + 6)
+    const plain = getPlainTextFromParagraph(para)
+    if (isLikelyCompanyHeaderParagraph(para, plain) && paragraphMentionsCompany(plain, companyName)) {
+      return pStart
+    }
+    pos = pEnd + 6
+  }
+  return -1
+}
+
 function findCompanyBlock(xml, companyName, experienceStart, prevCompanyName, nextCompanyName, title) {
-  const lower = xml.toLowerCase()
-  const terms = companySearchTerms(companyName, title)
+  void title // titles must not locate blocks — they appear inside other jobs' bullets
+  const sectionEnd = findNextSectionStart(xml, experienceStart)
+  let searchFrom = experienceStart
 
-  for (const term of terms) {
-    const termLower = term.toLowerCase()
-    let searchFrom = experienceStart
-
-    if (prevCompanyName) {
-      const prevTerms = companySearchTerms(prevCompanyName, null)
-      for (const pt of prevTerms) {
-        const prevIdx = lower.indexOf(pt.toLowerCase(), experienceStart)
-        if (prevIdx !== -1) searchFrom = Math.max(searchFrom, prevIdx + pt.length)
-      }
-    }
-
-    const idx = lower.indexOf(termLower, searchFrom)
-    if (idx === -1) continue
-
-    let end = xml.length
-    if (nextCompanyName) {
-      const nextTerms = companySearchTerms(nextCompanyName, null)
-      let nextIdx = -1
-      for (const nt of nextTerms) {
-        const hit = lower.indexOf(nt.toLowerCase(), idx + termLower.length)
-        if (hit !== -1 && (nextIdx === -1 || hit < nextIdx)) nextIdx = hit
-      }
-      if (nextIdx !== -1) end = nextIdx
-    } else {
-      end = findNextSectionStart(xml, idx)
-    }
-
-    return { start: idx, end, matchedTerm: term }
+  if (prevCompanyName) {
+    const prevHeader = findCompanyHeaderIndex(xml, prevCompanyName, experienceStart, sectionEnd)
+    if (prevHeader !== -1) searchFrom = prevHeader + 1
   }
 
-  return null
+  const idx = findCompanyHeaderIndex(xml, companyName, searchFrom, sectionEnd)
+  if (idx === -1) return null
+
+  let end = sectionEnd > idx ? sectionEnd : xml.length
+  if (nextCompanyName) {
+    const nextHeader = findCompanyHeaderIndex(xml, nextCompanyName, idx + 1, sectionEnd)
+    if (nextHeader !== -1) end = nextHeader
+  }
+
+  return { start: idx, end, matchedTerm: companyName }
 }
 
 function findCompanyBlockByIndex(xml, experience, expIdx, experienceStart) {
@@ -2327,29 +2360,90 @@ function findCompanyBlockByIndex(xml, experience, expIdx, experienceStart) {
   )
 }
 
-function getPlanBulletsForCompany(plan, companyName) {
+function getPlanBulletsForCompany(plan, companyName, allCompanies = []) {
   const entry = (plan.experienceAdditions || []).find(
-    (e) => e.company?.toLowerCase() === companyName?.toLowerCase(),
+    (e) => companyKeysMatch(e.company, companyName),
   )
-  return (entry?.bullets || []).slice(0, 3)
+  const raw = (entry?.bullets || []).slice(0, 3)
+  return raw.filter((b) => b && !bulletClaimsOtherCompany(b, companyName, allCompanies))
+}
+
+function companyKeysMatch(a, b) {
+  const na = normalizeText(a)
+  const nb = normalizeText(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.includes(nb) || nb.includes(na)) return true
+  const tokenA = companySearchTerms(a)[0]
+  const tokenB = companySearchTerms(b)[0]
+  if (tokenA && tokenB && normalizeText(tokenA) === normalizeText(tokenB)) return true
+  return false
+}
+
+function resolveResumeCompany(planCompany, resumeCompanies) {
+  const exact = resumeCompanies.find((c) => normalizeText(c) === normalizeText(planCompany))
+  if (exact) return exact
+  return resumeCompanies.find((c) => companyKeysMatch(c, planCompany)) || null
+}
+
+/**
+ * True when a new bullet names a different employer than the target company
+ * (e.g. Cerebrone story pasted under Capgemini).
+ */
+export function bulletClaimsOtherCompany(bullet, targetCompany, allCompanies = []) {
+  const text = normalizeText(bullet)
+  if (!text || !targetCompany) return false
+  const targetNorm = normalizeText(targetCompany)
+  const targetTokens = new Set(companySearchTerms(targetCompany).map((t) => normalizeText(t)).filter((t) => t.length >= 4))
+
+  for (const other of allCompanies) {
+    if (!other || companyKeysMatch(other, targetCompany)) continue
+    for (const term of companySearchTerms(other)) {
+      const t = normalizeText(term)
+      if (t.length < 5) continue
+      if (targetTokens.has(t) || targetNorm.includes(t)) continue
+      if (!text.includes(t)) continue
+      // Require employer-like framing so skills/tools aren't false positives
+      if (
+        new RegExp(`\\bat\\s+${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text)
+        || new RegExp(`\\b(?:with|for|joined|at)\\s+${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text)
+        || text.includes(normalizeText(other))
+      ) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 export function mergeExperienceAdditions(plan, resumeData) {
   const companies = resumeData.experience || []
+  const resumeCompanyNames = companies.map((c) => c.company).filter(Boolean)
   const byCompany = new Map()
 
   for (const entry of plan.experienceAdditions || []) {
     if (!entry.company || !entry.bullets?.length) continue
-    const key = entry.company.toLowerCase()
-    const existing = byCompany.get(key) || []
-    byCompany.set(key, [...existing, ...entry.bullets].slice(0, 3))
+    const resolved = resolveResumeCompany(entry.company, resumeCompanyNames) || entry.company
+    const key = normalizeText(resolved)
+    const existing = byCompany.get(key) || { company: resolved, bullets: [] }
+    const merged = [...existing.bullets]
+    for (const b of entry.bullets) {
+      const cleaned = clampBulletLength(b)
+      if (!cleaned || isDuplicateBullet(cleaned, merged)) continue
+      if (bulletClaimsOtherCompany(cleaned, resolved, resumeCompanyNames)) continue
+      merged.push(cleaned)
+    }
+    byCompany.set(key, { company: resolved, bullets: merged.slice(0, 3) })
   }
 
   const experienceAdditions = companies
-    .map((c) => ({
-      company: c.company,
-      bullets: (byCompany.get(c.company?.toLowerCase()) || []).slice(0, 3),
-    }))
+    .map((c) => {
+      const hit = byCompany.get(normalizeText(c.company))
+      return {
+        company: c.company,
+        bullets: (hit?.bullets || []).slice(0, 3),
+      }
+    })
     .filter((e) => e.company && e.bullets.length)
 
   return { ...plan, experienceAdditions }
@@ -2556,15 +2650,20 @@ export function reclassifySummaryChanges(plan, resumeData) {
 
 /**
  * Never reuse the same (or near-duplicate) new bullet across two companies.
+ * Also drop bullets that name a different employer than the target company.
  */
-export function dedupeExperienceAdditionsAcrossCompanies(plan) {
+export function dedupeExperienceAdditionsAcrossCompanies(plan, resumeData = null) {
   const seen = []
+  const allCompanies = (resumeData?.experience || plan.experienceAdditions || [])
+    .map((e) => e.company)
+    .filter(Boolean)
   const experienceAdditions = []
   for (const entry of plan.experienceAdditions || []) {
     const bullets = []
     for (const raw of entry.bullets || []) {
       const b = clampBulletLength(raw)
       if (!b || isDuplicateBullet(b, seen)) continue
+      if (bulletClaimsOtherCompany(b, entry.company, allCompanies)) continue
       bullets.push(b)
       seen.push(b)
     }
@@ -2630,12 +2729,19 @@ export function filterEnhancementPlan(plan, resumeData, comparison) {
 
   const summaryRewrites = (plan.bulletRewrites || []).filter(isSummaryRewrite)
 
+  const resumeCompanies = (resumeData.experience || []).map((e) => e.company).filter(Boolean)
+  const plannedSeen = []
   const experienceAdditions = (plan.experienceAdditions || [])
     .map((entry) => ({
       company: entry.company,
       bullets: (entry.bullets || [])
         .map((b) => clampBulletLength(b))
-        .filter((b) => b && !isDuplicateBullet(b, allExistingBullets))
+        .filter((b) => {
+          if (!b || isDuplicateBullet(b, [...allExistingBullets, ...plannedSeen])) return false
+          if (bulletClaimsOtherCompany(b, entry.company, resumeCompanies)) return false
+          plannedSeen.push(b)
+          return true
+        })
         .slice(0, 3),
     }))
     .filter((entry) => entry.company && entry.bullets.length)
@@ -2980,7 +3086,6 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
     if (entry.bullets.length >= 1) return
 
     const company = exp.company
-    const title = exp.title || 'Business Analyst'
     const named = String(exp.bullets?.[0] || '')
       .match(/\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\s+(?:App|Application|System|Platform|Portal|Suite|Module|ERP|CRM))\b/)
     const projectHint = named?.[1]
@@ -2997,16 +3102,17 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
     const skillC = toolPool[(expIdx + 4) % toolPool.length]
     const candidates = [
       clampBulletLength(
-        `As ${title} at ${company}, delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, cutting cycle time by 20%.`,
+        `Delivered ${shortResp} on ${projectHint} using ${skillA} and ${skillB}, cutting cycle time by 20%.`,
       ),
       clampBulletLength(
-        `Partnered with ${company} stakeholders on ${projectHint} to advance ${shortResp} with ${skillC}, improving accuracy by 15%.`,
+        `Partnered with stakeholders on ${projectHint} to advance ${shortResp} with ${skillC}, improving accuracy by 15%.`,
       ),
     ]
 
     for (const bullet of candidates) {
       if (entry.bullets.length >= 2) break
       if (!bullet || isDuplicateBullet(bullet, [...allExisting, ...entry.bullets])) continue
+      if (bulletClaimsOtherCompany(bullet, company, companies.map((c) => c.company))) continue
       entry.bullets.push(bullet)
       allExisting.push(bullet)
     }
@@ -3014,7 +3120,7 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
 
   next.experienceAdditions = next.experienceAdditions.filter((e) => e.company && e.bullets?.length)
   next.skillsToAdd = [...new Set(next.skillsByCategory.flatMap((e) => e.skills || []))]
-  return dedupeExperienceAdditionsAcrossCompanies(next)
+  return dedupeExperienceAdditionsAcrossCompanies(next, resumeData)
 }
 
 export function buildMatchAnalysis(beforeComparison, afterComparison, applied, processingMeta = null) {
@@ -3261,9 +3367,12 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
 
   experienceStart = findSectionStart(xml, SECTION_ANCHORS.experience)
   if (experienceStart !== -1 && experience.length) {
+    const allCompanyNames = experience.map((e) => e.company).filter(Boolean)
+    const insertedAcrossCompanies = []
     for (let expIdx = experience.length - 1; expIdx >= 0; expIdx--) {
       const expEntry = experience[expIdx]
-      const bullets = getPlanBulletsForCompany(plan, expEntry.company)
+      const bullets = getPlanBulletsForCompany(plan, expEntry.company, allCompanyNames)
+        .filter((b) => !isDuplicateBullet(b, insertedAcrossCompanies))
       if (!bullets.length) continue
 
       const block = findCompanyBlockByIndex(xml, experience, expIdx, experienceStart)
@@ -3275,7 +3384,9 @@ export function patchDocx(originalBuffer, plan, { highlight = false, resumeData 
       const template = resolveBulletTemplate(xml, bulletEnds, insertAt)
       if (!template) continue
       const companyApplied = ensureExperienceEntry(applied, expEntry.company)
+      const beforeCount = companyApplied.added.length
       xml = insertBulletsAt(xml, insertAt, bullets, template, mark, companyApplied.added)
+      insertedAcrossCompanies.push(...companyApplied.added.slice(beforeCount))
     }
   }
 

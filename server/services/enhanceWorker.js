@@ -160,7 +160,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     let enhancementPlan = filterEnhancementPlan(planRaw, resumeData, comparison)
     enhancementPlan = reclassifySummaryChanges(enhancementPlan, resumeData)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
-    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan)
+    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan, resumeData)
     enhancementPlan.summaryBullets = (enhancementPlan.summaryBullets || []).slice(0, 3)
 
     // Local validation / skill weaving — no extra LLM calls for empty coverage
@@ -171,7 +171,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     enhancementPlan = reclassifySummaryChanges(enhancementPlan, resumeData)
     enhancementPlan = filterEnhancementPlan(enhancementPlan, resumeData, comparison)
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
-    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan)
+    enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan, resumeData)
     timer.mark('validate_plan_local')
 
     if (!(enhancementPlan.summaryBullets?.length) && !(enhancementPlan.bulletRewrites || []).some((r) => {

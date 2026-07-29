@@ -297,7 +297,7 @@ router.get('/score-report/:sessionId', async (req, res, next) => {
   }
 })
 
-// User reports layout issue (text + optional screenshot/docx) → auto repair/rebuild
+// User reports any enhancer issue (text + optional screenshot/docx) → auto repair/rebuild
 router.post(
   '/layout-fix',
   requireUser,
@@ -309,15 +309,15 @@ router.post(
       if (!sessionId) return res.status(400).json({ error: 'sessionId is required' })
       if (!message && !req.file) {
         return res.status(400).json({
-          error: 'Describe the issue (e.g. blank page / bad indent) or attach a screenshot/.docx.',
+          error: 'Describe the issue (layout, duplicate bullet, garbled text, skills, etc.) or attach a screenshot/.docx.',
         })
       }
 
       const result = await fixReportedLayoutIssue({
         sessionId,
-        message: message || 'Layout issue from uploaded evidence',
+        message: message || 'Enhancer issue from uploaded evidence',
         evidenceFile: req.file || null,
-        log: (msg) => console.log(`[layout-fix:${String(sessionId).slice(0, 8)}] ${msg}`),
+        log: (msg) => console.log(`[enhancer-fix:${String(sessionId).slice(0, 8)}] ${msg}`),
       })
 
       res.json({
@@ -326,6 +326,7 @@ router.post(
         reply: result.reply,
         layoutQa: result.layoutQa,
         classification: result.classification,
+        previewUpdated: result.previewUpdated !== false,
         downloadUrl: result.readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
       })

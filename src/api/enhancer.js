@@ -203,7 +203,7 @@ export async function fetchFileBlob(sessionId, type = 'original') {
   return res.blob()
 }
 
-/** Report a layout issue (text + optional screenshot/docx) and auto-repair. */
+/** Report any enhancer issue (text + optional screenshot/docx) and auto-repair. */
 export async function reportLayoutIssue(sessionId, { message = '', evidence = null } = {}) {
   const form = new FormData()
   form.append('sessionId', sessionId)

@@ -15,7 +15,7 @@ import {
 } from '../../api/enhancer'
 import { useAuth } from '../../context/AuthContext'
 
-function LayoutIssueChat({
+function EnhancerFixChat({
   sessionId,
   disabled,
   onFixed,
@@ -49,13 +49,12 @@ function LayoutIssueChat({
       setMessage('')
       setEvidence(null)
       if (fileRef.current) fileRef.current.value = ''
-      if (result.readyForDownload) {
-        await onFixed?.(result)
-      }
+      // Always refresh preview — content fixes should show even if download stays locked
+      await onFixed?.(result)
     } catch (err) {
       setThread((prev) => [...prev, {
         role: 'assistant',
-        text: err.message || 'Could not repair layout. Try again.',
+        text: err.message || 'Could not apply a fix. Try again or re-enhance.',
       }])
     } finally {
       setBusy(false)
@@ -65,27 +64,29 @@ function LayoutIssueChat({
   if (!sessionId) return null
 
   return (
-    <section className="layout-issue-chat" aria-label="Report layout issue">
+    <section className="layout-issue-chat" aria-label="Report enhancer issue">
       <button
         type="button"
         className="layout-issue-chat__toggle"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
       >
-        {open ? 'Hide layout help' : 'See a layout problem? Report & auto-fix'}
+        {open ? 'Hide fix chat' : 'Something wrong? Report & auto-fix'}
       </button>
 
       {open && (
         <div className="layout-issue-chat__panel">
           <p className="layout-issue-chat__hint">
-            Describe gaps, blank pages, or bad indentation — optionally attach a screenshot or the problem DOCX.
-            We repair and re-check immediately; download unlocks only if layout QA passes.
+            Report any Resume Enhancer problem — layout, duplicate bullets, wrong company,
+            garbled text, skills, summary, or download locked. Optionally attach a screenshot or DOCX.
+            We repair and refresh the preview immediately; download unlocks when layout QA passes.
           </p>
 
           <div className="layout-issue-chat__thread" role="log" aria-live="polite">
             {thread.length === 0 && (
               <p className="layout-issue-chat__empty">
-                Examples: “blank page after experience”, “skills indentation wrong”, “huge gap between bullets”
+                Examples: “same bullet under two companies”, “blank page after experience”,
+                “skills indentation wrong”, “garbled bullet text”, “download still locked”
               </p>
             )}
             {thread.map((item, idx) => (
@@ -108,7 +109,7 @@ function LayoutIssueChat({
             rows={3}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. Indentation broken in Technical Skills / blank page in the middle"
+            placeholder="e.g. Same bullet in two companies / blank page / garbled text / skills indent broken"
             disabled={busy || disabled}
           />
 
@@ -766,7 +767,7 @@ export default function ResumeEnhancer() {
       if (!canDownload) {
         setError(
           result.layoutWarning
-          || 'Layout checks need another pass. Preview is ready — use “Report & auto-fix” below to unlock download.',
+          || 'Checks need another pass. Preview is ready — use “Report & auto-fix” below for any issue to unlock download.',
         )
       } else {
         setError('')
@@ -1100,9 +1101,10 @@ export default function ResumeEnhancer() {
 
         {enhancedBlob && sessionId && !readyForDownload && (
           <div className="layout-qa-locked" role="status">
-            <strong>Download locked until layout passes</strong>
+            <strong>Download locked until checks pass</strong>
             <span>
-              Preview is available. Use <em>Report &amp; auto-fix</em> below (describe gaps/indentation or attach a screenshot), then download unlocks when checks pass.
+              Preview is available. Use <em>Report &amp; auto-fix</em> below for any problem
+              (layout, duplicate bullets, garbled text, wrong company, skills), then download unlocks when checks pass.
               {layoutQa?.defects?.length
                 ? ` Flags: ${layoutQa.defects.filter((d) => d.severity === 'high').map((d) => d.code).join(', ')}`
                 : ''}
@@ -1145,15 +1147,19 @@ export default function ResumeEnhancer() {
         )}
 
         {sessionId && enhancedBlob && (
-          <LayoutIssueChat
+          <EnhancerFixChat
             sessionId={sessionId}
             disabled={enhancing || uploading}
             onFixed={async (result) => {
               setLayoutQa(result.layoutQa || null)
               setReadyForDownload(Boolean(result.readyForDownload))
               setError('')
-              const enhanced = await fetchFileBlob(sessionId, 'enhanced')
-              setEnhancedBlob(enhanced)
+              try {
+                const enhanced = await fetchFileBlob(sessionId, 'enhanced')
+                setEnhancedBlob(enhanced)
+              } catch {
+                // Preview refresh is best-effort; chat reply still shows
+              }
             }}
           />
         )}
