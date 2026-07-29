@@ -7,6 +7,7 @@ import {
   findBlankGapDefects,
   findSectionContentGapDefects,
   findIndentConsistencyDefects,
+  findContentLossDefects,
 } from '../server/services/resumeQaService.js'
 import { patchDocx, normalizeDocxGeometry, repairDocxLayout } from '../server/services/docxService.js'
 
@@ -301,6 +302,56 @@ const gapHeavy = [
 ].join('')
 const gapXmlDoc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${gapHeavy}</w:body></w:document>`
 assert(findBlankGapDefects(gapXmlDoc).some((d) => d.code === 'blank_page_gap'), 'detects blank page gap spacers')
+
+// Structural empty paras (no large spacing) must NOT lock download
+const structuralEmpty = [
+  '<w:p><w:r><w:t>SUMMARY</w:t></w:r></w:p>',
+  '<w:p></w:p>',
+  '<w:p></w:p>',
+  bullet('Business Analyst with experience across insurance domains.'),
+].join('')
+const structuralXml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${structuralEmpty}</w:body></w:document>`
+assert(
+  !findBlankGapDefects(structuralXml).some((d) => d.code === 'blank_page_gap' && d.severity === 'high'),
+  'structural empty paras do not high-flag blank_page_gap',
+)
+
+// missing_company must be advisory — fuzzy mismatch must not lock download
+{
+  const body = [
+    '<w:p><w:r><w:t>Jane Doe</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>Analyst — Capgemini</w:t></w:r></w:p>',
+    bullet('Built analytics dashboards for stakeholders across regions.'),
+  ].join('')
+  const buf = makeDocx(body)
+  // Run through repair so keepNext overrides are present
+  const ensured = ensureEnhancedResumeQuality(buf, buf, {
+    name: 'Jane Doe',
+    experience: [
+      { company: 'Capgemini India Pvt Ltd' },
+      { company: 'Some Parsed Alias Corp' },
+    ],
+  }, { maxAttempts: 1, maxRebuilds: 0 })
+  assert(ensured.readyForDownload === true, 'missing_company advisory does not lock download')
+  const longEnh = 'Jane Doe Capgemini Analyst Built analytics dashboards for stakeholders across regions and insurance programs with measurable outcomes.'
+  const contentDefects = findContentLossDefects(
+    `${longEnh} plus original experience details for another employer.`,
+    longEnh,
+    {
+      name: 'Jane Doe',
+      experience: [
+        { company: 'Capgemini India Pvt Ltd' },
+        { company: 'TotallyUnrelatedEmployerXYZ' },
+      ],
+    },
+  )
+  assert(
+    contentDefects.some((d) => d.code === 'missing_company' && d.severity === 'medium'),
+    'unmatched company is medium missing_company',
+  )
+  assert(!contentDefects.some((d) => d.code === 'missing_company' && d.severity === 'high'), 'missing_company is never high')
+}
 
 const sectionGapBody = [
   '<w:p><w:r><w:t>ARPITHA REDDY SUNKETA</w:t></w:r></w:p>',

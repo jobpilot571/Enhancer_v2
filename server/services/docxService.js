@@ -613,19 +613,16 @@ function sanitizeDocumentPagination(xml) {
 
   // Drop empty page-break-only / huge-spacer paragraphs
   out = out.replace(
-    /<w:p\b[^>]*>\s*(?:<w:pPr\b[\s\S]*?<\/w:pPr>\s*)?(?:<w:r\b[\s\S]*?<\/w:r>\s*)*<\/w:p>/g,
+    /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g,
     (para) => {
+      // Never drop sectPr paragraphs
+      if (/<w:sectPr\b/.test(para)) return para
       const plain = getPlainTextFromParagraph(para).trim()
-      if (!plain && (/w:type="page"/.test(para) || /w:lastRenderedPageBreak/.test(para))) {
-        return ''
-      }
-      if (!plain) {
-        const spacing = getParagraphSpacingMetrics(para)
-        // Drop empty spacers aggressively — they create half/full page gaps in Word
-        if (spacing.after > 40 || spacing.before > 40 || spacing.after + spacing.before > 0) return ''
-        return ''
-      }
-      return para
+      if (plain) return para
+      if (/w:type="page"/.test(para) || /w:lastRenderedPageBreak/.test(para)) return ''
+      // Drop ALL text-empty spacers — they create half/full page gaps in Word
+      // (bookmarks / proofErr / empty runs still count as empty)
+      return ''
     },
   )
 

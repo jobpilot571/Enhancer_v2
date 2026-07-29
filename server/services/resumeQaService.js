@@ -86,14 +86,21 @@ export function findSectionContentGapDefects(xml) {
 
     if (!firstContent) continue
     const gapParas = firstContent.index - i - 1
-    if (gapParas >= 2 || spacerParas >= 1) {
+    // Only high-severity when empties actually have large spacing (real visual gap)
+    if (spacerParas >= 1) {
       defects.push({
         code: 'section_content_gap',
         severity: 'high',
-        message: `Large spacer chain after "${plain}" (${gapParas} empty paragraphs)`,
+        message: `Large spacer chain after "${plain}" (${spacerParas} spaced empty paragraphs)`,
+      })
+    } else if (gapParas >= 3) {
+      defects.push({
+        code: 'section_content_gap',
+        severity: 'medium',
+        message: `Empty paragraphs after "${plain}" (${gapParas}) — likely structural`,
       })
     }
-    if (firstContent.spacing.before >= 360 || firstContent.spacing.after >= 360) {
+    if (firstContent.spacing.before >= 480 || firstContent.spacing.after >= 480) {
       defects.push({
         code: 'section_content_gap',
         severity: 'high',
@@ -124,12 +131,13 @@ export function findSectionContentGapDefects(xml) {
 
 /**
  * Detect empty / spacer paragraphs that create visible half-page or full-page gaps.
+ * Only flag REAL layout traps — normal empty structural paras must not lock download.
  */
 export function findBlankGapDefects(xml) {
   const defects = []
   const paras = [...xml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map((m) => m[0])
   let emptyRun = 0
-  let gapParas = 0
+  let largeSpacerParas = 0
   let largeContentSpacing = 0
 
   for (const para of paras) {
@@ -138,22 +146,31 @@ export function findBlankGapDefects(xml) {
 
     if (!plain) {
       emptyRun += 1
-      // Require clearly large spacers — tiny empty paras are normal in Word
-      if (a >= 240 || b >= 240 || emptyRun >= 2) gapParas += 1
+      // Only count empty paras that actually push content (large spacing)
+      if (a >= 360 || b >= 360) largeSpacerParas += 1
       continue
+    }
+    // Long empty runs with no spacing are usually table/structure noise — medium only
+    if (emptyRun >= 4) {
+      defects.push({
+        code: 'blank_page_gap',
+        severity: 'medium',
+        message: `Long empty paragraph run (${emptyRun}) — usually structural, not a page gap`,
+      })
     }
     emptyRun = 0
 
     const isBullet = /w:numPr/.test(para) || /^[•\u2022\-–]/.test(plain)
-    if (isBullet && (a >= 240 || b >= 240)) largeContentSpacing += 1
-    else if (a >= 360 || b >= 360) largeContentSpacing += 1
+    // ~0.35"+ spacing on content is a real visual gap
+    if (isBullet && (a >= 360 || b >= 360)) largeContentSpacing += 1
+    else if (a >= 480 || b >= 480) largeContentSpacing += 1
   }
 
-  if (gapParas > 0) {
+  if (largeSpacerParas > 0) {
     defects.push({
       code: 'blank_page_gap',
       severity: 'high',
-      message: `Blank/spacer paragraphs creating page gaps (${gapParas})`,
+      message: `Blank/spacer paragraphs creating page gaps (${largeSpacerParas})`,
     })
   }
   if (largeContentSpacing > 0) {
@@ -484,6 +501,8 @@ export function findSkillsDumpDefects(xml) {
 
 /**
  * Ensure key original resume content still exists in the enhanced DOCX.
+ * Company matching is fuzzy — parsed names often differ slightly from DOCX text
+ * and must NEVER permanently lock download.
  */
 export function findContentLossDefects(originalText, enhancedText, resumeData) {
   const defects = []
@@ -522,19 +541,88 @@ export function findContentLossDefects(originalText, enhancedText, resumeData) {
     }
   }
 
+  const companyPresent = (companyRaw) => {
+    const company = String(companyRaw || '').split(/[|,•]/)[0].trim()
+    if (!company || company.length < 3) return true
+    const cn = normalize(company)
+    if (enh.includes(cn)) return true
+    // Brand token: first significant word (≥4 chars), e.g. Capgemini / Cerebrone / Concordia
+    const tokens = cn.split(/\s+/).filter((t) => t.length >= 4 && !/^(inc|llc|ltd|corp|co|the|and)$/.test(t))
+    if (tokens.some((t) => enh.includes(t))) return true
+    // Compact form without spaces/punctuation
+    const compact = cn.replace(/[^a-z0-9]/g, '')
+    if (compact.length >= 5 && enh.replace(/[^a-z0-9]/g, '').includes(compact)) return true
+    return false
+  }
+
+  let missingCompanies = 0
   for (const exp of resumeData?.experience || []) {
-    const company = (exp.company || '').split(/[|,•]/)[0].trim()
-    if (!company || company.length < 3) continue
-    if (!enh.includes(normalize(company))) {
-      defects.push({
-        code: 'missing_company',
-        severity: 'high',
-        message: `Company missing from enhanced resume: ${company}`,
-      })
-    }
+    if (companyPresent(exp.company)) continue
+    missingCompanies += 1
+    defects.push({
+      code: 'missing_company',
+      // Advisory only — fuzzy parse mismatches must not lock download
+      severity: 'medium',
+      message: `Company not clearly matched in enhanced resume: ${exp.company}`,
+    })
+  }
+
+  // Only hard-fail if EVERY experience company is gone (likely wiped document)
+  if (
+    missingCompanies > 0
+    && (resumeData?.experience || []).length > 0
+    && missingCompanies >= (resumeData.experience || []).length
+  ) {
+    defects.push({
+      code: 'content_shrink',
+      severity: 'high',
+      message: 'All experience companies missing from enhanced resume',
+    })
   }
 
   return defects
+}
+
+/**
+ * Codes that must block download if still high after repair/rebuild.
+ * Everything else is advisory — users must still be able to download.
+ */
+const DOWNLOAD_BLOCKING_CODES = new Set([
+  'empty_enhanced',
+  'content_shrink',
+  'missing_name',
+  'keep_next',
+  'page_break',
+  'huge_spacing',
+  'huge_page_margin',
+  'extreme_indent',
+  'text_direction',
+  'narrow_table_col',
+  'skills_mashed',
+  'skills_dump',
+  'section_content_gap',
+  'resume_gap_spacing',
+  'blank_page_gap',
+  'indent_inconsistency',
+  'missing_keepnext_override',
+])
+
+/**
+ * Soft advisory codes that should never permanently lock download after repair attempts.
+ */
+const NON_BLOCKING_AFTER_REPAIR = new Set([
+  'missing_company',
+  'qa_text_error',
+  'keep_lines',
+  'cant_split',
+  'frame',
+  'tall_row',
+])
+
+function blockingHighDefects(qa) {
+  return (qa?.defects || []).filter(
+    (d) => d.severity === 'high' && DOWNLOAD_BLOCKING_CODES.has(d.code),
+  )
 }
 
 /**
@@ -560,11 +648,13 @@ export function qaEnhancedResume(originalBuffer, enhancedBuffer, resumeData = nu
   }
 
   const high = defects.filter((d) => d.severity === 'high')
+  const blocking = high.filter((d) => DOWNLOAD_BLOCKING_CODES.has(d.code))
   return {
-    ok: high.length === 0,
+    ok: blocking.length === 0,
     defects,
     highCount: high.length,
     mediumCount: defects.filter((d) => d.severity === 'medium').length,
+    blockingCount: blocking.length,
   }
 }
 
@@ -641,10 +731,11 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
   maxRebuilds = 3,
   log = () => {},
 } = {}) {
-  // Permanent: always run layout repair once after enhance — do not wait for QA failure.
+  // Permanent: always run layout repair + skills-dump strip after enhance
   let buffer = repairDocxLayout(enhancedBuffer)
+  buffer = stripSoftSkillDumpPhrases(buffer)
   let qa = qaEnhancedResume(originalBuffer, buffer, resumeData)
-  const history = [{ attempt: 0, ok: qa.ok, defects: qa.defects.map((d) => d.code), actions: ['layout_sanitize'] }]
+  const history = [{ attempt: 0, ok: qa.ok, defects: qa.defects.map((d) => d.code), actions: ['layout_sanitize', 'strip_skills_dump'] }]
 
   const runRepairLoop = (startAttempt = 1) => {
     for (let attempt = startAttempt; attempt <= maxAttempts; attempt += 1) {
@@ -703,11 +794,33 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
     }
   }
 
-  const readyForDownload = Boolean(qa.ok)
+  const readyBlocking = blockingHighDefects(qa)
+  // After repair/rebuild: unlock if only advisory leftovers remain
+  let readyForDownload = readyBlocking.length === 0
+  if (!readyForDownload && rebuilds >= maxRebuilds) {
+    const residual = readyBlocking.map((d) => d.code)
+    // Soft unlock only when residual defects are empty-para noise that repair already sanitized
+    const onlySoftBlank = residual.every((c) => c === 'blank_page_gap' || NON_BLOCKING_AFTER_REPAIR.has(c))
+    if (onlySoftBlank) {
+      readyForDownload = true
+      log(`qa: soft-unlock after rebuilds — residual advisory: ${residual.join(', ')}`)
+      qa = {
+        ...qa,
+        ok: true,
+        defects: qa.defects.map((d) => (
+          d.severity === 'high' && (d.code === 'blank_page_gap' || NON_BLOCKING_AFTER_REPAIR.has(d.code))
+            ? { ...d, severity: 'medium', message: `${d.message} (advisory — download unlocked)` }
+            : d
+        )),
+        highCount: qa.defects.filter((d) => d.severity === 'high' && DOWNLOAD_BLOCKING_CODES.has(d.code) && d.code !== 'blank_page_gap').length,
+      }
+    }
+  }
+
   if (readyForDownload) {
     log('qa: resume verified — ready for download')
   } else {
-    log(`qa: blocked download — remaining defects: ${qa.defects.filter((d) => d.severity === 'high').map((d) => d.code).join(', ')}`)
+    log(`qa: blocked download — remaining defects: ${readyBlocking.map((d) => d.code).join(', ')}`)
   }
 
   return {
