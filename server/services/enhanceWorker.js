@@ -441,7 +441,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
         layoutWarning: readyForDownload
           ? null
-          : `Layout checks still flag: ${highCodes.join(', ') || 'gaps/indentation'}. Preview is available — use “Report & auto-fix” below, then download unlocks when checks pass.`,
+          : 'We’re finishing formatting adjustments. Preview is ready — you can request a revision below if needed.',
       },
     })
     log(jobId, 'completed')

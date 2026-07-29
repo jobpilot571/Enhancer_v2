@@ -19,8 +19,9 @@ function EnhancerFixChat({
   sessionId,
   disabled,
   onFixed,
+  forceOpen = false,
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(Boolean(forceOpen))
   const [message, setMessage] = useState('')
   const [evidence, setEvidence] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -28,11 +29,15 @@ function EnhancerFixChat({
   const [localError, setLocalError] = useState('')
   const fileRef = useRef(null)
 
+  useEffect(() => {
+    if (forceOpen) setOpen(true)
+  }, [forceOpen])
+
   const send = async () => {
     if (!sessionId || busy) return
     const text = message.trim()
     if (!text && !evidence) {
-      setLocalError('Describe the issue or attach a screenshot/.docx.')
+      setLocalError('Describe the issue or attach a screenshot.')
       return
     }
     setLocalError('')
@@ -49,12 +54,11 @@ function EnhancerFixChat({
       setMessage('')
       setEvidence(null)
       if (fileRef.current) fileRef.current.value = ''
-      // Always refresh preview — content fixes should show even if download stays locked
       await onFixed?.(result)
     } catch (err) {
       setThread((prev) => [...prev, {
         role: 'assistant',
-        text: err.message || 'Could not apply a fix. Try again or re-enhance.',
+        text: err.message || 'Could not apply a fix. Please try again.',
       }])
     } finally {
       setBusy(false)
@@ -64,29 +68,28 @@ function EnhancerFixChat({
   if (!sessionId) return null
 
   return (
-    <section className="layout-issue-chat" aria-label="Report enhancer issue">
-      <button
-        type="button"
-        className="layout-issue-chat__toggle"
-        onClick={() => setOpen((v) => !v)}
-        disabled={disabled}
-      >
-        {open ? 'Hide fix chat' : 'Something wrong? Report & auto-fix'}
-      </button>
+    <section className="layout-issue-chat" aria-label="Request a revision">
+      {!forceOpen && (
+        <button
+          type="button"
+          className="layout-issue-chat__toggle"
+          onClick={() => setOpen((v) => !v)}
+          disabled={disabled}
+        >
+          {open ? 'Close' : 'Need a revision?'}
+        </button>
+      )}
 
-      {open && (
+      {(open || forceOpen) && (
         <div className="layout-issue-chat__panel">
           <p className="layout-issue-chat__hint">
-            Report any Resume Enhancer problem — add bullets/skills, layout, duplicates, wrong company,
-            garbled text, summary, or download locked. Optionally attach a screenshot or DOCX.
-            We apply the fix and refresh the preview immediately; download unlocks when layout QA passes.
+            Tell us what to adjust and we’ll update your enhanced resume automatically.
           </p>
 
           <div className="layout-issue-chat__thread" role="log" aria-live="polite">
             {thread.length === 0 && (
               <p className="layout-issue-chat__empty">
-                Examples: “add one more bullet under Cerebrone”, “same bullet under two companies”,
-                “blank page after experience”, “garbled bullet text”, “download still locked”
+                Example: “Add one more bullet under my most recent role”
               </p>
             )}
             {thread.map((item, idx) => (
@@ -101,7 +104,7 @@ function EnhancerFixChat({
           </div>
 
           <label className="layout-issue-chat__label" htmlFor="layout-issue-message">
-            What’s wrong?
+            Your request
           </label>
           <textarea
             id="layout-issue-message"
@@ -109,7 +112,7 @@ function EnhancerFixChat({
             rows={3}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. Add one more bullet / same bullet in two companies / blank page / garbled text"
+            placeholder="What would you like changed?"
             disabled={busy || disabled}
           />
 
@@ -122,7 +125,7 @@ function EnhancerFixChat({
                 onChange={(e) => setEvidence(e.target.files?.[0] || null)}
                 disabled={busy || disabled}
               />
-              <span>{evidence ? evidence.name : 'Attach screenshot or DOCX'}</span>
+              <span>{evidence ? evidence.name : 'Attach screenshot (optional)'}</span>
             </label>
             <button
               type="button"
@@ -130,7 +133,7 @@ function EnhancerFixChat({
               onClick={send}
               disabled={busy || disabled}
             >
-              {busy ? (evidence ? 'Analyzing & fixing…' : 'Fixing…') : 'Fix now'}
+              {busy ? 'Updating…' : 'Update resume'}
             </button>
           </div>
           {localError && <p className="layout-issue-chat__error">{localError}</p>}
@@ -767,7 +770,7 @@ export default function ResumeEnhancer() {
       if (!canDownload) {
         setError(
           result.layoutWarning
-          || 'Checks need another pass. Preview is ready — use “Report & auto-fix” below for any issue to unlock download.',
+          || 'We’re finishing a few formatting adjustments. Preview is ready — you can request a revision below if needed.',
         )
       } else {
         setError('')
@@ -1100,31 +1103,19 @@ export default function ResumeEnhancer() {
         </div>
 
         {enhancedBlob && sessionId && !readyForDownload && (
-          <div className="layout-qa-locked" role="status">
-            <strong>Download locked until checks pass</strong>
-            <span>
-              Preview is available. Use <em>Report &amp; auto-fix</em> below for any problem
-              (layout, duplicate bullets, garbled text, wrong company, skills), then download unlocks when checks pass.
-              {layoutQa?.defects?.length
-                ? ` Flags: ${layoutQa.defects.filter((d) => d.severity === 'high').map((d) => d.code).join(', ')}`
-                : ''}
-            </span>
+          <div className="enhancer-ready enhancer-ready--pending" role="status">
+            <div className="enhancer-ready__copy">
+              <strong>Almost ready</strong>
+              <span>We’re polishing formatting so your resume looks clean in Word. Preview is available meanwhile.</span>
+            </div>
           </div>
         )}
 
         {enhancedBlob && sessionId && readyForDownload && (
-          <div className="service-cta-row service-cta-row--download-ready">
-            <div className="layout-qa-badge" role="status">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
-                <path d="M20 6L9 17l-5-5" />
-              </svg>
-              <div>
-                <strong>Layout verified — ready to download</strong>
-                <span>
-                  Checked page gaps, blank spacers, margins, skills layout, and bullet indentation
-                  {layoutQa?.rebuilds ? ` · auto-rebuilt ${layoutQa.rebuilds}×` : ''}
-                </span>
-              </div>
+          <div className="enhancer-ready enhancer-ready--ok">
+            <div className="enhancer-ready__copy">
+              <strong>Your enhanced resume is ready</strong>
+              <span>Preview it above, then download your DOCX.</span>
             </div>
             <a
               href={getDownloadUrl(sessionId)}
@@ -1142,14 +1133,15 @@ export default function ResumeEnhancer() {
         )}
         {enhancing && (
           <p className="layout-qa-progress" role="status">
-            Enhancing and verifying layout (gaps, indentation, pages) before download unlocks…
+            Enhancing your resume…
           </p>
         )}
 
-        {sessionId && enhancedBlob && (
+        {sessionId && enhancedBlob && !readyForDownload && (
           <EnhancerFixChat
             sessionId={sessionId}
             disabled={enhancing || uploading}
+            forceOpen
             onFixed={async (result) => {
               setLayoutQa(result.layoutQa || null)
               setReadyForDownload(Boolean(result.readyForDownload))

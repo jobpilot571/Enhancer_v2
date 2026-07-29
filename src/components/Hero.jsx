@@ -25,8 +25,8 @@ export default function Hero() {
             results — or build a brand-new resume from scratch in minutes.
           </p>
           <div className="hero__actions">
-            <Link to="/#services" className="btn btn--primary btn--lg">
-              Get Started Free
+            <Link to="/services/resume-enhancer" className="btn btn--primary btn--lg">
+              Enhance Your Resume Free
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M5 12h14M12 5l7 7-7 7" />
               </svg>
