@@ -77,16 +77,16 @@ function EnhancerFixChat({
       {open && (
         <div className="layout-issue-chat__panel">
           <p className="layout-issue-chat__hint">
-            Report any Resume Enhancer problem — layout, duplicate bullets, wrong company,
-            garbled text, skills, summary, or download locked. Optionally attach a screenshot or DOCX.
-            We repair and refresh the preview immediately; download unlocks when layout QA passes.
+            Report any Resume Enhancer problem — add bullets/skills, layout, duplicates, wrong company,
+            garbled text, summary, or download locked. Optionally attach a screenshot or DOCX.
+            We apply the fix and refresh the preview immediately; download unlocks when layout QA passes.
           </p>
 
           <div className="layout-issue-chat__thread" role="log" aria-live="polite">
             {thread.length === 0 && (
               <p className="layout-issue-chat__empty">
-                Examples: “same bullet under two companies”, “blank page after experience”,
-                “skills indentation wrong”, “garbled bullet text”, “download still locked”
+                Examples: “add one more bullet under Cerebrone”, “same bullet under two companies”,
+                “blank page after experience”, “garbled bullet text”, “download still locked”
               </p>
             )}
             {thread.map((item, idx) => (
@@ -109,7 +109,7 @@ function EnhancerFixChat({
             rows={3}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. Same bullet in two companies / blank page / garbled text / skills indent broken"
+            placeholder="e.g. Add one more bullet / same bullet in two companies / blank page / garbled text"
             disabled={busy || disabled}
           />
 
@@ -130,7 +130,7 @@ function EnhancerFixChat({
               onClick={send}
               disabled={busy || disabled}
             >
-              {busy ? 'Fixing…' : 'Fix now'}
+              {busy ? (evidence ? 'Analyzing & fixing…' : 'Fixing…') : 'Fix now'}
             </button>
           </div>
           {localError && <p className="layout-issue-chat__error">{localError}</p>}

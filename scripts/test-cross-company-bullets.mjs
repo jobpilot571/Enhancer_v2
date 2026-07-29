@@ -92,4 +92,8 @@ assert(layoutOnly.strategy === 'layout_repair', 'blank page uses layout repair')
 const garbled = classifyEnhancerIssue('garbled bullet text that does not make sense')
 assert(garbled.codes.includes('garbled_bullet'), 'classifies garbled bullets')
 
+const addBullet = classifyEnhancerIssue('Can you add one more bullet')
+assert(addBullet.focus === 'add_bullet', 'classifies add one more bullet')
+assert(addBullet.strategy === 'content_add', 'add bullet uses content_add')
+
 console.log('ALL PASSED')

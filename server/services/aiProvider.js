@@ -367,6 +367,104 @@ export function getConfiguredProviders() {
   }))
 }
 
+/**
+ * Vision JSON completion for layout screenshot analysis.
+ * Tries OpenAI (gpt-4o-mini) then Gemini vision models.
+ */
+export async function visionStructuredJSON(system, userText, imageBuffer, mimeType, schemaName, schema) {
+  if (!imageBuffer?.length) {
+    throw new Error('No image buffer for vision analysis')
+  }
+  const base64 = Buffer.from(imageBuffer).toString('base64')
+  const schemaText = schemaInstruction(schema)
+  const errors = []
+
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const model = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini'
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 90000 })
+      const res = await client.chat.completions.create({
+        model,
+        temperature: 0.1,
+        max_tokens: 800,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system + schemaText },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: userText },
+              { type: 'image_url', image_url: { url: `data:${mimeType || 'image/png'};base64,${base64}` } },
+            ],
+          },
+        ],
+      })
+      const content = res.choices?.[0]?.message?.content
+      if (!content) throw new Error('Empty vision response')
+      const usage = normalizeUsage(res.usage, system, userText, content)
+      const info = {
+        provider: 'OpenAI Vision',
+        model,
+        task: schemaName,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        cachedInputTokens: usage.cachedInputTokens,
+        totalTokens: usage.totalTokens,
+        durationMs: 0,
+        costUsd: estimateCallCostUsd(model, usage),
+      }
+      if (usageLog) usageLog.push(info)
+      return { result: extractJson(content), ...info }
+    } catch (err) {
+      errors.push(`OpenAI Vision: ${err.message}`)
+    }
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash'
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+      const gModel = genAI.getGenerativeModel({
+        model,
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+          maxOutputTokens: 800,
+        },
+      })
+      const prompt = `${system}${schemaText}\n\n${userText}`
+      const res = await gModel.generateContent([
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || 'image/png', data: base64 } },
+      ])
+      const text = res.response.text()
+      if (!text) throw new Error('Empty Gemini vision response')
+      const meta = res.response.usageMetadata || {}
+      const usage = normalizeUsage({
+        prompt_tokens: meta.promptTokenCount,
+        completion_tokens: meta.candidatesTokenCount,
+      }, system, userText, text)
+      const info = {
+        provider: 'Gemini Vision',
+        model,
+        task: schemaName,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        cachedInputTokens: usage.cachedInputTokens,
+        totalTokens: usage.totalTokens,
+        durationMs: 0,
+        costUsd: estimateCallCostUsd(model, usage),
+      }
+      if (usageLog) usageLog.push(info)
+      return { result: extractJson(content), ...info }
+    } catch (err) {
+      errors.push(`Gemini Vision: ${err.message}`)
+    }
+  }
+
+  throw new Error(`Vision analysis unavailable. ${errors.join(' | ') || 'Configure OPENAI_API_KEY or GEMINI_API_KEY.'}`)
+}
+
 export function getScoringEngineInfo() {
   return {
     name: 'JoBPilot ATS Score',

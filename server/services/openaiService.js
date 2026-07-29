@@ -762,3 +762,121 @@ Generate the complete resume JSON.`,
     { maxTokens: 5096 },
   )
 }
+
+const EXTRA_BULLET_SCHEMA = {
+  type: 'object',
+  properties: {
+    company: { type: 'string' },
+    bullets: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['company', 'bullets'],
+  additionalProperties: false,
+}
+
+/**
+ * Generate 1–2 JD-aligned experience bullets for a chat "add another bullet" request.
+ */
+export async function generateExtraExperienceBullets({
+  resumeData,
+  jdData,
+  company,
+  count = 1,
+  userMessage = '',
+} = {}) {
+  const exp = (resumeData?.experience || []).find(
+    (e) => String(e.company || '').toLowerCase() === String(company || '').toLowerCase(),
+  ) || resumeData?.experience?.[0]
+  if (!exp?.company) {
+    return { company: company || '', bullets: [] }
+  }
+
+  const n = Math.min(2, Math.max(1, Number(count) || 1))
+  try {
+    return await jsonCompletion(
+      `You write strong ATS resume bullets. Return JSON only.
+Rules:
+- Write EXACTLY ${n} NEW bullets for the given company/role.
+- Each bullet ~28–40 words, past tense, measurable when possible.
+- Align to the job description tools/responsibilities.
+- Do NOT repeat existing bullets (or near-paraphrases).
+- Do NOT mention other employers in these bullets.
+- Do NOT invent fake companies.`,
+      `User request: ${String(userMessage || '').slice(0, 400)}
+
+Target company: ${exp.company}
+Role: ${exp.title || 'Software Engineer'}
+Existing bullets:
+${(exp.bullets || []).slice(0, 8).map((b, i) => `${i + 1}. ${b}`).join('\n') || '(none)'}
+
+JD role: ${jdData?.roleTitle || ''}
+JD tools: ${(jdData?.toolsTechnologies || []).slice(0, 12).join(', ')}
+JD responsibilities: ${(jdData?.responsibilities || []).slice(0, 8).join(' | ')}
+Required skills: ${(jdData?.requiredSkills || []).slice(0, 12).join(', ')}
+
+Return {"company":"${exp.company}","bullets":[...]}`,
+      'extra_experience_bullets',
+      EXTRA_BULLET_SCHEMA,
+      { maxTokens: 700 },
+    )
+  } catch (err) {
+    console.warn('[AI] generateExtraExperienceBullets failed:', err.message)
+    return { company: exp.company, bullets: [] }
+  }
+}
+
+const SCREENSHOT_LAYOUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    issueCodes: {
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: [
+          'blank_page_gap',
+          'resume_gap_spacing',
+          'section_content_gap',
+          'indent_inconsistency',
+          'skills_mashed',
+          'extreme_indent',
+          'duplicate_bullet',
+          'wrong_company',
+          'garbled_bullet',
+          'general_enhancer',
+        ],
+      },
+    },
+    summary: { type: 'string' },
+    section: { type: 'string' },
+  },
+  required: ['issueCodes', 'summary'],
+  additionalProperties: false,
+}
+
+/**
+ * Analyze a user screenshot of a layout problem (gaps, indentation, duplicates).
+ */
+export async function analyzeLayoutScreenshot(imageBuffer, mimeType = 'image/png', userMessage = '') {
+  const { visionStructuredJSON } = await import('./aiProvider.js')
+  const { result } = await visionStructuredJSON(
+    `You analyze resume layout screenshots for the JoBPilot Resume Enhancer.
+Identify ONLY visible layout/content problems. Return JSON with issueCodes and a short summary.
+Codes:
+- blank_page_gap / resume_gap_spacing / section_content_gap: huge white space, blank pages, content pushed to bottom
+- indent_inconsistency / extreme_indent: bullets misaligned or shoved left/right
+- skills_mashed: skills categories run together
+- duplicate_bullet / wrong_company: same bullet under two employers
+- garbled_bullet: broken/truncated text
+- general_enhancer: other visible resume problem`,
+    `User note: ${String(userMessage || '(screenshot only)').slice(0, 500)}
+Describe what is wrong in this resume preview screenshot.`,
+    imageBuffer,
+    mimeType,
+    'layout_screenshot_analysis',
+    SCREENSHOT_LAYOUT_SCHEMA,
+  )
+  return {
+    issueCodes: Array.isArray(result?.issueCodes) ? result.issueCodes : ['general_enhancer'],
+    summary: String(result?.summary || 'Layout issue visible in screenshot').slice(0, 300),
+    section: String(result?.section || '').slice(0, 80),
+  }
+}

@@ -37,6 +37,91 @@ function isKeepLinesEnabled(tag) {
   return true
 }
 
+function getSpacingTwipsFromTag(tag) {
+  if (!tag) return { before: 0, after: 0 }
+  const after = /(?:^|\s)w:after="(\d+)"/.exec(tag)
+  const before = /(?:^|\s)w:before="(\d+)"/.exec(tag)
+  const afterLines = /w:afterLines="(\d+)"/.exec(tag)
+  const beforeLines = /w:beforeLines="(\d+)"/.exec(tag)
+  let a = after ? parseInt(after[1], 10) : 0
+  let b = before ? parseInt(before[1], 10) : 0
+  if (!after && afterLines) a = Math.round(parseInt(afterLines[1], 10) * 240)
+  if (!before && beforeLines) b = Math.round(parseInt(beforeLines[1], 10) * 240)
+  return { before: b, after: a }
+}
+
+function getParagraphSpacingTwips(para) {
+  const spacingTag = para.match(/<w:spacing\b[^/]*\/>/)?.[0] || ''
+  return getSpacingTwipsFromTag(spacingTag)
+}
+
+/**
+ * Detect huge vertical gaps between a section heading and its first content line.
+ * Catches the common "SUMMARY header at top, bullets at bottom of page" failure.
+ */
+export function findSectionContentGapDefects(xml) {
+  const defects = []
+  const paras = [...xml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map((m) => m[0])
+  const isSectionHeading = (plain) => plain.length > 0
+    && plain.length < 72
+    && /^(?:professional\s+)?(?:summary|profile|objective|experience|work experience|professional experience|education|skills|technical skills|certifications|projects)\b/i.test(plain)
+
+  for (let i = 0; i < paras.length - 1; i += 1) {
+    const plain = [...paras[i].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+    if (!isSectionHeading(plain)) continue
+
+    let spacerParas = 0
+    let firstContent = null
+    for (let j = i + 1; j < Math.min(i + 10, paras.length); j += 1) {
+      const p2 = [...paras[j].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+      const spacing = getParagraphSpacingTwips(paras[j])
+      if (!p2) {
+        if (spacing.before >= 120 || spacing.after >= 120) spacerParas += 1
+        continue
+      }
+      if (isSectionHeading(p2)) break
+      firstContent = { para: paras[j], spacing, index: j }
+      break
+    }
+
+    if (!firstContent) continue
+    const gapParas = firstContent.index - i - 1
+    if (gapParas >= 2 || spacerParas >= 1) {
+      defects.push({
+        code: 'section_content_gap',
+        severity: 'high',
+        message: `Large spacer chain after "${plain}" (${gapParas} empty paragraphs)`,
+      })
+    }
+    if (firstContent.spacing.before >= 360 || firstContent.spacing.after >= 360) {
+      defects.push({
+        code: 'section_content_gap',
+        severity: 'high',
+        message: `Oversized spacing after "${plain}" (before=${firstContent.spacing.before}, after=${firstContent.spacing.after})`,
+      })
+    }
+  }
+
+  // Tall table rows push content to bottom of page
+  for (const m of xml.matchAll(/<w:trHeight\b[^>]*w:val="(\d+)"[^/]*\/>/g)) {
+    const n = parseInt(m[1], 10)
+    if (n > 2400) {
+      defects.push({
+        code: 'tall_row',
+        severity: 'high',
+        message: `Very tall table row (${n} twips) — content may sit at page bottom`,
+      })
+    }
+  }
+
+  const seen = new Set()
+  return defects.filter((d) => {
+    if (seen.has(d.message)) return false
+    seen.add(d.message)
+    return true
+  })
+}
+
 /**
  * Detect empty / spacer paragraphs that create visible half-page or full-page gaps.
  */
@@ -49,23 +134,19 @@ export function findBlankGapDefects(xml) {
 
   for (const para of paras) {
     const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
-    const spacingTag = para.match(/<w:spacing\b[^/]*\/>/)?.[0] || ''
-    const after = /(?:^|\s)w:after="(\d+)"/.exec(spacingTag)
-    const before = /(?:^|\s)w:before="(\d+)"/.exec(spacingTag)
-    const a = after ? parseInt(after[1], 10) : 0
-    const b = before ? parseInt(before[1], 10) : 0
+    const { after: a, before: b } = getParagraphSpacingTwips(para)
 
     if (!plain) {
       emptyRun += 1
       // Require clearly large spacers — tiny empty paras are normal in Word
-      if (a >= 360 || b >= 360 || emptyRun >= 3) gapParas += 1
+      if (a >= 240 || b >= 240 || emptyRun >= 2) gapParas += 1
       continue
     }
     emptyRun = 0
 
     const isBullet = /w:numPr/.test(para) || /^[•\u2022\-–]/.test(plain)
-    if (isBullet && (a >= 360 || b >= 360)) largeContentSpacing += 1
-    else if (a >= 480 || b >= 480) largeContentSpacing += 1
+    if (isBullet && (a >= 240 || b >= 240)) largeContentSpacing += 1
+    else if (a >= 360 || b >= 360) largeContentSpacing += 1
   }
 
   if (gapParas > 0) {
@@ -245,13 +326,9 @@ export function findPaginationDefects(xml) {
 
   const hugeSpacing = []
   for (const m of xml.matchAll(/<w:spacing\b[^/]*\/>/g)) {
-    const tag = m[0]
-    const after = /(?:^|\s)w:after="(\d+)"/.exec(tag)
-    const before = /(?:^|\s)w:before="(\d+)"/.exec(tag)
-    const a = after ? parseInt(after[1], 10) : 0
-    const b = before ? parseInt(before[1], 10) : 0
-    // ~0.5 inch+ after/before is enough to look like a page gap on resumes
-    if (a >= 720 || b >= 720) hugeSpacing.push({ a, b, tag })
+    const { after: a, before: b } = getSpacingTwipsFromTag(m[0])
+    // ~0.35 inch+ after/before is enough to look like a page gap on resumes
+    if (a >= 480 || b >= 480) hugeSpacing.push({ a, b, tag: m[0] })
   }
   if (hugeSpacing.length) {
     defects.push({
@@ -283,6 +360,7 @@ export function findPaginationDefects(xml) {
   // Geometry traps: huge left margins / skinny columns / extreme indents
   defects.push(...findGeometryDefects(xml))
   defects.push(...findBlankGapDefects(xml))
+  defects.push(...findSectionContentGapDefects(xml))
   defects.push(...findIndentConsistencyDefects(xml))
 
   return defects
@@ -515,6 +593,7 @@ export function repairEnhancedResume(enhancedBuffer, qaResult) {
     'skills_mashed',
     'blank_page_gap',
     'resume_gap_spacing',
+    'section_content_gap',
     'indent_inconsistency',
   ].some((c) => codes.has(c))
 
@@ -557,9 +636,9 @@ function stripSoftSkillDumpPhrases(docxBuffer) {
  * Returns readyForDownload=true only when high-severity defects are gone.
  */
 export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resumeData, {
-  maxAttempts = 2,
+  maxAttempts = 3,
   rebuild = null,
-  maxRebuilds = 1,
+  maxRebuilds = 3,
   log = () => {},
 } = {}) {
   // Permanent: always run layout repair once after enhance — do not wait for QA failure.

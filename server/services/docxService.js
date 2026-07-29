@@ -541,6 +541,66 @@ function forceSafePaginationOnAllParagraphs(xml) {
 }
 
 /**
+ * Collapse spacer chains and huge before-spacing after section headings.
+ * Fixes "SUMMARY at top, bullets at bottom of page" across many resume templates.
+ */
+function repairSectionContentGaps(xml) {
+  if (!xml) return xml
+  const paraRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
+  const paras = []
+  let m
+  while ((m = paraRe.exec(xml))) {
+    paras.push({ start: m.index, end: m.index + m[0].length, xml: m[0] })
+  }
+  if (!paras.length) return xml
+
+  const isSectionHeading = (plain) => plain.length > 0
+    && plain.length < 72
+    && /^(?:professional\s+)?(?:summary|profile|objective|experience|work experience|professional experience|education|skills|technical skills|certifications|projects)\b/i.test(plain)
+
+  const toRemove = new Set()
+  const replacements = new Map()
+
+  for (let i = 0; i < paras.length - 1; i += 1) {
+    const plain = getPlainTextFromParagraph(paras[i].xml).trim()
+    if (!isSectionHeading(plain)) continue
+
+    let j = i + 1
+    while (j < paras.length) {
+      const p2plain = getPlainTextFromParagraph(paras[j].xml).trim()
+      const spacing = getParagraphSpacingMetrics(paras[j].xml)
+      if (!p2plain) {
+        toRemove.add(j)
+        j += 1
+        continue
+      }
+      if (isSectionHeading(p2plain)) break
+
+      if (spacing.before > 80 || spacing.after > 80) {
+        const fixed = paras[j].xml.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/, (pPr) => {
+          return sanitizeParagraphPPr(pPr, { isBullet: /w:numPr/.test(paras[j].xml) })
+        })
+        if (fixed !== paras[j].xml) replacements.set(j, fixed)
+      }
+      break
+    }
+  }
+
+  if (!toRemove.size && !replacements.size) return xml
+
+  let out = ''
+  let cursor = 0
+  for (let i = 0; i < paras.length; i += 1) {
+    if (toRemove.has(i)) continue
+    out += xml.slice(cursor, paras[i].start)
+    out += replacements.get(i) || paras[i].xml
+    cursor = paras[i].end
+  }
+  out += xml.slice(cursor)
+  return out
+}
+
+/**
  * Document-wide pass: stop Word from leaving blank pages after enhance inserts.
  */
 function sanitizeDocumentPagination(xml) {
@@ -572,11 +632,13 @@ function sanitizeDocumentPagination(xml) {
   // Nuclear: every paragraph gets explicit keepNext/keepLines off
   out = forceSafePaginationOnAllParagraphs(out)
 
+  out = repairSectionContentGaps(out)
+
   out = out.replace(/<w:cantSplit\b[^/]*\/>/g, '')
   out = out.replace(/<w:cantSplit\b[\s\S]*?<\/w:cantSplit>/g, '')
   out = out.replace(/<w:trHeight\b[^>]*w:val="(\d+)"[^/]*\/>/g, (tag, val) => {
     const n = parseInt(val, 10)
-    if (n > 600) return '<w:trHeight w:val="0" w:hRule="auto"/>'
+    if (n > 1200) return '<w:trHeight w:val="0" w:hRule="auto"/>'
     return tag
   })
   out = out.replace(/<w:framePr\b[^/]*\/>/g, '')
@@ -1838,13 +1900,20 @@ function getParagraphSpacingMetrics(chunkOrPPr) {
   const src = chunkOrPPr || ''
   const pPrMatch = src.includes('<w:pPr') ? src.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/) : null
   const pPr = pPrMatch ? pPrMatch[0] : src
-  const after = /w:after(?:Lines)?="(\d+)"/.exec(pPr)
-  const before = /w:before(?:Lines)?="(\d+)"/.exec(pPr)
-  const line = /w:line="(\d+)"/.exec(pPr)
-  const lineRule = /w:lineRule="([^"]+)"/.exec(pPr)
+  const spacingTag = pPr.match(/<w:spacing\b[^/]*\/>/)?.[0] || pPr
+  const after = /w:after="(\d+)"/.exec(spacingTag)
+  const before = /w:before="(\d+)"/.exec(spacingTag)
+  const afterLines = /w:afterLines="(\d+)"/.exec(spacingTag)
+  const beforeLines = /w:beforeLines="(\d+)"/.exec(spacingTag)
+  const line = /w:line="(\d+)"/.exec(spacingTag)
+  const lineRule = /w:lineRule="([^"]+)"/.exec(spacingTag)
+  let a = after ? parseInt(after[1], 10) : 0
+  let b = before ? parseInt(before[1], 10) : 0
+  if (!after && afterLines) a = Math.round(parseInt(afterLines[1], 10) * 240)
+  if (!before && beforeLines) b = Math.round(parseInt(beforeLines[1], 10) * 240)
   return {
-    after: after ? parseInt(after[1], 10) : 0,
-    before: before ? parseInt(before[1], 10) : 0,
+    after: a,
+    before: b,
     line: line ? parseInt(line[1], 10) : null,
     lineRule: lineRule ? lineRule[1] : null,
   }
@@ -3121,6 +3190,175 @@ export function ensureAggressiveJdCoverage(plan, resumeData, jdData, comparison)
   next.experienceAdditions = next.experienceAdditions.filter((e) => e.company && e.bullets?.length)
   next.skillsToAdd = [...new Set(next.skillsByCategory.flatMap((e) => e.skills || []))]
   return dedupeExperienceAdditionsAcrossCompanies(next, resumeData)
+}
+
+/**
+ * Add 1–N new experience bullets for a target company (chat: "add one more bullet").
+ * Prefers LLM-provided candidates when given; otherwise builds JD-aligned templates.
+ */
+export function addExperienceBulletsToPlan(plan, resumeData, jdData, {
+  companyHint = null,
+  count = 1,
+  candidateBullets = [],
+} = {}) {
+  const companies = resumeData?.experience || []
+  if (!companies.length) return { plan, added: [], company: null }
+
+  const hintNorm = normalizeText(companyHint || '')
+  let target = companies[0]
+  if (hintNorm) {
+    const hit = companies.find((c) => {
+      const name = normalizeText(c.company)
+      return name.includes(hintNorm) || hintNorm.includes(name)
+        || companySearchTerms(c.company).some((t) => hintNorm.includes(normalizeText(t)))
+    })
+    if (hit) target = hit
+  }
+
+  const companyNames = companies.map((c) => c.company).filter(Boolean)
+  const next = {
+    ...plan,
+    experienceAdditions: (plan?.experienceAdditions || []).map((e) => ({
+      company: e.company,
+      bullets: [...(e.bullets || [])],
+    })),
+    bulletRewrites: [...(plan?.bulletRewrites || [])],
+    summaryBullets: [...(plan?.summaryBullets || [])],
+    skillsByCategory: (plan?.skillsByCategory || []).map((e) => ({
+      category: e.category,
+      skills: [...(e.skills || [])],
+    })),
+    skillsToAdd: [...(plan?.skillsToAdd || [])],
+  }
+
+  let entry = next.experienceAdditions.find((e) => companyKeysMatch(e.company, target.company))
+  if (!entry) {
+    entry = { company: target.company, bullets: [] }
+    next.experienceAdditions.push(entry)
+  }
+
+  const allExisting = [
+    ...(resumeData?.summaryBullets || []),
+    ...companies.flatMap((e) => e.bullets || []),
+    ...next.experienceAdditions.flatMap((e) => e.bullets || []),
+    ...next.bulletRewrites.map((r) => r.replacement || ''),
+  ]
+
+  const responsibilities = (jdData?.responsibilities || [])
+    .map((r) => String(r || '').trim())
+    .filter((r) => r.length > 12)
+  const tools = [
+    ...(jdData?.toolsTechnologies || []),
+    ...(jdData?.requiredSkills || []),
+    ...extractKnownToolsFromText(JSON.stringify(jdData || {})),
+  ]
+    .map((s) => String(s || '').trim())
+    .filter((s) => isValidSkillName(s))
+  const toolPool = [...new Set(tools)].length
+    ? [...new Set(tools)]
+    : ['Python', 'SQL', 'Jira']
+
+  const named = String(target.bullets?.[0] || '')
+    .match(/\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\s+(?:App|Application|System|Platform|Portal|Suite|Module|ERP|CRM))\b/)
+  const projectHint = named?.[1]
+    || String(target.bullets?.[0] || '')
+      .split(/[,.]/)
+      .map((p) => p.trim())
+      .find((p) => p.length > 18 && p.length < 70)
+    || `${target.company} delivery initiatives`
+
+  const templates = [
+    ...candidateBullets.map((b) => clampBulletLength(b)).filter(Boolean),
+    clampBulletLength(
+      `Delivered ${((responsibilities[entry.bullets.length] || responsibilities[0] || 'cross-functional delivery outcomes').replace(/^(to\s+|and\s+)/i, '').slice(0, 58))} on ${projectHint} using ${toolPool[0]} and ${toolPool[1] || toolPool[0]}, improving release confidence.`,
+    ),
+    clampBulletLength(
+      `Partnered with stakeholders on ${projectHint} to advance requirements validation with ${toolPool[2] || toolPool[0]}, cutting rework by 15%.`,
+    ),
+    clampBulletLength(
+      `Owned end-to-end validation for ${projectHint} using ${toolPool[0]}, documenting acceptance criteria and accelerating handoffs.`,
+    ),
+  ]
+
+  const want = Math.min(3, Math.max(1, Number(count) || 1))
+  const added = []
+  const hardCap = 4 // allow one over the normal plan cap for explicit user requests
+
+  for (const bullet of templates) {
+    if (added.length >= want) break
+    if (entry.bullets.length >= hardCap) break
+    if (!bullet || isDuplicateBullet(bullet, [...allExisting, ...added])) continue
+    if (bulletClaimsOtherCompany(bullet, target.company, companyNames)) continue
+    entry.bullets.push(bullet)
+    allExisting.push(bullet)
+    added.push(bullet)
+  }
+
+  next.experienceAdditions = next.experienceAdditions.filter((e) => e.company && e.bullets?.length)
+  const cleaned = dedupeExperienceAdditionsAcrossCompanies(next, resumeData)
+  return { plan: cleaned, added, company: target.company }
+}
+
+/**
+ * Add missing hard skills into the plan when the user asks for more skills.
+ */
+export function addSkillsToPlan(plan, resumeData, jdData, { count = 2 } = {}) {
+  const next = {
+    ...plan,
+    skillsByCategory: (plan?.skillsByCategory || []).map((e) => ({
+      category: e.category,
+      skills: [...(e.skills || [])],
+    })),
+    skillsToAdd: [...(plan?.skillsToAdd || [])],
+    experienceAdditions: (plan?.experienceAdditions || []).map((e) => ({
+      company: e.company,
+      bullets: [...(e.bullets || [])],
+    })),
+    bulletRewrites: [...(plan?.bulletRewrites || [])],
+    summaryBullets: [...(plan?.summaryBullets || [])],
+  }
+
+  const existing = new Set([
+    ...(resumeData?.skills || []),
+    ...(resumeData?.technicalSkills || []),
+    ...next.skillsToAdd,
+    ...next.skillsByCategory.flatMap((e) => e.skills || []),
+  ].map((s) => normalizeText(s)))
+
+  const candidates = [
+    ...(jdData?.toolsTechnologies || []),
+    ...(jdData?.requiredSkills || []),
+    ...(jdData?.preferredSkills || []),
+    ...extractKnownToolsFromText(JSON.stringify(jdData || {})),
+  ]
+    .map((s) => String(s || '').trim())
+    .filter((s) => isValidSkillName(s) && !existing.has(normalizeText(s)))
+
+  const want = Math.min(5, Math.max(1, Number(count) || 2))
+  const added = []
+  const realCats = [...(resumeData?.headings || []), ...(resumeData?.allSections || [])]
+    .filter((h) => h && !isSkillsSectionTitle(h))
+  const defaultCat = realCats.find((h) => /tool|platform|skill|technolog/i.test(h))
+    || realCats[0]
+    || 'Tools & Platforms'
+  let bucket = next.skillsByCategory.find(
+    (e) => normalizeText(e.category) === normalizeText(defaultCat),
+  )
+  if (!bucket) {
+    bucket = { category: defaultCat, skills: [] }
+    next.skillsByCategory.push(bucket)
+  }
+
+  for (const skill of candidates) {
+    if (added.length >= want) break
+    bucket.skills.push(skill)
+    next.skillsToAdd.push(skill)
+    existing.add(normalizeText(skill))
+    added.push(skill)
+  }
+
+  next.skillsToAdd = [...new Set(next.skillsToAdd)]
+  return { plan: next, added }
 }
 
 export function buildMatchAnalysis(beforeComparison, afterComparison, applied, processingMeta = null) {

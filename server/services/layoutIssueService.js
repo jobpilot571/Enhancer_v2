@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import PizZip from 'pizzip'
 import {
   getSession,
@@ -15,12 +16,45 @@ import {
   mergeExperienceAdditions,
   dedupeExperienceAdditionsAcrossCompanies,
   bulletClaimsOtherCompany,
+  addExperienceBulletsToPlan,
+  addSkillsToPlan,
 } from './docxService.js'
+import { generateExtraExperienceBullets, analyzeLayoutScreenshot } from './openaiService.js'
+
+function bufferFingerprint(buf) {
+  if (!buf?.length) return 'empty'
+  return crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16)
+}
+
+function mergeVisionClassification(base, vision) {
+  const codes = [...new Set([
+    ...(vision?.issueCodes || []),
+    ...(base?.codes || []),
+  ])]
+  const needsAdd = codes.includes('add_bullet') || codes.includes('add_skill')
+  const needsContent = codes.some((c) => CONTENT_CODES.has(c))
+  const needsLayout = codes.some((c) => LAYOUT_CODES.has(c))
+    || ['section_content_gap', 'blank_page_gap', 'resume_gap_spacing'].some((c) => codes.includes(c))
+  let strategy = 'full_rebuild'
+  if (needsAdd) strategy = 'content_add'
+  else if (needsContent && needsLayout) strategy = 'full_rebuild'
+  else if (needsContent) strategy = 'content_rebuild'
+  else if (needsLayout) strategy = 'full_rebuild' // screenshots of gaps always rebuild
+
+  return {
+    codes: codes.length ? codes : ['blank_page_gap'],
+    focus: codes[0] || 'blank_page_gap',
+    summary: vision?.summary || base?.summary || 'Screenshot layout issue',
+    strategy,
+    visionSection: vision?.section || null,
+  }
+}
 
 /** Layout-only defect codes (spacing / indent / pages). */
 const LAYOUT_CODES = new Set([
   'blank_page_gap',
   'resume_gap_spacing',
+  'section_content_gap',
   'indent_inconsistency',
   'skills_mashed',
   'extreme_indent',
@@ -39,9 +73,43 @@ const CONTENT_CODES = new Set([
   'highlight_issue',
   'download_locked',
   'general_enhancer',
+  'add_bullet',
+  'add_skill',
 ])
 
 const ISSUE_HINTS = [
+  {
+    id: 'add_bullet',
+    keys: [
+      'add one more bullet',
+      'add another bullet',
+      'add a bullet',
+      'add more bullet',
+      'add bullet',
+      'one more bullet',
+      'another bullet',
+      'extra bullet',
+      'new bullet',
+      'add one bullet',
+      'can you add one more bullet',
+      'please add a bullet',
+      'add two bullets',
+      'add more bullets',
+    ],
+  },
+  {
+    id: 'add_skill',
+    keys: [
+      'add skill',
+      'add a skill',
+      'add more skill',
+      'add more skills',
+      'another skill',
+      'extra skill',
+      'missing skill',
+      'add tools',
+    ],
+  },
   { id: 'blank_page_gap', keys: ['blank page', 'empty page', 'full page', 'white space page', 'page gap'] },
   { id: 'resume_gap_spacing', keys: ['gap', 'spacing', 'huge space', 'half page', 'whitespace', 'white space'] },
   { id: 'indent_inconsistency', keys: ['indent', 'indentation', 'alignment', 'bullet align', 'stagger', 'misaligned'] },
@@ -126,8 +194,6 @@ const ISSUE_HINTS = [
       'bad skill',
       'skill not',
       'skills wrong',
-      'added skill',
-      'extra skill',
       'fake skill',
       'incorrect skill',
     ],
@@ -146,6 +212,26 @@ const ISSUE_HINTS = [
   },
 ]
 
+function parseAddCount(message = '') {
+  const text = String(message || '').toLowerCase()
+  const m = text.match(/\b(one|two|three|1|2|3)\b/)
+  if (!m) return 1
+  const map = { one: 1, two: 2, three: 3, 1: 1, 2: 2, 3: 3 }
+  return map[m[1]] || 1
+}
+
+function resolveCompanyHint(message, resumeData) {
+  const text = String(message || '').toLowerCase()
+  for (const exp of resumeData?.experience || []) {
+    const company = String(exp.company || '').trim()
+    if (!company) continue
+    if (text.includes(company.toLowerCase())) return company
+    const token = company.split(/[\s,.|•]+/)[0]
+    if (token.length > 4 && text.includes(token.toLowerCase())) return company
+  }
+  return null
+}
+
 function isGarbledBullet(text) {
   const t = String(text || '').trim()
   if (!t) return true
@@ -153,7 +239,6 @@ function isGarbledBullet(text) {
   if (/\bdelivered\s+Lead\b/.test(t)) return true
   if (/\s(?:on|for|and|with|the|to|of|a|an|by)\s*$/i.test(t)) return true
   if (/[a-z]\s+[A-Z][a-z]+\s+[a-z]{1,4}\s*$/.test(t) && t.length < 150) return true
-  // Mid-phrase splice: "... architecture for ent on Worked ..."
   if (/\bfor\s+[a-z]{2,4}\s+on\s+[A-Z]/.test(t)) return true
   return false
 }
@@ -165,7 +250,23 @@ function isGarbledBullet(text) {
 export function classifyEnhancerIssue(message = '') {
   const text = String(message || '').toLowerCase()
   const matched = []
+
+  // Flexible add-bullet / add-skill patterns (beyond exact phrase lists)
+  if (
+    /\b(add|include|insert|put)\b[\s\w]{0,24}\b(bullet|bullets)\b/.test(text)
+    || /\b(one more|another|extra|new)\s+bullet\b/.test(text)
+  ) {
+    matched.push('add_bullet')
+  }
+  if (
+    /\b(add|include|insert)\b[\s\w]{0,24}\b(skill|skills|tool|tools)\b/.test(text)
+    || /\b(one more|another|extra|more)\s+skills?\b/.test(text)
+  ) {
+    matched.push('add_skill')
+  }
+
   for (const hint of ISSUE_HINTS) {
+    if (matched.includes(hint.id)) continue
     if (hint.keys.some((k) => text.includes(k))) matched.push(hint.id)
   }
 
@@ -178,10 +279,12 @@ export function classifyEnhancerIssue(message = '') {
     }
   }
 
+  const needsAdd = matched.includes('add_bullet') || matched.includes('add_skill')
   const needsContent = matched.some((c) => CONTENT_CODES.has(c))
   const needsLayout = matched.some((c) => LAYOUT_CODES.has(c))
   let strategy = 'full_rebuild'
-  if (needsContent && needsLayout) strategy = 'full_rebuild'
+  if (needsAdd) strategy = 'content_add'
+  else if (needsContent && needsLayout) strategy = 'full_rebuild'
   else if (needsContent) strategy = 'content_rebuild'
   else if (needsLayout) strategy = 'layout_repair'
 
@@ -266,9 +369,14 @@ export function sanitizePlanForContentFix(plan, resumeData) {
   return next
 }
 
-function replyForSuccess(classification, { usedUploadedDocx, evidence }) {
+function replyForSuccess(classification, { usedUploadedDocx, evidence, actionDetail = null }) {
   const focus = classification.focus
   const baseByFocus = {
+    add_bullet: actionDetail
+      || 'Added a new experience bullet and re-verified layout.',
+    add_skill: actionDetail
+      || 'Added missing skills and re-verified layout.',
+    section_content_gap: 'Removed spacer chains and tightened spacing after section headings.',
     duplicate_bullet: 'Removed duplicate bullets and re-checked the resume.',
     wrong_company: 'Moved/removed bullets that were under the wrong company and re-checked.',
     garbled_bullet: 'Dropped broken/garbled bullets and rebuilt a cleaner enhanced resume.',
@@ -287,12 +395,13 @@ function replyForSuccess(classification, { usedUploadedDocx, evidence }) {
     + (evidence && !usedUploadedDocx ? ' Screenshot/file saved with this report.' : '')
 }
 
-function replyForFailure(classification, finalQa, { evidence }) {
+function replyForFailure(classification, finalQa, { evidence, actionDetail = null }) {
   const highs = finalQa.defects.filter((d) => d.severity === 'high').map((d) => d.code)
-  return `I attempted “${classification.summary}”, but high-severity layout checks still fail`
+  const prefix = actionDetail ? `${actionDetail} ` : ''
+  return `${prefix}I attempted “${classification.summary}”, but high-severity layout checks still fail`
     + `${highs.length ? `: ${highs.join(', ')}` : ''}. `
     + `Preview was updated with the latest repair attempt. Describe the exact problem `
-    + `(duplicate bullet, blank page, skills indent, garbled text, wrong company) or re-enhance and report again.`
+    + `(add one more bullet, duplicate bullet, blank page, skills indent, garbled text) or re-enhance and report again.`
     + (evidence ? ' Your screenshot/file was saved for follow-up.' : '')
 }
 
@@ -313,11 +422,52 @@ export async function fixReportedLayoutIssue({
     throw err
   }
 
-  const classification = classifyEnhancerIssue(message)
+  const isImageEvidence = Boolean(
+    evidenceFile?.buffer?.length
+    && String(evidenceFile.mimetype || '').startsWith('image/'),
+  )
+  const genericEvidenceMessage = !String(message || '').trim()
+    || /^enhancer issue from uploaded evidence$/i.test(String(message).trim())
+
+  let visionResult = null
+  if (isImageEvidence) {
+    log('enhancer-fix: analyzing screenshot with vision')
+    try {
+      visionResult = await analyzeLayoutScreenshot(
+        evidenceFile.buffer,
+        evidenceFile.mimetype || 'image/png',
+        genericEvidenceMessage ? '' : message,
+      )
+      log(`enhancer-fix: vision → ${visionResult.issueCodes.join(', ')} — ${visionResult.summary}`)
+    } catch (err) {
+      log(`enhancer-fix: vision unavailable (${err.message}) — using layout rebuild fallback`)
+      visionResult = {
+        issueCodes: ['blank_page_gap', 'section_content_gap'],
+        summary: 'Screenshot attached — applying gap/spacing repair (vision unavailable)',
+        section: '',
+      }
+    }
+  }
+
+  let classification = classifyEnhancerIssue(message)
+  if (visionResult) {
+    classification = mergeVisionClassification(classification, visionResult)
+  } else if (isImageEvidence && genericEvidenceMessage) {
+    classification = {
+      codes: ['blank_page_gap', 'section_content_gap'],
+      focus: 'blank_page_gap',
+      summary: 'Screenshot layout issue (gaps/spacing)',
+      strategy: 'full_rebuild',
+    }
+  }
+
   const evidence = saveEvidence(sessionId, evidenceFile)
   const reports = Array.isArray(session.layoutIssueReports) ? [...session.layoutIssueReports] : []
   const strategy = classification.strategy || 'full_rebuild'
-  const needsRebuild = strategy === 'content_rebuild' || strategy === 'full_rebuild'
+  const needsRebuild = strategy === 'content_rebuild'
+    || strategy === 'full_rebuild'
+    || strategy === 'content_add'
+    || isImageEvidence
 
   const sourcePath = session.enhancedPreviewPath || session.enhancedPath || session.originalPath
   if (!sourcePath || !fs.existsSync(sourcePath)) {
@@ -327,6 +477,7 @@ export async function fixReportedLayoutIssue({
   }
 
   let workingBuffer = readFile(sourcePath)
+  const beforeFingerprint = bufferFingerprint(workingBuffer)
   let usedUploadedDocx = false
   if (evidenceFile?.originalname?.toLowerCase().endsWith('.docx')) {
     workingBuffer = evidenceFile.buffer
@@ -338,11 +489,63 @@ export async function fixReportedLayoutIssue({
     ? readFile(session.originalPath)
     : workingBuffer
   const resumeData = session.resumeData || null
-  let plan = session.enhancementPlan || null
+  const jdData = session.jdData || null
+  let plan = session.enhancementPlan || {
+    summaryBullets: [],
+    experienceAdditions: [],
+    bulletRewrites: [],
+    skillsByCategory: [],
+    skillsToAdd: [],
+  }
+  let actionDetail = null
 
   log(`enhancer-fix: ${classification.summary} [${strategy}]`)
 
-  if (needsRebuild && plan && resumeData) {
+  if (strategy === 'content_add' && resumeData) {
+    const count = parseAddCount(message)
+    if (classification.codes.includes('add_bullet')) {
+      const companyHint = resolveCompanyHint(message, resumeData)
+      let candidateBullets = []
+      try {
+        const generated = await generateExtraExperienceBullets({
+          resumeData,
+          jdData,
+          company: companyHint || resumeData.experience?.[0]?.company,
+          count,
+          userMessage: message,
+        })
+        candidateBullets = generated?.bullets || []
+      } catch (err) {
+        log(`enhancer-fix: LLM bullet generation skipped (${err.message})`)
+      }
+      const result = addExperienceBulletsToPlan(plan, resumeData, jdData, {
+        companyHint,
+        count,
+        candidateBullets,
+      })
+      plan = sanitizePlanForContentFix(result.plan, resumeData) || result.plan
+      actionDetail = result.added.length
+        ? `Added ${result.added.length} new bullet${result.added.length > 1 ? 's' : ''} under ${result.company}.`
+        : `Could not invent a unique new bullet for ${result.company || 'that company'} (may already be at the limit).`
+      log(`enhancer-fix: ${actionDetail}`)
+    }
+    if (classification.codes.includes('add_skill')) {
+      const skillResult = addSkillsToPlan(plan, resumeData, jdData, { count: Math.max(2, count) })
+      plan = skillResult.plan
+      const skillNote = skillResult.added.length
+        ? `Added skills: ${skillResult.added.join(', ')}.`
+        : 'No additional JD skills were available to add.'
+      actionDetail = actionDetail ? `${actionDetail} ${skillNote}` : skillNote
+      log(`enhancer-fix: ${skillNote}`)
+    }
+    updateSession(sessionId, { enhancementPlan: plan })
+    log('enhancer-fix: rebuilding from original after content add')
+    const rebuilt = patchDocx(originalBuffer, plan, {
+      highlight: true,
+      resumeData,
+    })
+    workingBuffer = rebuilt.buffer
+  } else if (needsRebuild && resumeData) {
     plan = sanitizePlanForContentFix(plan, resumeData)
     updateSession(sessionId, { enhancementPlan: plan })
     log('enhancer-fix: rebuilding from original + sanitized enhancement plan')
@@ -351,8 +554,14 @@ export async function fixReportedLayoutIssue({
       resumeData,
     })
     workingBuffer = rebuilt.buffer
-  } else if (needsRebuild && !plan) {
-    log('enhancer-fix: no stored plan — applying layout repair only')
+  } else if (needsRebuild && !resumeData) {
+    log('enhancer-fix: no resume data — applying layout repair only')
+  }
+
+  // Screenshot or gap report: always run layout repair before QA even if no plan rebuild
+  if (isImageEvidence || classification.codes.some((c) => LAYOUT_CODES.has(c) || c === 'section_content_gap')) {
+    workingBuffer = repairDocxLayout(workingBuffer)
+    log('enhancer-fix: applied layout repair after screenshot/gap classification')
   }
 
   let qaResult = ensureEnhancedResumeQuality(
@@ -360,9 +569,9 @@ export async function fixReportedLayoutIssue({
     workingBuffer,
     resumeData,
     {
-      maxAttempts: 2,
-      maxRebuilds: plan && strategy === 'layout_repair' ? 1 : 0,
-      rebuild: plan
+      maxAttempts: 3,
+      maxRebuilds: isImageEvidence ? 2 : 1,
+      rebuild: plan && resumeData
         ? () => {
           log('enhancer-fix: QA rebuild from original + sanitized plan')
           const cleanPlan = sanitizePlanForContentFix(plan, resumeData) || plan
@@ -377,8 +586,7 @@ export async function fixReportedLayoutIssue({
     },
   )
 
-  // Layout-focused (or still failing after content rebuild): extra deterministic pass
-  if (!qaResult.readyForDownload && (strategy === 'layout_repair' || strategy === 'full_rebuild')) {
+  if (!qaResult.readyForDownload) {
     log('enhancer-fix: extra repairDocxLayout pass')
     const extra = repairDocxLayout(qaResult.buffer)
     qaResult = ensureEnhancedResumeQuality(originalBuffer, extra, resumeData, {
@@ -389,6 +597,8 @@ export async function fixReportedLayoutIssue({
   }
 
   const previewBuffer = qaResult.buffer
+  const afterFingerprint = bufferFingerprint(previewBuffer)
+  const fileChanged = beforeFingerprint !== afterFingerprint
   let downloadBuffer = stripHighlights(previewBuffer)
   const finalQa = qaEnhancedResume(originalBuffer, downloadBuffer, resumeData)
   const readyForDownload = Boolean(qaResult.readyForDownload && finalQa.ok)
@@ -427,9 +637,22 @@ export async function fixReportedLayoutIssue({
     ],
   }
 
-  const reply = readyForDownload
-    ? replyForSuccess(classification, { usedUploadedDocx, evidence })
-    : replyForFailure(classification, finalQa, { evidence })
+  let reply
+  if (readyForDownload) {
+    if (isImageEvidence && !fileChanged) {
+      reply = `Analyzed your screenshot (${classification.summary}). Layout checks pass on the file, but the preview may still look wrong — describe the section in text (e.g. "huge gap after SUMMARY") or re-enhance.`
+    } else {
+      reply = replyForSuccess(classification, { usedUploadedDocx, evidence, actionDetail })
+      if (isImageEvidence && visionResult?.summary) {
+        reply = `Screenshot: ${visionResult.summary}. ${reply}`
+      }
+    }
+  } else {
+    reply = replyForFailure(classification, finalQa, { evidence, actionDetail })
+    if (isImageEvidence && visionResult?.summary) {
+      reply = `Screenshot: ${visionResult.summary}. ${reply}`
+    }
+  }
 
   const report = {
     at: new Date().toISOString(),

@@ -209,11 +209,15 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       patchedPreview,
       resumeData,
       {
-        maxAttempts: 2,
-        maxRebuilds: 1,
+        maxAttempts: 3,
+        maxRebuilds: 3,
         rebuild: () => {
-          log(jobId, 'qa rebuild: re-patching DOCX from original')
-          const { buffer: rebuilt } = patchDocx(originalBuffer, enhancementPlan, {
+          log(jobId, 'qa rebuild: re-patching DOCX from original (sanitized plan)')
+          const cleanPlan = dedupeExperienceAdditionsAcrossCompanies(
+            mergeExperienceAdditions(enhancementPlan, resumeData),
+            resumeData,
+          )
+          const { buffer: rebuilt } = patchDocx(originalBuffer, cleanPlan, {
             highlight: true,
             resumeData,
           })
@@ -235,8 +239,19 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
 
     // Final verify after highlight strip — repair again if needed, but never abort the job
     const finalQa = ensureEnhancedResumeQuality(originalBuffer, downloadBuffer, resumeData, {
-      maxAttempts: 1,
-      maxRebuilds: 0,
+      maxAttempts: 2,
+      maxRebuilds: 1,
+      rebuild: () => {
+        const cleanPlan = dedupeExperienceAdditionsAcrossCompanies(
+          mergeExperienceAdditions(enhancementPlan, resumeData),
+          resumeData,
+        )
+        const { buffer: rebuilt } = patchDocx(originalBuffer, cleanPlan, {
+          highlight: true,
+          resumeData,
+        })
+        return rebuilt
+      },
       log: (msg) => log(jobId, `final-${msg}`),
     })
     downloadBuffer = finalQa.buffer

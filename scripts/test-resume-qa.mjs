@@ -5,9 +5,10 @@ import {
   findPaginationDefects,
   findGeometryDefects,
   findBlankGapDefects,
+  findSectionContentGapDefects,
   findIndentConsistencyDefects,
 } from '../server/services/resumeQaService.js'
-import { patchDocx, normalizeDocxGeometry } from '../server/services/docxService.js'
+import { patchDocx, normalizeDocxGeometry, repairDocxLayout } from '../server/services/docxService.js'
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed')
@@ -300,6 +301,20 @@ const gapHeavy = [
 ].join('')
 const gapXmlDoc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${gapHeavy}</w:body></w:document>`
 assert(findBlankGapDefects(gapXmlDoc).some((d) => d.code === 'blank_page_gap'), 'detects blank page gap spacers')
+
+const sectionGapBody = [
+  '<w:p><w:r><w:t>ARPITHA REDDY SUNKETA</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>SUMMARY</w:t></w:r></w:p>',
+  '<w:p><w:pPr><w:spacing w:before="0" w:after="4800"/></w:pPr><w:r><w:t></w:t></w:r></w:p>',
+  '<w:p><w:pPr><w:spacing w:before="0" w:after="4800"/></w:pPr><w:r><w:t></w:t></w:r></w:p>',
+  bullet('Business Analyst with 5 plus years of experience across insurance and financial services.'),
+].join('')
+const sectionGapXml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${sectionGapBody}</w:body></w:document>`
+assert(findSectionContentGapDefects(sectionGapXml).some((d) => d.code === 'section_content_gap'), 'detects section heading gap')
+const sectionGapBuf = makeDocx(sectionGapBody)
+const sectionGapRepaired = repairDocxLayout(sectionGapBuf)
+const sectionGapOut = new PizZip(sectionGapRepaired).file('word/document.xml').asText()
+assert(!findSectionContentGapDefects(sectionGapOut).some((d) => d.code === 'section_content_gap'), 'section gap repaired')
 
 const staggerBody = [
   '<w:p><w:r><w:t>Test User</w:t></w:r></w:p>',
