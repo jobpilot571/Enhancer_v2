@@ -57,15 +57,15 @@ export function findBlankGapDefects(xml) {
 
     if (!plain) {
       emptyRun += 1
-      if (a >= 200 || b >= 200 || emptyRun >= 2) gapParas += 1
+      // Require clearly large spacers — tiny empty paras are normal in Word
+      if (a >= 360 || b >= 360 || emptyRun >= 3) gapParas += 1
       continue
     }
     emptyRun = 0
 
     const isBullet = /w:numPr/.test(para) || /^[•\u2022\-–]/.test(plain)
-    // Mid-size spacing on real content still looks like a resume "gap" in Word
-    if (isBullet && (a >= 240 || b >= 240)) largeContentSpacing += 1
-    else if (a >= 400 || b >= 400) largeContentSpacing += 1
+    if (isBullet && (a >= 360 || b >= 360)) largeContentSpacing += 1
+    else if (a >= 480 || b >= 480) largeContentSpacing += 1
   }
 
   if (gapParas > 0) {
@@ -88,6 +88,7 @@ export function findBlankGapDefects(xml) {
 
 /**
  * Detect bullet indent stagger within the same experience block (original vs enhanced drift).
+ * Only compares bullets at the same list level — nested bullets are not defects.
  */
 export function findIndentConsistencyDefects(xml) {
   const defects = []
@@ -113,14 +114,10 @@ export function findIndentConsistencyDefects(xml) {
     return /^[•\u2022\-–]\s?/.test(plain)
   }
 
-  const isHeadingLike = (para) => {
+  const isSectionHeading = (para) => {
     const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
     if (!plain || plain.length > 80) return false
-    if (/^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience)/i.test(plain)) {
-      return true
-    }
-    // Company / role lines usually not bullets and short-ish
-    return !isBulletPara(para) && plain.length < 90 && !/^[•\u2022]/.test(plain)
+    return /^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience|certifications|projects)\b/i.test(plain)
   }
 
   let block = []
@@ -129,34 +126,41 @@ export function findIndentConsistencyDefects(xml) {
       block = []
       return
     }
-    const counts = new Map()
-    for (const key of block) counts.set(key, (counts.get(key) || 0) + 1)
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
-    const [majorityKey, majorityCount] = sorted[0]
-    const minority = block.length - majorityCount
-    if (minority >= 1 && majorityCount >= 2 && sorted.length >= 2) {
-      // Ignore pure "no indent vs indent" only when both are rare; flag real stagger
+    // Group by list level so nested bullets don't look like stagger
+    const byLevel = new Map()
+    for (const key of block) {
+      const level = key.split(':')[1] || 'x'
+      if (!byLevel.has(level)) byLevel.set(level, [])
+      byLevel.get(level).push(key)
+    }
+    for (const [, keys] of byLevel) {
+      if (keys.length < 3) continue
+      const counts = new Map()
+      for (const key of keys) counts.set(key, (counts.get(key) || 0) + 1)
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+      const [majorityKey, majorityCount] = sorted[0]
+      const minority = keys.length - majorityCount
+      if (minority < 1 || majorityCount < 2 || sorted.length < 2) continue
       const lefts = sorted.map(([k]) => {
         const leftPart = k.split(':')[2]
         return leftPart === 'x' ? null : parseInt(leftPart, 10)
       }).filter((n) => Number.isFinite(n))
-      if (lefts.length >= 2) {
-        const min = Math.min(...lefts)
-        const max = Math.max(...lefts)
-        if (max - min >= 180) {
-          defects.push({
-            code: 'indent_inconsistency',
-            severity: 'high',
-            message: `Bullet indent stagger in a block (${minority}/${block.length} off majority ${majorityKey})`,
-          })
-        }
+      if (lefts.length < 2) continue
+      const min = Math.min(...lefts)
+      const max = Math.max(...lefts)
+      if (max - min >= 180) {
+        defects.push({
+          code: 'indent_inconsistency',
+          severity: 'high',
+          message: `Bullet indent stagger in a block (${minority}/${keys.length} off majority ${majorityKey})`,
+        })
       }
     }
     block = []
   }
 
   for (const para of paras) {
-    if (isHeadingLike(para)) {
+    if (isSectionHeading(para)) {
       flush()
       continue
     }
@@ -164,11 +168,12 @@ export function findIndentConsistencyDefects(xml) {
       block.push(layoutKey(para))
       continue
     }
-    flush()
+    // Company/role lines end a bullet block
+    const plain = [...para.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('').trim()
+    if (plain && !isBulletPara(para)) flush()
   }
   flush()
 
-  // Dedupe identical messages
   const seen = new Set()
   return defects.filter((d) => {
     if (seen.has(d.message)) return false

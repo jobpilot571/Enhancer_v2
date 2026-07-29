@@ -179,6 +179,7 @@ router.get('/enhance-status/:jobId', (req, res, next) => {
       payload.sessionId = job.result.sessionId
       payload.layoutQa = job.result.layoutQa || null
       payload.readyForDownload = Boolean(job.result.readyForDownload && job.result.layoutQa?.ok !== false)
+      payload.layoutWarning = job.result.layoutWarning || null
       payload.downloadUrl = job.result.readyForDownload === false
         ? null
         : job.result.downloadUrl

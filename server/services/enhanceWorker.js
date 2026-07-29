@@ -227,41 +227,37 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       log(jobId, `qa auto-repaired: ${qaResult.history.map((h) => `${h.attempt}:${(h.actions || []).join('+') || 'none'}`).join(' | ')}`)
     }
 
-    // Final hard gate — never hand users a download with high-severity layout defects
-    if (!qaResult.readyForDownload || !qaResult.qa.ok) {
-      const codes = qaResult.qa.defects
-        .filter((d) => d.severity === 'high')
-        .map((d) => d.code)
-      throw new Error(
-        `Resume layout QA failed after repair/rebuild (${codes.join(', ') || 'unknown'}). `
-        + 'Please try Enhance again — download stays locked until the resume passes page-gap and indentation checks.',
-      )
-    }
-    log(jobId, 'qa: enhanced resume verified — download unlocked')
-    timer.mark('qa')
-
     const downloadZip = new PizZip(previewBuffer)
     const downloadXml = downloadZip.file('word/document.xml').asText()
       .replace(/<w:shd[^/]*\/>/g, '')
     downloadZip.file('word/document.xml', downloadXml)
     let downloadBuffer = downloadZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
 
-    // Re-verify download copy after highlight strip (layout must still pass)
+    // Final verify after highlight strip — repair again if needed, but never abort the job
     const finalQa = ensureEnhancedResumeQuality(originalBuffer, downloadBuffer, resumeData, {
       maxAttempts: 1,
       maxRebuilds: 0,
       log: (msg) => log(jobId, `final-${msg}`),
     })
-    if (!finalQa.readyForDownload || !finalQa.qa.ok) {
-      throw new Error('Resume failed final layout verification after highlight cleanup. Please enhance again.')
-    }
     downloadBuffer = finalQa.buffer
     previewBuffer = qaResult.buffer
 
+    const readyForDownload = Boolean(finalQa.readyForDownload && finalQa.qa.ok)
+    const highCodes = finalQa.qa.defects
+      .filter((d) => d.severity === 'high')
+      .map((d) => d.code)
+
+    if (readyForDownload) {
+      log(jobId, 'qa: enhanced resume verified — download unlocked')
+    } else {
+      log(jobId, `qa: download locked — remaining defects: ${highCodes.join(', ') || 'unknown'}`)
+    }
+    timer.mark('qa')
+
     const layoutQa = {
-      ok: true,
-      readyForDownload: true,
-      highCount: 0,
+      ok: readyForDownload,
+      readyForDownload,
+      highCount: finalQa.qa.highCount || highCodes.length,
       mediumCount: finalQa.qa.mediumCount || 0,
       defects: finalQa.qa.defects || [],
       rebuilds: qaResult.rebuilds || 0,
@@ -276,6 +272,8 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       ],
     }
 
+    // Always store preview so user can review + use layout-fix chat.
+    // Download route still blocks when layoutQa.ok === false.
     setEnhancedDocx(sessionId, downloadBuffer, previewBuffer)
     updateSession(sessionId, { layoutQa })
 
@@ -422,10 +420,13 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         atsScore: finalAfter,
         processingMeta,
         layoutQa,
-        readyForDownload: true,
-        downloadUrl: `/api/enhancer/download/${sessionId}`,
+        readyForDownload,
+        downloadUrl: readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
         scoreReportPdfUrl: `/api/enhancer/score-report/${sessionId}`,
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
+        layoutWarning: readyForDownload
+          ? null
+          : `Layout checks still flag: ${highCodes.join(', ') || 'gaps/indentation'}. Preview is available — use “Report & auto-fix” below, then download unlocks when checks pass.`,
       },
     })
     log(jobId, 'completed')

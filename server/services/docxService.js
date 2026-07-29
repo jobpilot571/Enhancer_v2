@@ -645,15 +645,6 @@ function normalizeBulletIndentConsistency(xml) {
     if (/w:numPr/.test(para)) return true
     return Boolean(detectLiteralBulletPrefix(para))
   }
-  const isHeadingLike = (para) => {
-    const plain = plainOf(para)
-    if (!plain || plain.length > 90) return false
-    if (isBullet(para)) return false
-    if (/^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience|certifications)/i.test(plain)) {
-      return true
-    }
-    return plain.length < 90
-  }
   const parseInd = (para) => {
     const ind = para.match(/<w:ind\b[^/]*\/>/)?.[0]
     if (!ind) return { left: null, hanging: null }
@@ -695,31 +686,39 @@ function normalizeBulletIndentConsistency(xml) {
       blockIdx = []
       return
     }
-    const keys = blockIdx.map((i) => keyOf(paras[i].xml))
-    const counts = new Map()
-    for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1)
-    const majorityKey = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    const parts = majorityKey.split(':')
-    const majLeft = parts[2] === 'x' ? null : parseInt(parts[2], 10)
-    const majHang = parts[3] === 'x' ? null : parseInt(parts[3], 10)
-    if (majLeft == null) {
-      blockIdx = []
-      return
+    const byLevel = new Map()
+    for (const i of blockIdx) {
+      const key = keyOf(paras[i].xml)
+      const level = key.split(':')[1] || 'x'
+      if (!byLevel.has(level)) byLevel.set(level, [])
+      byLevel.get(level).push(i)
     }
-    for (let n = 0; n < blockIdx.length; n += 1) {
-      const i = blockIdx[n]
-      if (keys[n] === majorityKey) continue
-      const cur = parseInd(paras[i].xml)
-      if (cur.left != null && Math.abs(cur.left - majLeft) < 180) continue
-      paras[i].xml = applyInd(paras[i].xml, majLeft, majHang)
-      changed = true
+    for (const [, idxs] of byLevel) {
+      if (idxs.length < 3) continue
+      const keys = idxs.map((i) => keyOf(paras[i].xml))
+      const counts = new Map()
+      for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1)
+      const majorityKey = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      const parts = majorityKey.split(':')
+      const majLeft = parts[2] === 'x' ? null : parseInt(parts[2], 10)
+      const majHang = parts[3] === 'x' ? null : parseInt(parts[3], 10)
+      if (majLeft == null) continue
+      for (let n = 0; n < idxs.length; n += 1) {
+        const i = idxs[n]
+        if (keys[n] === majorityKey) continue
+        const cur = parseInd(paras[i].xml)
+        if (cur.left != null && Math.abs(cur.left - majLeft) < 180) continue
+        paras[i].xml = applyInd(paras[i].xml, majLeft, majHang)
+        changed = true
+      }
     }
     blockIdx = []
   }
 
   for (let i = 0; i < paras.length; i += 1) {
     const para = paras[i].xml
-    if (isHeadingLike(para)) {
+    const plain = plainOf(para)
+    if (/^(?:professional\s+)?(?:summary|experience|education|skills|technical skills|work experience|certifications)\b/i.test(plain)) {
       flush()
       continue
     }
@@ -727,7 +726,7 @@ function normalizeBulletIndentConsistency(xml) {
       blockIdx.push(i)
       continue
     }
-    flush()
+    if (plain) flush()
   }
   flush()
 

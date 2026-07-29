@@ -759,17 +759,18 @@ export default function ResumeEnhancer() {
       setLayoutQa(qa)
       setReadyForDownload(canDownload)
 
-      if (!canDownload) {
-        setEnhancedBlob(null)
-        throw new Error(
-          result.error
-          || 'Enhanced resume failed layout quality checks (gaps / indentation). Download stays locked — please enhance again.',
-        )
-      }
-
       const enhanced = await fetchFileBlob(sessionId, 'enhanced')
       setEnhancedBlob(enhanced)
       setStep('done')
+
+      if (!canDownload) {
+        setError(
+          result.layoutWarning
+          || 'Layout checks need another pass. Preview is ready — use “Report & auto-fix” below to unlock download.',
+        )
+      } else {
+        setError('')
+      }
     } catch (err) {
       setError(err.message || 'Enhancement failed. Please try again.')
       setStep('uploaded')
@@ -1096,6 +1097,18 @@ export default function ResumeEnhancer() {
             </div>
           </div>
         </div>
+
+        {enhancedBlob && sessionId && !readyForDownload && (
+          <div className="layout-qa-locked" role="status">
+            <strong>Download locked until layout passes</strong>
+            <span>
+              Preview is available. Use <em>Report &amp; auto-fix</em> below (describe gaps/indentation or attach a screenshot), then download unlocks when checks pass.
+              {layoutQa?.defects?.length
+                ? ` Flags: ${layoutQa.defects.filter((d) => d.severity === 'high').map((d) => d.code).join(', ')}`
+                : ''}
+            </span>
+          </div>
+        )}
 
         {enhancedBlob && sessionId && readyForDownload && (
           <div className="service-cta-row service-cta-row--download-ready">
