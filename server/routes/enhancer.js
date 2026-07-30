@@ -222,15 +222,11 @@ router.get('/download/:sessionId', (req, res, next) => {
     const session = getSession(req.params.sessionId)
     if (!session?.enhancedPath) {
       return res.status(404).json({
-        error: 'Enhanced file not ready. Wait until layout QA passes, then download.',
+        error: 'Enhanced file not ready yet. Please wait a moment and try again.',
       })
     }
-    if (session.layoutQa && session.layoutQa.ok === false) {
-      return res.status(409).json({
-        error: 'Download locked — resume failed layout quality checks. Enhance again.',
-        layoutQa: session.layoutQa,
-      })
-    }
+    // Layout QA runs + auto-repairs during enhance. Do not block download mid-flow
+    // for residual advisory layout flags — only missing file is a hard stop.
 
     const buffer = fs.readFileSync(session.enhancedPath)
     const base = session.fileName.replace(/\.(docx|pdf)$/i, '')

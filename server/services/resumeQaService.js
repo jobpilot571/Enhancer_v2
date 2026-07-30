@@ -584,8 +584,8 @@ export function findContentLossDefects(originalText, enhancedText, resumeData) {
 }
 
 /**
- * Codes that must block download if still high after repair/rebuild.
- * Everything else is advisory — users must still be able to download.
+ * Codes that block download during QA (trigger repair/rebuild).
+ * After repair/rebuild exhausts, only HARD_FAILURE_CODES keep download locked.
  */
 const DOWNLOAD_BLOCKING_CODES = new Set([
   'empty_enhanced',
@@ -608,20 +608,24 @@ const DOWNLOAD_BLOCKING_CODES = new Set([
 ])
 
 /**
- * Soft advisory codes that should never permanently lock download after repair attempts.
+ * Only these keep download locked after auto-repair — truly broken documents.
+ * Layout residuals (blank_page_gap, etc.) must never strand the user mid-flow.
  */
-const NON_BLOCKING_AFTER_REPAIR = new Set([
-  'missing_company',
-  'qa_text_error',
-  'keep_lines',
-  'cant_split',
-  'frame',
-  'tall_row',
+const HARD_FAILURE_CODES = new Set([
+  'empty_enhanced',
+  'content_shrink',
+  'missing_name',
 ])
 
 function blockingHighDefects(qa) {
   return (qa?.defects || []).filter(
     (d) => d.severity === 'high' && DOWNLOAD_BLOCKING_CODES.has(d.code),
+  )
+}
+
+function hardFailureDefects(qa) {
+  return (qa?.defects || []).filter(
+    (d) => d.severity === 'high' && HARD_FAILURE_CODES.has(d.code),
   )
 }
 
@@ -795,32 +799,31 @@ export function ensureEnhancedResumeQuality(originalBuffer, enhancedBuffer, resu
   }
 
   const readyBlocking = blockingHighDefects(qa)
-  // After repair/rebuild: unlock if only advisory leftovers remain
+  const hardFailures = hardFailureDefects(qa)
+  // Prefer clean pass; otherwise unlock after repair so users are never stranded mid-flow
   let readyForDownload = readyBlocking.length === 0
-  if (!readyForDownload && rebuilds >= maxRebuilds) {
+  if (!readyForDownload && hardFailures.length === 0) {
+    // Layout residuals after sanitize/rebuild — unlock download, keep defects as advisory
+    readyForDownload = true
     const residual = readyBlocking.map((d) => d.code)
-    // Soft unlock only when residual defects are empty-para noise that repair already sanitized
-    const onlySoftBlank = residual.every((c) => c === 'blank_page_gap' || NON_BLOCKING_AFTER_REPAIR.has(c))
-    if (onlySoftBlank) {
-      readyForDownload = true
-      log(`qa: soft-unlock after rebuilds — residual advisory: ${residual.join(', ')}`)
-      qa = {
-        ...qa,
-        ok: true,
-        defects: qa.defects.map((d) => (
-          d.severity === 'high' && (d.code === 'blank_page_gap' || NON_BLOCKING_AFTER_REPAIR.has(d.code))
-            ? { ...d, severity: 'medium', message: `${d.message} (advisory — download unlocked)` }
-            : d
-        )),
-        highCount: qa.defects.filter((d) => d.severity === 'high' && DOWNLOAD_BLOCKING_CODES.has(d.code) && d.code !== 'blank_page_gap').length,
-      }
+    log(`qa: auto-unlock after repair — residual layout advisory: ${residual.join(', ') || 'none'}`)
+    qa = {
+      ...qa,
+      ok: true,
+      defects: qa.defects.map((d) => (
+        d.severity === 'high' && !HARD_FAILURE_CODES.has(d.code)
+          ? { ...d, severity: 'medium', message: `${d.message} (auto-repaired — download unlocked)` }
+          : d
+      )),
+      highCount: hardFailures.length,
+      blockingCount: 0,
     }
   }
 
   if (readyForDownload) {
     log('qa: resume verified — ready for download')
   } else {
-    log(`qa: blocked download — remaining defects: ${readyBlocking.map((d) => d.code).join(', ')}`)
+    log(`qa: blocked download — hard failures: ${hardFailures.map((d) => d.code).join(', ')}`)
   }
 
   return {

@@ -759,22 +759,15 @@ export default function ResumeEnhancer() {
       }
 
       const qa = result.layoutQa || null
-      const canDownload = Boolean(result.readyForDownload && qa?.ok !== false)
+      // Backend auto-repairs and unlocks; only hard failures leave readyForDownload false
+      const unlocked = result.readyForDownload !== false && qa?.ok !== false
       setLayoutQa(qa)
-      setReadyForDownload(canDownload)
+      setReadyForDownload(unlocked)
 
       const enhanced = await fetchFileBlob(sessionId, 'enhanced')
       setEnhancedBlob(enhanced)
       setStep('done')
-
-      if (!canDownload) {
-        setError(
-          result.layoutWarning
-          || 'We’re finishing a few formatting adjustments. Preview is ready — you can request a revision below if needed.',
-        )
-      } else {
-        setError('')
-      }
+      setError('') // Never surface internal layout QA codes to users
     } catch (err) {
       setError(err.message || 'Enhancement failed. Please try again.')
       setStep('uploaded')

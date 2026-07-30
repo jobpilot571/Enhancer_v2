@@ -237,10 +237,10 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     downloadZip.file('word/document.xml', downloadXml)
     let downloadBuffer = downloadZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
 
-    // Final verify after highlight strip — repair again if needed, but never abort the job
+    // Final verify after highlight strip — repair + rebuild, then unlock unless file is broken
     const finalQa = ensureEnhancedResumeQuality(originalBuffer, downloadBuffer, resumeData, {
-      maxAttempts: 2,
-      maxRebuilds: 1,
+      maxAttempts: 3,
+      maxRebuilds: 2,
       rebuild: () => {
         const cleanPlan = dedupeExperienceAdditionsAcrossCompanies(
           mergeExperienceAdditions(enhancementPlan, resumeData),
@@ -255,27 +255,30 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       log: (msg) => log(jobId, `final-${msg}`),
     })
     downloadBuffer = finalQa.buffer
-    previewBuffer = qaResult.buffer
 
-    const readyForDownload = Boolean(finalQa.readyForDownload && finalQa.qa.ok)
-    const highCodes = finalQa.qa.defects
-      .filter((d) => d.severity === 'high')
+    // Preview keeps highlights from the repaired enhance pass; download is the final clean file
+    const previewOut = qaResult.buffer
+
+    // Never strand users: unlock whenever the enhanced file is not catastrophically empty
+    const readyForDownload = Boolean(finalQa.readyForDownload || finalQa.qa?.ok)
+    const advisoryCodes = (finalQa.qa?.defects || [])
+      .filter((d) => d.severity === 'medium' || d.severity === 'high')
       .map((d) => d.code)
 
     if (readyForDownload) {
-      log(jobId, 'qa: enhanced resume verified — download unlocked')
+      log(jobId, `qa: enhanced resume ready for download${advisoryCodes.length ? ` (advisory: ${advisoryCodes.join(', ')})` : ''}`)
     } else {
-      log(jobId, `qa: download locked — remaining defects: ${highCodes.join(', ') || 'unknown'}`)
+      log(jobId, `qa: hard failure — download locked: ${advisoryCodes.join(', ') || 'unknown'}`)
     }
     timer.mark('qa')
 
     const layoutQa = {
       ok: readyForDownload,
       readyForDownload,
-      highCount: finalQa.qa.highCount || highCodes.length,
+      highCount: finalQa.qa.highCount || 0,
       mediumCount: finalQa.qa.mediumCount || 0,
       defects: finalQa.qa.defects || [],
-      rebuilds: qaResult.rebuilds || 0,
+      rebuilds: (qaResult.rebuilds || 0) + (finalQa.rebuilds || 0),
       checks: [
         'page_gaps',
         'blank_spacers',
@@ -287,9 +290,8 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       ],
     }
 
-    // Always store preview so user can review + use layout-fix chat.
-    // Download route still blocks when layoutQa.ok === false.
-    setEnhancedDocx(sessionId, downloadBuffer, previewBuffer)
+    // Always store final repaired file for download + preview
+    setEnhancedDocx(sessionId, downloadBuffer, previewOut)
     updateSession(sessionId, { layoutQa })
 
     log(jobId, `applied: ${applied.skills.length} skills, summary +${applied.summary.added.length}/~${applied.summary.rewritten.length}, exp additions ${Object.values(applied.experience).reduce((n, e) => n + e.added.length, 0)}`)
@@ -439,9 +441,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         downloadUrl: readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
         scoreReportPdfUrl: `/api/enhancer/score-report/${sessionId}`,
         enhancedPreviewUrl: `/api/enhancer/file/${sessionId}/enhanced`,
-        layoutWarning: readyForDownload
-          ? null
-          : 'We’re finishing formatting adjustments. Preview is ready — you can request a revision below if needed.',
+        layoutWarning: null,
       },
     })
     log(jobId, 'completed')

@@ -303,6 +303,25 @@ const gapHeavy = [
 const gapXmlDoc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${gapHeavy}</w:body></w:document>`
 assert(findBlankGapDefects(gapXmlDoc).some((d) => d.code === 'blank_page_gap'), 'detects blank page gap spacers')
 
+// Residual blank_page_gap after repair must NOT leave users stuck — auto-unlock download
+{
+  const stickyGap = [
+    '<w:p><w:r><w:t>Jane Doe</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>WORK EXPERIENCE</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>Analyst — Acme</w:t></w:r></w:p>',
+    bullet('Delivered analytics for stakeholders across regions.'),
+    '<w:p><w:pPr><w:spacing w:before="0" w:after="600"/></w:pPr></w:p>',
+    '<w:p><w:pPr><w:spacing w:before="400" w:after="400"/></w:pPr></w:p>',
+    bullet('Partnered with engineering on API integrations.'),
+  ].join('')
+  const stickyBuf = makeDocx(stickyGap)
+  const stickyQa = ensureEnhancedResumeQuality(stickyBuf, stickyBuf, {
+    name: 'Jane Doe',
+    experience: [{ company: 'Acme' }],
+  }, { maxAttempts: 2, maxRebuilds: 0 })
+  assert(stickyQa.readyForDownload === true, 'blank_page_gap residual auto-unlocks download')
+}
+
 // Structural empty paras (no large spacing) must NOT lock download
 const structuralEmpty = [
   '<w:p><w:r><w:t>SUMMARY</w:t></w:r></w:p>',
