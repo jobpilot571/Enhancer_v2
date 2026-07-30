@@ -178,11 +178,12 @@ router.get('/enhance-status/:jobId', (req, res, next) => {
       payload.atsScore = job.result.atsScore
       payload.sessionId = job.result.sessionId
       payload.layoutQa = job.result.layoutQa || null
-      payload.readyForDownload = Boolean(job.result.readyForDownload && job.result.layoutQa?.ok !== false)
+      // Unlock whenever the worker said so — do not re-lock on advisory layoutQa.ok
+      payload.readyForDownload = job.result.readyForDownload !== false
       payload.layoutWarning = job.result.layoutWarning || null
       payload.downloadUrl = job.result.readyForDownload === false
         ? null
-        : job.result.downloadUrl
+        : (job.result.downloadUrl || `/api/enhancer/download/${job.result.sessionId}`)
       payload.enhancedPreviewUrl = job.result.enhancedPreviewUrl
     }
 

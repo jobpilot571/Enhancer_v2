@@ -635,15 +635,15 @@ export default function ResumeEnhancer() {
     })
   }, [])
 
-  // After enhance: brief polishing state on the CTA, then unlock Download on the same button
+  // Failsafe: if the enhanced file is present, never leave Download locked
   useEffect(() => {
-    if (downloadPhase !== 'polishing' || !enhancedBlob || !sessionId) return undefined
+    if (!enhancedBlob || !sessionId || readyForDownload) return undefined
     const t = setTimeout(() => {
       setReadyForDownload(true)
       setDownloadPhase('ready')
-    }, 2200)
+    }, 2500)
     return () => clearTimeout(t)
-  }, [downloadPhase, enhancedBlob, sessionId])
+  }, [enhancedBlob, sessionId, readyForDownload])
 
   useEffect(() => {
     if (downloadPhase !== 'polishing') {
@@ -746,6 +746,8 @@ export default function ResumeEnhancer() {
     setEnhancing(true)
     setStep('enhancing')
     setEnhanceStep('analyzing_resume')
+    setReadyForDownload(false)
+    setDownloadPhase('polishing')
     setJdEditorOpen(false)
 
     try {
@@ -794,16 +796,14 @@ export default function ResumeEnhancer() {
       setStep('done')
       setError('')
 
-      // If backend already unlocked, show Download immediately.
-      // Otherwise briefly show polishing, then unlock — file is ready for download.
-      const alreadyReady = result.readyForDownload !== false && qa?.ok !== false
-      if (alreadyReady) {
+      // Always unlock Download once the enhanced file exists.
+      // Brief polishing copy on the same CTA, then flip to Download — never leave users stuck.
+      setReadyForDownload(false)
+      setDownloadPhase('polishing')
+      window.setTimeout(() => {
         setReadyForDownload(true)
         setDownloadPhase('ready')
-      } else {
-        setReadyForDownload(false)
-        setDownloadPhase('polishing')
-      }
+      }, 1600)
     } catch (err) {
       setError(err.message || 'Enhancement failed. Please try again.')
       setStep('uploaded')
@@ -1171,12 +1171,24 @@ export default function ResumeEnhancer() {
           </div>
         )}
         {enhancing && !enhancedBlob && (
-          <p className="layout-qa-progress" role="status">
-            Enhancing your resume…
-          </p>
+          <div className="enhancer-ready enhancer-ready--pending">
+            <div className="enhancer-ready__copy">
+              <strong>Enhancing your resume</strong>
+              <span>{getEnhanceStepLabel(enhanceStep) || 'Working on your resume…'}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
+              disabled
+              aria-busy="true"
+            >
+              <span className="btn-spinner" />
+              {getEnhanceStepLabel(enhanceStep) || 'Loading…'}
+            </button>
+          </div>
         )}
 
-        {sessionId && enhancedBlob && !readyForDownload && (
+        {sessionId && enhancedBlob && readyForDownload && (
           <EnhancerFixChat
             sessionId={sessionId}
             disabled={enhancing || uploading}
