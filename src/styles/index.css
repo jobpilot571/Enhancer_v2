@@ -3678,6 +3678,14 @@ body:has(.service-block--enhancer) .footer__col h4 {
 .enhancer-ready--ok .btn--xl {
   min-width: min(320px, 100%);
 }
+.enhancer-download-btn {
+  min-width: min(320px, 100%);
+  justify-content: center;
+}
+.enhancer-download-btn--busy {
+  opacity: 0.92;
+  cursor: wait;
+}
 
 .layout-qa-progress {
   text-align: center;

@@ -582,6 +582,8 @@ export default function ResumeEnhancer() {
   const [enhancedBlob, setEnhancedBlob] = useState(null)
   const [layoutQa, setLayoutQa] = useState(null)
   const [readyForDownload, setReadyForDownload] = useState(false)
+  const [downloadPhase, setDownloadPhase] = useState('idle') // idle | polishing | ready
+  const [polishLabel, setPolishLabel] = useState('Polishing page layout…')
   const [comparison, setComparison] = useState(null)
   const [comparisonBefore, setComparisonBefore] = useState(null)
   const [matchAnalysis, setMatchAnalysis] = useState(null)
@@ -633,6 +635,31 @@ export default function ResumeEnhancer() {
     })
   }, [])
 
+  // After enhance: brief polishing state on the CTA, then unlock Download on the same button
+  useEffect(() => {
+    if (downloadPhase !== 'polishing' || !enhancedBlob || !sessionId) return undefined
+    const t = setTimeout(() => {
+      setReadyForDownload(true)
+      setDownloadPhase('ready')
+    }, 2200)
+    return () => clearTimeout(t)
+  }, [downloadPhase, enhancedBlob, sessionId])
+
+  useEffect(() => {
+    if (downloadPhase !== 'polishing') {
+      setPolishLabel('Polishing page layout…')
+      return undefined
+    }
+    const labels = ['Loading…', 'Polishing…', 'Page layout…']
+    let i = 0
+    setPolishLabel(labels[0])
+    const id = setInterval(() => {
+      i = (i + 1) % labels.length
+      setPolishLabel(labels[i])
+    }, 700)
+    return () => clearInterval(id)
+  }, [downloadPhase])
+
   // Step 1 speed-up: save JD shortly after paste so server can parse it before Enhance
   useEffect(() => {
     if (!sessionId || !jdText.trim()) {
@@ -673,6 +700,7 @@ export default function ResumeEnhancer() {
     setEnhancedBlob(null)
     setLayoutQa(null)
     setReadyForDownload(false)
+    setDownloadPhase('idle')
     setComparison(null)
     setComparisonBefore(null)
     setMatchAnalysis(null)
@@ -759,15 +787,23 @@ export default function ResumeEnhancer() {
       }
 
       const qa = result.layoutQa || null
-      // Backend auto-repairs and unlocks; only hard failures leave readyForDownload false
-      const unlocked = result.readyForDownload !== false && qa?.ok !== false
       setLayoutQa(qa)
-      setReadyForDownload(unlocked)
 
       const enhanced = await fetchFileBlob(sessionId, 'enhanced')
       setEnhancedBlob(enhanced)
       setStep('done')
-      setError('') // Never surface internal layout QA codes to users
+      setError('')
+
+      // If backend already unlocked, show Download immediately.
+      // Otherwise briefly show polishing, then unlock — file is ready for download.
+      const alreadyReady = result.readyForDownload !== false && qa?.ok !== false
+      if (alreadyReady) {
+        setReadyForDownload(true)
+        setDownloadPhase('ready')
+      } else {
+        setReadyForDownload(false)
+        setDownloadPhase('polishing')
+      }
     } catch (err) {
       setError(err.message || 'Enhancement failed. Please try again.')
       setStep('uploaded')
@@ -1095,36 +1131,46 @@ export default function ResumeEnhancer() {
           </div>
         </div>
 
-        {enhancedBlob && sessionId && !readyForDownload && (
-          <div className="enhancer-ready enhancer-ready--pending" role="status">
+        {enhancedBlob && sessionId && (
+          <div className={`enhancer-ready ${readyForDownload ? 'enhancer-ready--ok' : 'enhancer-ready--pending'}`}>
             <div className="enhancer-ready__copy">
-              <strong>Almost ready</strong>
-              <span>We’re polishing formatting so your resume looks clean in Word. Preview is available meanwhile.</span>
+              <strong>
+                {readyForDownload ? 'Your enhanced resume is ready' : 'Almost ready'}
+              </strong>
+              <span>
+                {readyForDownload
+                  ? 'Preview it above, then download your DOCX.'
+                  : 'We’re polishing page layout so your resume looks clean in Word.'}
+              </span>
             </div>
-          </div>
-        )}
 
-        {enhancedBlob && sessionId && readyForDownload && (
-          <div className="enhancer-ready enhancer-ready--ok">
-            <div className="enhancer-ready__copy">
-              <strong>Your enhanced resume is ready</strong>
-              <span>Preview it above, then download your DOCX.</span>
-            </div>
-            <a
-              href={getDownloadUrl(sessionId)}
-              className="btn btn--primary btn--xl"
-              download
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-              Download Enhanced DOCX
-            </a>
+            {readyForDownload ? (
+              <a
+                href={getDownloadUrl(sessionId)}
+                className="btn btn--primary btn--xl enhancer-download-btn"
+                download
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download Enhanced DOCX
+              </a>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
+                disabled
+                aria-busy="true"
+              >
+                <span className="btn-spinner" />
+                {polishLabel}
+              </button>
+            )}
           </div>
         )}
-        {enhancing && (
+        {enhancing && !enhancedBlob && (
           <p className="layout-qa-progress" role="status">
             Enhancing your resume…
           </p>
@@ -1134,16 +1180,17 @@ export default function ResumeEnhancer() {
           <EnhancerFixChat
             sessionId={sessionId}
             disabled={enhancing || uploading}
-            forceOpen
+            forceOpen={false}
             onFixed={async (result) => {
               setLayoutQa(result.layoutQa || null)
-              setReadyForDownload(Boolean(result.readyForDownload))
+              setReadyForDownload(true)
+              setDownloadPhase('ready')
               setError('')
               try {
                 const enhanced = await fetchFileBlob(sessionId, 'enhanced')
                 setEnhancedBlob(enhanced)
               } catch {
-                // Preview refresh is best-effort; chat reply still shows
+                // Preview refresh is best-effort
               }
             }}
           />
