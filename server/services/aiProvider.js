@@ -316,14 +316,31 @@ export function endAiUsageTracking() {
  * @param {object} [options]
  * @param {number} [options.maxTokens]
  * @param {string[]} [options.preferProviders] — try these first when configured (e.g. ['groq'])
+ * @param {string[]} [options.providersOnly] — if set, ONLY these providers run (no fallback to others)
  */
 export async function structuredJSON(system, user, schemaName, schema, options = {}) {
   const providers = getProviders()
+  const only = (options.providersOnly || [])
+    .map((s) => String(s || '').trim().toLowerCase())
+    .filter(Boolean)
   const prefer = (options.preferProviders || [])
     .map((s) => String(s || '').trim().toLowerCase())
     .filter((name) => providers[name])
-  const rest = getOrder().filter((name) => providers[name] && !prefer.includes(name))
-  const order = [...prefer, ...rest]
+
+  let order
+  if (only.length) {
+    order = only.filter((name) => providers[name])
+    if (order.length === 0) {
+      const missing = only.join(', ')
+      throw new Error(
+        `Required AI provider not configured for "${schemaName}": ${missing}. `
+        + 'Set ANTHROPIC_API_KEY (and CLAUDE_MODEL if needed) in your .env / Render env.',
+      )
+    }
+  } else {
+    const rest = getOrder().filter((name) => providers[name] && !prefer.includes(name))
+    order = [...prefer, ...rest]
+  }
 
   if (order.length === 0) {
     throw new Error('No AI provider configured. Add an API key (OPENAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or OLLAMA_API_KEY) to your .env file.')
