@@ -16,13 +16,13 @@ export default function Hero() {
             AI-Powered Resume Platform
           </div>
           <h1 className="hero__title">
-            Automate, Enhance &amp; Build
-            <span className="hero__title-accent"> Resumes That Win Interviews</span>
+            Turn Any Resume Into a
+            <span className="hero__title-accent"> Job-Matching Resume in Minutes</span>
           </h1>
           <p className="hero__subtitle">
-            JoBPilot.AI transforms your career documents with intelligent automation.
-            Upload your resume, match it to any job description, and get ATS-optimized
-            results — or build a brand-new resume from scratch in minutes.
+            Upload your resume and paste any job description. Our AI identifies missing
+            skills, ATS keywords, and weak experience bullets, then enhances your resume
+            while preserving its original formatting.
           </p>
           <div className="hero__actions">
             <Link to="/services/resume-enhancer" className="btn btn--primary btn--lg">
