@@ -26,6 +26,9 @@ function buildCorsOrigin() {
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://localhost:4173',
+    'https://jobpilotagent.com',
+    'https://www.jobpilotagent.com',
+    'https://enhancer-v2.vercel.app',
   ]
 
   const allowed = new Set([...defaults, ...fromEnv])
@@ -34,6 +37,8 @@ function buildCorsOrigin() {
     if (!origin) return callback(null, true)
     if (allowed.has(origin) || allowed.has('*')) return callback(null, true)
     if (/^https:\/\/[\w-]+\.vercel\.app$/.test(origin)) return callback(null, true)
+    // Production custom domain (+ any subdomain)
+    if (/^https:\/\/([\w-]+\.)?jobpilotagent\.com$/.test(origin)) return callback(null, true)
     callback(null, false)
   }
 }
