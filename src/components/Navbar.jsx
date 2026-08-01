@@ -43,7 +43,9 @@ export default function Navbar() {
     }
   }
 
-  const firstName = user?.name?.split(/\s+/)[0] || 'Account'
+  const rawFirst = user?.name?.split(/\s+/)[0] || 'Account'
+  // Local-dev account is named "Local Developer" — avoid showing a bare "Local" chip
+  const firstName = rawFirst === 'Local' ? 'Developer' : rawFirst
   const enhancerLeft = user?.usage?.remaining?.enhancer
   const enhancerLimit = user?.usage?.limits?.enhancer
   const isUnlimited = enhancerLeft == null || !Number.isFinite(enhancerLimit)

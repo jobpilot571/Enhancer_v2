@@ -19,17 +19,7 @@ export default function Contact() {
                 </svg>
                 <div>
                   <strong>Email</strong>
-                  <span>hello@resumeflow.io</span>
-                </div>
-              </div>
-              <div className="contact__detail">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                  <circle cx="12" cy="10" r="3" />
-                </svg>
-                <div>
-                  <strong>Office</strong>
-                  <span>San Francisco, CA</span>
+                  <a href="mailto:shiva@jobpilot.solutions">shiva@jobpilot.solutions</a>
                 </div>
               </div>
             </div>
@@ -62,7 +52,7 @@ export default function Contact() {
                 placeholder="Share your target role, experience level, and what you need help with..."
               />
             </div>
-            <button type="submit" className="btn btn--primary btn--lg btn--full">
+            <button type="submit" className="btn btn--primary btn--lg btn--full contact__submit">
               Request Specialist Consultation
             </button>
           </form>
