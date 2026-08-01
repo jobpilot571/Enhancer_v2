@@ -13,8 +13,15 @@ import { runJdBuildJob } from '../services/jdBuildWorker.js'
 import { requireUser, checkUsage, consumeUsage, optionalUser } from '../middleware/userAuth.js'
 import { extractResumeText } from '../services/resumeExtract.js'
 import { parseResumeLocally } from '../services/localResumeParse.js'
-import { parseResume } from '../services/openaiService.js'
+import { parseResume, analyzeJd, suggestCompaniesFromJd } from '../services/openaiService.js'
 import { mapJdBasicsFromResume, sanitizeBasics } from '../services/jdBasicsExtract.js'
+import {
+  saveJdResume,
+  listJdResumes,
+  readJdResumeDocx,
+  readJdResumeJdText,
+  deleteJdResume,
+} from '../store/jdSavedResumeStore.js'
 
 const router = Router()
 
@@ -26,6 +33,16 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const type = detectFileType(file.originalname, file.mimetype)
     cb(type ? null : new Error('Only .docx and .pdf files are allowed'), !!type)
+  },
+})
+
+const uploadDocx = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = detectFileType(file.originalname, file.mimetype) === 'docx'
+      || file.mimetype === DOCX_MIME
+    cb(ok ? null : new Error('Only .docx files are allowed'), ok)
   },
 })
 
@@ -78,6 +95,63 @@ function validateFormData(formData) {
   }
 
   return null
+}
+
+function extractYearsRequiredFromText(text) {
+  const raw = String(text || '')
+  const patterns = [
+    /(\d+)\s*\+\s*years?\s+(?:of\s+)?(?:relevant\s+)?experience/i,
+    /(\d+)\s*-\s*\d+\s*years?\s+(?:of\s+)?(?:relevant\s+)?experience/i,
+    /minimum\s+(?:of\s+)?(\d+)\s*years?/i,
+    /at\s+least\s+(\d+)\s*years?/i,
+    /(\d+)\s*years?\s+(?:of\s+)?(?:relevant\s+)?experience\s+required/i,
+    /requires?\s+(\d+)\s*\+?\s*years?/i,
+  ]
+  for (const re of patterns) {
+    const m = raw.match(re)
+    if (m) {
+      const n = Number(m[1])
+      if (Number.isFinite(n) && n >= 0 && n <= 50) return n
+    }
+  }
+  return null
+}
+
+async function analyzeJdPayload(jdText) {
+  const cleaned = String(jdText || '').trim()
+  if (cleaned.length < 40) {
+    const err = new Error('Paste a fuller job description (at least a few sentences).')
+    err.status = 400
+    throw err
+  }
+
+  const yearsFromText = extractYearsRequiredFromText(cleaned)
+  let roleTitle = ''
+  let yearsRequired = yearsFromText
+  let method = 'local'
+
+  try {
+    const { data } = await analyzeJd(cleaned)
+    roleTitle = String(data?.roleTitle || '').trim()
+    const aiYears = Number(data?.yearsRequired)
+    if (yearsFromText == null && Number.isFinite(aiYears) && aiYears >= 0) {
+      yearsRequired = aiYears
+    }
+    method = 'AI'
+  } catch (err) {
+    console.warn('[jd-builder] analyze-jd AI failed:', err.message)
+    const titleMatch = cleaned.match(/(?:job\s*title|position|role)\s*[:\-–]\s*([^\n]{3,80})/i)
+    roleTitle = (titleMatch?.[1] || '').trim()
+    method = 'local'
+  }
+
+  return {
+    ok: true,
+    method,
+    roleTitle,
+    yearsRequired: yearsRequired == null ? '' : yearsRequired,
+    jdText: cleaned.slice(0, 50000),
+  }
 }
 
 /**
@@ -152,6 +226,103 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
       basics,
     })
   } catch (err) {
+    next(err)
+  }
+})
+
+/** Analyze pasted JD → target role + required years. */
+router.post('/analyze-jd', optionalUser, async (req, res, next) => {
+  try {
+    const result = await analyzeJdPayload(req.body?.jdText || '')
+    const userTag = req.user?.id || 'guest'
+    console.log(
+      `[jd-builder] analyze-jd user=${userTag} method=${result.method} `
+      + `role=${Boolean(result.roleTitle)} years=${result.yearsRequired || '-'}`,
+    )
+    res.json(result)
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/** Upload JD file (PDF/DOCX) → extract text then analyze. */
+router.post('/analyze-jd-file', optionalUser, upload.single('jd'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+    const fileType = detectFileType(req.file.originalname, req.file.mimetype)
+    if (!fileType) return res.status(400).json({ error: 'Only .docx and .pdf files are allowed' })
+
+    const jdText = await extractResumeText(req.file.buffer, fileType)
+    if (!String(jdText || '').trim()) {
+      return res.status(400).json({ error: 'Could not read text from that document.' })
+    }
+
+    const result = await analyzeJdPayload(jdText)
+    const userTag = req.user?.id || 'guest'
+    console.log(
+      `[jd-builder] analyze-jd-file user=${userTag} file=${req.file.originalname} `
+      + `method=${result.method} role=${Boolean(result.roleTitle)} years=${result.yearsRequired || '-'}`,
+    )
+    res.json({
+      ...result,
+      fileName: req.file.originalname,
+    })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/**
+ * AI / Auto mode: suggest companies from JD (USA/India split, present→past dates).
+ */
+router.post('/suggest-companies', optionalUser, async (req, res, next) => {
+  try {
+    const {
+      jdText,
+      roleTitle,
+      yearsOfExperience,
+      companyCount,
+      usaCount,
+      indiaCount,
+    } = req.body || {}
+
+    if (!String(jdText || '').trim() || String(jdText).trim().length < 80) {
+      return res.status(400).json({ error: 'Paste a fuller job description first (JD step).' })
+    }
+
+    const total = Number(companyCount)
+    const usa = Number(usaCount)
+    const india = Number(indiaCount)
+    if (!Number.isFinite(total) || total < 1 || total > 6) {
+      return res.status(400).json({ error: 'companyCount must be between 1 and 6' })
+    }
+    if (!Number.isFinite(usa) || !Number.isFinite(india) || usa < 0 || india < 0) {
+      return res.status(400).json({ error: 'usaCount and indiaCount must be non-negative numbers' })
+    }
+    if (usa + india !== total) {
+      return res.status(400).json({ error: 'usaCount + indiaCount must equal companyCount' })
+    }
+
+    const result = await suggestCompaniesFromJd({
+      jdText,
+      roleTitle,
+      yearsOfExperience,
+      companyCount: total,
+      usaCount: usa,
+      indiaCount: india,
+    })
+
+    const userTag = req.user?.id || 'guest'
+    console.log(
+      `[jd-builder] suggest-companies user=${userTag} total=${total} usa=${usa} india=${india} `
+      + `industry=${result.industry || '-'}`,
+    )
+
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)
   }
 })
@@ -256,6 +427,97 @@ router.get('/download/:sessionId', (req, res, next) => {
     res.setHeader('Content-Type', DOCX_MIME)
     res.setHeader('Content-Disposition', `attachment; filename="${session.fileName}"`)
     res.send(buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * Save a completed JD-tailored resume into the user's Saved Resumes library.
+ */
+router.post('/saved', requireUser, uploadDocx.single('file'), (req, res, next) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'Attach the resume DOCX as file' })
+    }
+    const {
+      role,
+      yearsOfExperience,
+      yearsRequired,
+      jdText,
+      templateId,
+      fileName,
+    } = req.body || {}
+
+    const saved = saveJdResume(req.user.id, {
+      role,
+      yearsOfExperience,
+      yearsRequired,
+      jdText,
+      templateId,
+      fileName: fileName || req.file.originalname,
+      docxBuffer: req.file.buffer,
+    })
+
+    console.log(`[jd-builder] saved-resume user=${req.user.id} id=${saved.id} role=${saved.role || '-'}`)
+    res.json({ ok: true, saved })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+router.get('/saved', requireUser, (req, res, next) => {
+  try {
+    const items = listJdResumes(req.user.id)
+    res.json({ ok: true, items })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/saved/:id/file', requireUser, (req, res, next) => {
+  try {
+    const found = readJdResumeDocx(req.user.id, req.params.id)
+    if (!found) return res.status(404).json({ error: 'Saved resume not found' })
+    res.setHeader('Content-Type', DOCX_MIME)
+    res.setHeader('Content-Disposition', `inline; filename="${found.row.fileName}"`)
+    res.send(found.buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/saved/:id/download', requireUser, (req, res, next) => {
+  try {
+    const found = readJdResumeDocx(req.user.id, req.params.id)
+    if (!found) return res.status(404).json({ error: 'Saved resume not found' })
+    res.setHeader('Content-Type', DOCX_MIME)
+    res.setHeader('Content-Disposition', `attachment; filename="${found.row.fileName}"`)
+    res.send(found.buffer)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/saved/:id/jd', requireUser, (req, res, next) => {
+  try {
+    const found = readJdResumeJdText(req.user.id, req.params.id)
+    if (!found) return res.status(404).json({ error: 'Saved resume not found' })
+    const roleSlug = String(found.row.role || 'job').replace(/[^\w\-]+/g, '-').slice(0, 40)
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${roleSlug || 'job'}-jd.txt"`)
+    res.send(found.text || '')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.delete('/saved/:id', requireUser, (req, res, next) => {
+  try {
+    const ok = deleteJdResume(req.user.id, req.params.id)
+    if (!ok) return res.status(404).json({ error: 'Saved resume not found' })
+    res.json({ ok: true })
   } catch (err) {
     next(err)
   }

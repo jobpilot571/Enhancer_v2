@@ -3,11 +3,12 @@
 
 export const JD_STEPS = [
   { id: 'basic', label: 'Basic Information', short: 'Basics' },
-  { id: 'target', label: 'Target Role', short: 'Target' },
   { id: 'jd', label: 'Job Description', short: 'JD' },
+  { id: 'target', label: 'Target Role', short: 'Target' },
   { id: 'references', label: 'Reference Documents', short: 'References' },
   { id: 'templates', label: 'Templates', short: 'Templates' },
   { id: 'preview', label: 'Preview', short: 'Preview' },
+  { id: 'saved', label: 'Saved Resumes', short: 'Saved' },
 ]
 
 export const COMPANY_COUNT_OPTIONS = Array.from({ length: 6 }, (_, i) => ({
@@ -96,7 +97,9 @@ export function emptyExperience() {
     state: '',
     startDate: '',
     endDate: '',
-    bulletCount: '8',
+    bulletCount: '10',
+    summary: '',
+    country: '',
   }
 }
 
@@ -196,11 +199,14 @@ export function createEmptyProject() {
     },
     targetRole: {
       jobTitle: '',
-      companyCount: '3',
+      yearsRequired: '',
+      companyCount: '1',
       jobDescription: '',
       jdFileName: '',
+      aiMode: false,
+      aiIndustry: '',
     },
-    experiences: [emptyExperience(), emptyExperience(), emptyExperience()],
+    experiences: [emptyExperience()],
     skills: emptySkillCategories(),
     certifications: [],
     referenceDocuments: [],
@@ -248,11 +254,16 @@ export function validateStep(project, stepIndex) {
     if (!String(b.email || '').trim()) return 'Please enter your email.'
     if (!String(b.phone || '').trim()) return 'Please enter your phone number.'
   }
+  if (step === 'jd') {
+    if (!String(t.jobDescription || '').trim() || String(t.jobDescription).trim().length < 80) {
+      return 'Paste a fuller job description (at least a few sentences).'
+    }
+  }
   if (step === 'target') {
-    if (!String(t.jobTitle || '').trim()) return 'Please enter the role.'
-    if (!t.companyCount) return 'Select how many companies.'
-    const count = Number(t.companyCount) || (project.experiences || []).length
-    const list = (project.experiences || []).slice(0, count)
+    if (!String(t.jobTitle || '').trim()) return 'Please enter the target role.'
+    const list = project.experiences || []
+    if (!list.length) return 'Add at least one company.'
+    const count = Math.min(6, list.length)
     for (let i = 0; i < count; i++) {
       const e = list[i] || {}
       if (!String(e.companyName || '').trim()) return `Company ${i + 1}: enter the company name.`
@@ -271,11 +282,6 @@ export function validateStep(project, stepIndex) {
       }
     }
   }
-  if (step === 'jd') {
-    if (!String(t.jobDescription || '').trim() || String(t.jobDescription).trim().length < 80) {
-      return 'Paste a fuller job description (at least a few sentences).'
-    }
-  }
   if (step === 'templates') {
     if (!project.selectedTemplateId) return 'Please select a resume template.'
   }
@@ -288,56 +294,84 @@ export function validateStep(project, stepIndex) {
 export function toLegacyBuildPayload(project) {
   const b = project.basicInformation || {}
   const t = project.targetRole || {}
-  const count = Number(t.companyCount) || (project.experiences || []).length
-  const companies = (project.experiences || []).slice(0, count).map((e) => ({
+  const companies = (project.experiences || []).slice(0, 6).map((e) => ({
     name: String(e.companyName || '').trim(),
     role: String(e.jobTitle || t.jobTitle || '').trim(),
     startDate: String(e.startDate || '').trim(),
     endDate: String(e.endDate || '').trim() || 'Present',
-    city: String(e.city || b.city || '').trim() || 'Remote',
-    state: String(e.state || b.state || '').trim() || 'N/A',
-    summary: '',
-    bulletCount: Number(e.bulletCount) || 8,
+    city: String(e.city || b.city || '').trim(),
+    state: String(e.state || b.state || '').trim(),
+    summary: String(e.summary || '').trim(),
+    bulletCount: Number(e.bulletCount) || (t.aiMode ? 11 : 8),
+    country: String(e.country || '').trim(),
   }))
-  const years = computeYearsOfExperience(companies.map((c) => ({
+  const yearsFromDates = computeYearsOfExperience(companies.map((c) => ({
     startDate: c.startDate,
     endDate: c.endDate,
   })))
+  const yearsRequired = Number(t.yearsRequired)
+  const years = yearsFromDates > 0
+    ? yearsFromDates
+    : (Number.isFinite(yearsRequired) && yearsRequired > 0 ? yearsRequired : 0)
+
+  const approvedRefs = (project.referenceItems || [])
+    .filter((i) => i.approved && String(i.cleanedText || '').trim())
+  const refSummary = approvedRefs
+    .filter((i) => i.category === 'summary')
+    .map((i) => String(i.cleanedText).trim())
+  const refBullets = approvedRefs
+    .filter((i) => ['experience', 'project', 'achievement'].includes(i.category))
+    .map((i) => String(i.cleanedText).trim())
+  const refSkills = approvedRefs
+    .filter((i) => i.category === 'skill' || i.category === 'domain')
+    .map((i) => String(i.cleanedText).trim())
 
   return {
     name: String(b.fullName || '').trim(),
     email: String(b.email || '').trim(),
     phone: String(b.phone || '').trim(),
     linkedin: String(b.linkedin || '').trim(),
-    city: String(b.city || '').trim() || 'Remote',
-    state: String(b.state || '').trim() || 'N/A',
+    city: String(b.city || '').trim(),
+    state: String(b.state || '').trim(),
     role: String(t.jobTitle || '').trim(),
     yearsOfExperience: years,
-    companyCount: companies.length || 1,
+    yearsRequired: Number.isFinite(yearsRequired) && yearsRequired > 0 ? yearsRequired : null,
+    companyCount: companies.filter((c) => c.name).length || companies.length || 1,
+    aiMode: Boolean(t.aiMode),
+    aiIndustry: String(t.aiIndustry || '').trim(),
     templateId: project.selectedTemplateId || 'compact-ats',
     jdText: String(t.jobDescription || '').trim(),
     education: (b.education || [])
       .filter((e) => String(e.school || e.degree || '').trim())
       .map((e) => ({
         school: String(e.school || '').trim(),
-        degree: [e.degree, e.major].filter(Boolean).join(' — '),
+        degree: [e.degree, e.major].filter(Boolean).join(', '),
         dates: formatEducationDates(e),
         startDate: String(e.startDate || '').trim(),
         endDate: String(e.endDate || '').trim(),
         location: String(e.location || '').trim(),
         gpa: String(e.gpa || '').trim(),
       })),
-    companies: companies.length
-      ? companies
+    referenceMaterial: approvedRefs.length
+      ? {
+          summaryBullets: refSummary,
+          experience: refBullets.length
+            ? [{ company: '', title: '', bullets: refBullets }]
+            : [],
+          skills: refSkills,
+        }
+      : null,
+    companies: companies.filter((c) => c.name).length
+      ? companies.filter((c) => c.name)
       : [{
           name: 'Experience',
           role: String(t.jobTitle || '').trim(),
           startDate: 'Jan 2020',
           endDate: 'Present',
-          city: String(b.city || 'Remote').trim(),
-          state: String(b.state || 'N/A').trim(),
+          city: String(b.city || '').trim(),
+          state: String(b.state || '').trim(),
           summary: '',
-          bulletCount: 8,
+          bulletCount: t.aiMode ? 11 : 8,
         }],
   }
 }

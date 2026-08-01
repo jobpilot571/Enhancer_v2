@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import DocumentPreview from '../../DocumentPreview'
 
 export default function PreviewDownloadStep({
@@ -7,7 +8,34 @@ export default function PreviewDownloadStep({
   building,
   buildStepLabel,
   onStartNew,
+  onDownloadAndSave,
 }) {
+  const [saving, setSaving] = useState(false)
+  const [saveNotice, setSaveNotice] = useState('')
+  const [saveError, setSaveError] = useState('')
+
+  async function handleDownload() {
+    if (!previewBlob || saving) return
+    setSaving(true)
+    setSaveError('')
+    setSaveNotice('')
+    try {
+      await onDownloadAndSave?.()
+      setSaveNotice('Downloaded and saved to Saved Resumes.')
+    } catch (err) {
+      setSaveError(err.message || 'Download failed.')
+      // Still try a direct browser download as fallback if URL exists
+      if (downloadUrl) {
+        const a = document.createElement('a')
+        a.href = downloadUrl
+        a.download = ''
+        a.click()
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="jd-step">
       <header className="jd-step__header">
@@ -41,19 +69,27 @@ export default function PreviewDownloadStep({
         )
       )}
 
+      {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
+      {saveError && <p className="builder-error" role="alert">{saveError}</p>}
+
       <div className="form-cta form-cta--nav" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
         <button
           type="button"
           className="btn btn--outline btn--xl"
           onClick={onStartNew}
-          disabled={building}
+          disabled={building || saving}
         >
           Build new resume
         </button>
-        {previewBlob && downloadUrl && (
-          <a href={downloadUrl} className="btn btn--primary btn--xl" download>
-            Download DOCX
-          </a>
+        {previewBlob && (
+          <button
+            type="button"
+            className="btn btn--primary btn--xl"
+            onClick={handleDownload}
+            disabled={building || saving}
+          >
+            {saving ? 'Saving…' : 'Download DOCX'}
+          </button>
         )}
       </div>
     </div>

@@ -101,27 +101,29 @@ export function MonthYearPicker({
 
   return (
     <div className="month-year-picker">
-      <span className="form-field__label">{label}{required ? ' *' : ''}</span>
-      {allowPresent && (
-        <label className="month-year-picker__present">
-          <input
-            type="checkbox"
-            checked={present}
-            onChange={(e) => {
-              const checked = e.target.checked
-              setPresent(checked)
-              if (checked) {
-                setMonth('')
-                setYear('')
-                onChange('Present')
-              } else {
-                onChange('')
-              }
-            }}
-          />
-          Present
-        </label>
-      )}
+      <div className="month-year-picker__label-row">
+        <span className="form-field__label">{label}{required ? ' *' : ''}</span>
+        {allowPresent && (
+          <label className="month-year-picker__present">
+            <input
+              type="checkbox"
+              checked={present}
+              onChange={(e) => {
+                const checked = e.target.checked
+                setPresent(checked)
+                if (checked) {
+                  setMonth('')
+                  setYear('')
+                  onChange('Present')
+                } else {
+                  onChange('')
+                }
+              }}
+            />
+            Present
+          </label>
+        )}
+      </div>
       <div className="form-grid form-grid--2 month-year-picker__row">
         <FormField
           label="Month"

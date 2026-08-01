@@ -9,6 +9,7 @@ import {
   fetchFileBlob,
   getDownloadUrl,
   extractJdBasics,
+  saveJdResumeToLibrary,
 } from '../../../api/jdBuilder'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../../api/admin'
 import {
@@ -16,8 +17,9 @@ import {
   createEmptyProject,
   validateStep,
   toLegacyBuildPayload,
-  syncExperiences,
   emptyEducation,
+  emptyExperience,
+  computeYearsOfExperience,
   newId,
 } from './jdProjectModel'
 import { readJdDraft, writeJdDraft, clearJdDraft } from './jdDraftStorage'
@@ -27,6 +29,7 @@ import JobDescriptionStep from './steps/JobDescriptionStep'
 import ReferenceDocsStep from './steps/ReferenceDocsStep'
 import TemplateStep from './steps/TemplateStep'
 import PreviewDownloadStep from './steps/PreviewDownloadStep'
+import SavedResumesStep from './steps/SavedResumesStep'
 
 export default function JdBuilderWizard() {
   const user = getStoredUser?.() || null
@@ -37,13 +40,17 @@ export default function JdBuilderWizard() {
     const saved = readJdDraft(userId)
     if (!saved?.project) return createEmptyProject()
     const merged = { ...createEmptyProject(), ...saved.project }
-    const count = Number(merged.targetRole?.companyCount) || 3
+    const filled = (merged.experiences || []).filter((e) => String(e?.companyName || '').trim())
+    const count = Math.min(6, Math.max(1, filled.length || 1))
     merged.targetRole = {
       ...createEmptyProject().targetRole,
       ...merged.targetRole,
       companyCount: String(count),
+      yearsRequired: merged.targetRole?.yearsRequired ?? '',
     }
-    merged.experiences = syncExperiences(merged.experiences || [], count)
+    merged.experiences = filled.length
+      ? filled.slice(0, 6)
+      : [emptyExperience()]
     // Migrate away from removed "build" step index
     if (Number(merged.currentStep) >= JD_STEPS.length) {
       merged.currentStep = JD_STEPS.findIndex((s) => s.id === 'templates')
@@ -65,6 +72,7 @@ export default function JdBuilderWizard() {
   const [basicUploading, setBasicUploading] = useState(false)
   const [templateSamples, setTemplateSamples] = useState({})
   const [sampleBlobs, setSampleBlobs] = useState({})
+  const [savedRefreshKey, setSavedRefreshKey] = useState(0)
   const buildingRef = useRef(false)
   const saveTimer = useRef(null)
   const projectRef = useRef(project)
@@ -229,27 +237,6 @@ export default function JdBuilderWizard() {
     }
   }
 
-  async function handleJdFile(file) {
-    const lower = file.name.toLowerCase()
-    if (lower.endsWith('.txt') || lower.endsWith('.md')) {
-      const text = await file.text()
-      updateProject({
-        ...projectRef.current,
-        targetRole: {
-          ...projectRef.current.targetRole,
-          jobDescription: text.slice(0, 50000),
-          jdFileName: file.name,
-        },
-      })
-      return
-    }
-    setError('PDF/DOCX JD upload lands in Phase 4. Paste the JD or upload a .txt file for now.')
-    updateProject({
-      ...projectRef.current,
-      targetRole: { ...projectRef.current.targetRole, jdFileName: file.name },
-    })
-  }
-
   async function handleStartNewResume() {
     if (buildingRef.current) return
     const ok = window.confirm('Start a new resume? Current draft and preview will be cleared.')
@@ -265,6 +252,40 @@ export default function JdBuilderWizard() {
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
 
+  async function handleDownloadAndSave() {
+    if (!signedIn) {
+      throw new Error('Please sign in to download and save resumes.')
+    }
+    const current = projectRef.current
+    const blob = previewBlob
+    if (!blob) throw new Error('No resume ready to download.')
+
+    const role = builtRole || current.targetRole?.jobTitle || 'Resume'
+    const years = computeYearsOfExperience(current.experiences || [])
+    const yearsRequired = current.targetRole?.yearsRequired
+    const fileName = `${String(role).replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'resume'}-jd-tailored.docx`
+
+    const href = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = href
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(href), 2000)
+
+    await saveJdResumeToLibrary({
+      blob,
+      role,
+      yearsOfExperience: years || null,
+      yearsRequired: yearsRequired || null,
+      jdText: current.targetRole?.jobDescription || '',
+      templateId: current.selectedTemplateId || '',
+      fileName,
+    })
+    setSavedRefreshKey((n) => n + 1)
+  }
+
   async function handleBuild() {
     if (!signedIn) {
       setError('Please sign in to build a JD-tailored resume. Use Sign in above, then try again.')
@@ -274,7 +295,7 @@ export default function JdBuilderWizard() {
 
     const current = projectRef.current
     for (let i = 0; i < JD_STEPS.length; i++) {
-      if (['preview', 'references', 'templates'].includes(JD_STEPS[i].id)) continue
+      if (['preview', 'saved', 'references', 'templates'].includes(JD_STEPS[i].id)) continue
       const msg = validateStep(current, i)
       if (msg) {
         setError(msg)
@@ -403,15 +424,14 @@ export default function JdBuilderWizard() {
             uploading={basicUploading}
           />
         )}
-        {stepId === 'target' && (
-          <TargetRoleStep project={project} onChange={updateProject} />
-        )}
         {stepId === 'jd' && (
           <JobDescriptionStep
             project={project}
             onChange={updateProject}
-            onUploadJdFile={handleJdFile}
           />
+        )}
+        {stepId === 'target' && (
+          <TargetRoleStep project={project} onChange={updateProject} />
         )}
         {stepId === 'references' && (
           <ReferenceDocsStep project={project} onChange={updateProject} />
@@ -437,12 +457,16 @@ export default function JdBuilderWizard() {
             building={building}
             buildStepLabel={getJdBuildStepLabel(buildStep)}
             onStartNew={handleStartNewResume}
+            onDownloadAndSave={handleDownloadAndSave}
           />
+        )}
+        {stepId === 'saved' && (
+          <SavedResumesStep refreshKey={savedRefreshKey} />
         )}
 
         {error && <p className="builder-error" role="alert">{error}</p>}
 
-        {(!isTemplates || isPreview) && (
+        {(!isTemplates || isPreview) && stepId !== 'saved' && (
           <div className="form-cta form-cta--nav">
             {!isTemplates && !isPreview && (
               <button type="button" className="btn btn--primary btn--xl" onClick={goNext} disabled={building}>
@@ -457,6 +481,16 @@ export default function JdBuilderWizard() {
                 disabled={building}
               >
                 {building ? getJdBuildStepLabel(buildStep) : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+              </button>
+            )}
+            {isPreview && (
+              <button
+                type="button"
+                className="btn btn--primary btn--xl"
+                onClick={() => goToStep(JD_STEPS.findIndex((s) => s.id === 'saved'))}
+                disabled={building}
+              >
+                Saved Resumes
               </button>
             )}
           </div>

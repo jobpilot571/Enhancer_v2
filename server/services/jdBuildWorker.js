@@ -1,6 +1,6 @@
 import { getSession, updateSession, setGeneratedDocx } from '../store/sessionStore.js'
 import { updateBuildJob } from '../store/buildJobStore.js'
-import { analyzeJd, generateResumeFromJd, summaryBulletCountForYears } from './openaiService.js'
+import { analyzeJd, generateResumeFromJd, jdSummaryBulletCount } from './openaiService.js'
 import { generateResumeDocx } from './resumeDocxGenerator.js'
 
 function log(jobId, message) {
@@ -11,11 +11,18 @@ function formatDates(start, end) {
   const s = String(start || '').trim()
   const e = String(end || '').trim() || 'Present'
   if (!s) return e
-  return `${s} – ${e}`
+  return `${s} - ${e}`
+}
+
+function sanitizeLocPart(value) {
+  const v = String(value || '').trim()
+  if (!v) return ''
+  if (/^(n\/?a|na|none|null|undefined|remote|tbd|unknown)$/i.test(v)) return ''
+  return v
 }
 
 function formatCityState(city, state) {
-  return [city, state].filter(Boolean).join(', ')
+  return [sanitizeLocPart(city), sanitizeLocPart(state)].filter(Boolean).join(', ')
 }
 
 /** Parse "Jan 2020" / "2020-01" / "Present" into a sortable timestamp (higher = more recent). */
@@ -59,14 +66,7 @@ function collectJdSkills(jdData) {
   ].map((s) => String(s || '').trim()).filter(Boolean))]
 }
 
-function skillMentioned(text, skill) {
-  const t = String(text || '').toLowerCase()
-  const s = String(skill || '').toLowerCase().trim()
-  if (!s || s.length < 2) return false
-  return t.includes(s)
-}
-
-/** Ensure JD skills appear in skillCategories and every experience bullet mentions ≥1 JD skill. */
+/** Ensure JD skills appear in skillCategories; soft-clean bullets without robotic pads. */
 function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
   const jdSkills = collectJdSkills(jdData)
   if (!jdSkills.length) return resumeData
@@ -106,18 +106,17 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
       15,
       Math.max(3, Number(orderedCompanies[jobIdx]?.bulletCount) || job.bullets?.length || 8),
     )
-    const bullets = [...(job.bullets || [])].slice(0, maxBullets).map((raw, bi) => {
+    const bullets = [...(job.bullets || [])].slice(0, maxBullets).map((raw) => {
       let text = String(raw || '').trim()
       if (!text) return text
-      const skill = jdSkills[(jobIdx + bi) % jdSkills.length]
-      if (skill && !skillMentioned(text, skill)) {
-        text = `${text.replace(/\.$/, '')}, applying ${skill} to deliver production-ready outcomes.`
-      }
-      // Nudge short one-liners toward ~2 lines (~28+ words)
-      const words = text.split(/\s+/).filter(Boolean)
-      if (words.length < 28 && skill) {
-        text = `${text.replace(/\.$/, '')} across real project delivery with measurable stakeholder impact using ${skill}.`
-      }
+      // Soft cleanup only — do not append robotic skill pads
+      text = text
+        .replace(/\s+/g, ' ')
+        .replace(/[–—]/g, ' ')
+        .replace(/\(\s*/g, '')
+        .replace(/\s*\)/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
       return text
     })
     return { ...job, bullets }
@@ -135,17 +134,18 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
 function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
   const roleTitle = String(jdData?.roleTitle || formData.role || '').trim()
   const location = formatCityState(formData.city, formData.state)
-    || String(aiResume.location || '').trim()
-  const summaryCount = summaryBulletCountForYears(formData.yearsOfExperience)
+  const summaryCount = jdSummaryBulletCount()
 
   const summaryBullets = (aiResume.summaryBullets || [])
-    .map((b) => String(b || '').trim())
+    .map((b) => String(b || '').trim()
+      .replace(/[–—]/g, ' ')
+      .replace(/\(\s*/g, '')
+      .replace(/\s*\)/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim())
     .filter(Boolean)
 
-  const targetSummary = summaryCount >= 12
-    ? Math.max(12, Math.min(summaryBullets.length, 16))
-    : summaryCount
-  const trimmedSummary = summaryBullets.slice(0, targetSummary)
+  const trimmedSummary = summaryBullets.slice(0, summaryCount)
 
   const experience = orderedCompanies.map((c, i) => {
     const aiJob = (aiResume.experience || [])[i] || {}
@@ -208,6 +208,7 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
     skills,
     technicalSkills: skills,
     skillCategories,
+    keywords: skills,
     experience,
     education: Array.isArray(formData.education) && formData.education.length
       ? formData.education
@@ -248,7 +249,14 @@ export async function runJdBuildJob(jobId, sessionId) {
     )
     const resumeData = mergeJdResumeWithForm(aiResume, formData, jdData, ordered)
     updateSession(sessionId, { resumeData })
-    log(jobId, `content ready — ${resumeData.experience.length} jobs, ${resumeData.summaryBullets.length} summary bullets`)
+    const shortBullets = (resumeData.experience || []).flatMap((job) =>
+      (job.bullets || []).filter((b) => String(b).trim().split(/\s+/).length < 28),
+    )
+    log(
+      jobId,
+      `content ready — ${resumeData.experience.length} jobs, ${resumeData.summaryBullets.length} summary bullets`
+      + (shortBullets.length ? ` (warn: ${shortBullets.length} bullets under 28 words)` : ''),
+    )
 
     updateBuildJob(jobId, { step: 'building_docx' })
     const templateId = formData.templateId || 'compact-ats'

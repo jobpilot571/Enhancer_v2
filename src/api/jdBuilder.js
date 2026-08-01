@@ -107,6 +107,46 @@ export async function extractJdBasics(file) {
   return res.json()
 }
 
+/**
+ * Analyze pasted JD text → role title + required years (Claude-preferred).
+ */
+export async function analyzeJdText(jdText) {
+  const res = await request('/analyze-jd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jdText }),
+    signal: AbortSignal.timeout(90000),
+  })
+  return res.json()
+}
+
+/**
+ * Upload JD file (PDF/DOCX/TXT) → extract text + role/years.
+ */
+export async function analyzeJdFile(file) {
+  const form = new FormData()
+  form.append('jd', file)
+  const res = await request('/analyze-jd-file', {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(90000),
+  })
+  return res.json()
+}
+
+/**
+ * AI mode: suggest companies (USA/India) + present→past dates from JD.
+ */
+export async function suggestCompaniesFromJd(payload) {
+  const res = await request('/suggest-companies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(120000),
+  })
+  return res.json()
+}
+
 export async function getJdBuildStatus(jobId) {
   const res = await request(`/build-status/${jobId}`, {
     signal: AbortSignal.timeout(30000),
@@ -141,4 +181,75 @@ export function getDownloadUrl(sessionId) {
 export async function fetchFileBlob(sessionId) {
   const res = await request(`/file/${sessionId}`)
   return res.blob()
+}
+
+/**
+ * Save a completed JD resume into the user's Saved Resumes library.
+ */
+export async function saveJdResumeToLibrary({
+  blob,
+  role,
+  yearsOfExperience,
+  yearsRequired,
+  jdText,
+  templateId,
+  fileName,
+}) {
+  const form = new FormData()
+  form.append(
+    'file',
+    blob,
+    fileName || 'jd-tailored-resume.docx',
+  )
+  if (role != null) form.append('role', String(role))
+  if (yearsOfExperience != null && yearsOfExperience !== '') {
+    form.append('yearsOfExperience', String(yearsOfExperience))
+  }
+  if (yearsRequired != null && yearsRequired !== '') {
+    form.append('yearsRequired', String(yearsRequired))
+  }
+  if (jdText != null) form.append('jdText', String(jdText))
+  if (templateId != null) form.append('templateId', String(templateId))
+  if (fileName != null) form.append('fileName', String(fileName))
+
+  const res = await request('/saved', {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(120000),
+  })
+  return res.json()
+}
+
+export async function listSavedJdResumes() {
+  const res = await request('/saved', {
+    signal: AbortSignal.timeout(30000),
+  })
+  return res.json()
+}
+
+export function getSavedJdResumeFileUrl(id) {
+  return `${API_BASE}/saved/${id}/file`
+}
+
+export function getSavedJdResumeDownloadUrl(id) {
+  return `${API_BASE}/saved/${id}/download`
+}
+
+export function getSavedJdTextDownloadUrl(id) {
+  return `${API_BASE}/saved/${id}/jd`
+}
+
+export async function fetchSavedJdResumeBlob(id) {
+  const res = await request(`/saved/${id}/file`, {
+    signal: AbortSignal.timeout(60000),
+  })
+  return res.blob()
+}
+
+export async function deleteSavedJdResume(id) {
+  const res = await request(`/saved/${id}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(30000),
+  })
+  return res.json()
 }

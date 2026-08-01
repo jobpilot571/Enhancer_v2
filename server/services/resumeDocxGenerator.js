@@ -21,11 +21,89 @@ function formatDates(start, end) {
   const e = clean(end) || 'Present'
   if (!s && !e) return ''
   if (!s) return e
-  return `${s} – ${e}`
+  return `${s} - ${e}`
+}
+
+function sanitizeLocPart(value) {
+  const v = clean(value)
+  if (!v) return ''
+  if (/^(n\/?a|na|none|null|undefined|remote|tbd|unknown)$/i.test(v)) return ''
+  return v
 }
 
 function formatCityState(city, state) {
-  return [clean(city), clean(state)].filter(Boolean).join(', ')
+  return [sanitizeLocPart(city), sanitizeLocPart(state)].filter(Boolean).join(', ')
+}
+
+function collectKeywords(resume) {
+  const fromCats = (resume.skillCategories || []).flatMap((c) => c.skills || [])
+  const raw = [
+    ...(resume.keywords || []),
+    ...(resume.skills || []),
+    ...(resume.technicalSkills || []),
+    ...fromCats,
+  ]
+  const seen = new Set()
+  const out = []
+  for (const item of raw) {
+    const k = clean(item)
+    if (!k || k.length < 2) continue
+    const key = k.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(k)
+  }
+  // Longer phrases first so "Spark SQL" wins over "SQL"
+  return out.sort((a, b) => b.length - a.length)
+}
+
+function buildHighlightedRuns(text, keywords, { size = 20, color = '1F2937', boldAll = false } = {}) {
+  const full = String(text || '')
+  if (!full) return []
+  if (boldAll || !keywords?.length) {
+    return [new TextRun({ text: full, size, font: 'Calibri', color, bold: boldAll })]
+  }
+
+  const lower = full.toLowerCase()
+  const parts = []
+  let cursor = 0
+  while (cursor < full.length) {
+    let hitAt = -1
+    let hitLen = 0
+    for (const phrase of keywords) {
+      const p = String(phrase || '').trim()
+      if (p.length < 2) continue
+      const idx = lower.indexOf(p.toLowerCase(), cursor)
+      if (idx === -1) continue
+      if (hitAt === -1 || idx < hitAt || (idx === hitAt && p.length > hitLen)) {
+        // Prefer word-ish boundaries for short tokens
+        if (p.length <= 3) {
+          const before = idx === 0 || /[^a-z0-9]/i.test(full[idx - 1] || '')
+          const after = idx + p.length >= full.length || /[^a-z0-9]/i.test(full[idx + p.length] || '')
+          if (!before || !after) continue
+        }
+        hitAt = idx
+        hitLen = p.length
+      }
+    }
+    if (hitAt === -1) {
+      parts.push({ text: full.slice(cursor), bold: false })
+      break
+    }
+    if (hitAt > cursor) parts.push({ text: full.slice(cursor, hitAt), bold: false })
+    parts.push({ text: full.slice(hitAt, hitAt + hitLen), bold: true })
+    cursor = hitAt + hitLen
+  }
+
+  return parts
+    .filter((p) => p.text)
+    .map((p) => new TextRun({
+      text: p.text,
+      size,
+      font: 'Calibri',
+      color,
+      bold: p.bold,
+    }))
 }
 
 function sectionHeading(text, accent, compact, style = {}) {
@@ -67,18 +145,14 @@ function bodyPara(text, opts = {}) {
   })
 }
 
-function bulletPara(text, compact) {
+function bulletPara(text, compact, keywords = []) {
+  const body = clean(text).replace(/^[•\-\*]\s*/, '')
+  const size = compact ? 18 : 20
+  const runs = buildHighlightedRuns(`• ${body}`, keywords, { size, color: '1F2937' })
   return new Paragraph({
     spacing: { after: compact ? 24 : 40 },
     indent: { left: convertInchesToTwip(0.15) },
-    children: [
-      new TextRun({
-        text: `• ${clean(text)}`,
-        size: compact ? 18 : 20,
-        font: 'Calibri',
-        color: '1F2937',
-      }),
-    ],
+    children: runs,
   })
 }
 
@@ -86,13 +160,19 @@ function contactLine(resume, style = {}) {
   if (style.contactStyle === 'phone-email') {
     return [clean(resume.phone), clean(resume.email)].filter(Boolean).join('  |  ')
   }
+  const loc = sanitizeLocPart(resume.location)
+    || formatCityState(resume.city, resume.state)
   const bits = [
-    clean(resume.location),
+    loc,
     clean(resume.phone),
     clean(resume.email),
     clean(resume.linkedin),
   ].filter(Boolean)
   return bits.join('  |  ')
+}
+
+function rightTabStop(style) {
+  return style.rightTab || TabStopPosition.RIGHT
 }
 
 function buildHeader(resume, style) {
@@ -243,7 +323,7 @@ function buildHeader(resume, style) {
   return children
 }
 
-function buildExperienceEntry(job, style, compact) {
+function buildExperienceEntry(job, style, compact, keywords = []) {
   const accent = style.forceBlack ? '000000' : (style.accent || '1E40AF')
   const ink = style.forceBlack ? '000000' : '111827'
   const muted = style.forceBlack ? '000000' : '4B5563'
@@ -251,26 +331,54 @@ function buildExperienceEntry(job, style, compact) {
   const company = clean(job.company)
   const title = clean(job.title)
   const dates = clean(job.dates) || formatDates(job.startDate, job.endDate)
-  const loc = clean(job.location) || formatCityState(job.city, job.state)
+  const loc = sanitizeLocPart(job.location) || formatCityState(job.city, job.state)
   const paras = []
   const layout = style.experienceLayout || 'title-dates'
 
-  if (layout === 'company-first') {
+  if (layout === 'company-role-split') {
+    // Company ................ Dates
+    // Role .................... Location
     paras.push(
       new Paragraph({
         spacing: { before: compact ? 80 : 120, after: 20 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: loc ? `${company} – ${loc}` : company, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
           new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
-    if (title) {
+    if (title || loc) {
+      paras.push(
+        new Paragraph({
+          spacing: { after: 40 },
+          tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
+          children: [
+            new TextRun({ text: title, bold: true, italics: true, size: 20, font: 'Calibri', color: ink }),
+            new TextRun({ text: '\t' }),
+            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+          ],
+        }),
+      )
+    }
+  } else if (layout === 'company-first') {
+    paras.push(
+      new Paragraph({
+        spacing: { before: compact ? 80 : 120, after: 20 },
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
+        children: [
+          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: '\t' }),
+          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+        ],
+      }),
+    )
+    if (title || loc) {
       paras.push(
         new Paragraph({
           spacing: { after: style.showResponsibilitiesLabel ? 20 : 40 },
+          tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
           children: [
             new TextRun({
               text: title,
@@ -280,6 +388,8 @@ function buildExperienceEntry(job, style, compact) {
               font: 'Calibri',
               color: '000000',
             }),
+            new TextRun({ text: '\t' }),
+            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
           ],
         }),
       )
@@ -304,30 +414,41 @@ function buildExperienceEntry(job, style, compact) {
     paras.push(
       new Paragraph({
         spacing: { before: compact ? 80 : 120, after: 20 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({
-            text: [title, company].filter(Boolean).join(' | '),
-            bold: true,
-            size: 20,
-            font: 'Calibri',
-            color: ink,
-          }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
           new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
-    if (loc) {
-      paras.push(bodyPara(loc, { after: 40, run: { size: 18, color: muted } }))
+    if (title || loc) {
+      paras.push(
+        new Paragraph({
+          spacing: { after: 40 },
+          tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
+          children: [
+            new TextRun({
+              text: company ? title : '',
+              bold: true,
+              italics: true,
+              size: 20,
+              font: 'Calibri',
+              color: ink,
+            }),
+            new TextRun({ text: '\t' }),
+            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+          ],
+        }),
+      )
     }
   } else if (layout === 'title-company-split') {
     paras.push(
       new Paragraph({
         spacing: { before: compact ? 80 : 120, after: 20 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
           new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
@@ -336,34 +457,43 @@ function buildExperienceEntry(job, style, compact) {
     paras.push(
       new Paragraph({
         spacing: { after: 40 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: companyColor }),
+          new TextRun({ text: company ? title : '', bold: true, size: 20, font: 'Calibri', color: companyColor }),
           new TextRun({ text: '\t' }),
           new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
         ],
       }),
     )
   } else {
-    // title-dates (default / classic-blue / modern-data / teal)
+    // title-dates → still prefer company left / dates right for clarity
     paras.push(
       new Paragraph({
         spacing: { before: compact ? 80 : 120, after: 20 },
-        tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: title, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, size: 18, font: 'Calibri', color: companyColor, italics: true }),
+          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
         ],
       }),
     )
-    const companyLine = [company, loc].filter(Boolean).join(' | ')
-    if (companyLine) {
+    if (title || loc) {
       paras.push(
         new Paragraph({
           spacing: { after: 40 },
+          tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
           children: [
-            new TextRun({ text: companyLine, size: 20, font: 'Calibri', color: muted, italics: true }),
+            new TextRun({
+              text: company ? title : '',
+              bold: true,
+              italics: true,
+              size: 20,
+              font: 'Calibri',
+              color: muted,
+            }),
+            new TextRun({ text: '\t' }),
+            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
           ],
         }),
       )
@@ -371,7 +501,7 @@ function buildExperienceEntry(job, style, compact) {
   }
 
   for (const b of (job.bullets || []).map(clean).filter(Boolean)) {
-    paras.push(bulletPara(b, compact))
+    paras.push(bulletPara(b, compact, keywords))
   }
   return paras
 }
@@ -389,12 +519,17 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
       accent: '000000',
       nameColor: '000000',
       forceBlack: true,
+      experienceLayout: 'company-role-split',
       // Avoid colored banner headers
       headerStyle: style.headerStyle === 'banner' ? 'centered' : style.headerStyle,
     }
   }
   const accent = style.accent || '1E40AF'
   const compact = !!style.compact
+  const margin = style.pageBorder ? 0.5 : (compact ? 0.4 : 0.45)
+  // US Letter 8.5" → content width for right-aligned dates/locations
+  style.rightTab = convertInchesToTwip(8.5 - margin * 2)
+  const keywords = collectKeywords(resume)
   const children = []
 
   children.push(...buildHeader(resume, style))
@@ -409,7 +544,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
     if (summaryText && !summaryBullets.length) {
       children.push(bodyPara(summaryText, { after: 80 }))
     }
-    for (const b of summaryBullets) children.push(bulletPara(b, compact))
+    for (const b of summaryBullets) children.push(bulletPara(b, compact, keywords))
   }
 
   // Categorized skills if provided, else flat list
@@ -466,7 +601,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
   if (experience.length) {
     children.push(sectionHeading('Professional Experience', accent, compact, style))
     for (const job of experience) {
-      children.push(...buildExperienceEntry(job, style, compact))
+      children.push(...buildExperienceEntry(job, style, compact, keywords))
     }
   }
 
@@ -480,35 +615,53 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
       }
       const school = clean(edu.school || edu.university || edu.college)
       const degree = clean(edu.degree)
-      const course = clean(edu.course || edu.field)
+      const course = clean(edu.course || edu.field || edu.major)
       const dates = clean(edu.dates) || formatDates(edu.startDate, edu.endDate)
-      const line1 = [degree, course].filter(Boolean).join(' in ')
+      const eduLoc = sanitizeLocPart(edu.location)
+      const degreeLine = [degree, course].filter(Boolean).join(', ')
 
       children.push(
         new Paragraph({
           spacing: { before: 80, after: 20 },
-          tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.RIGHT }],
+          tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
           children: [
-            new TextRun({ text: line1 || school, bold: true, size: 20, font: 'Calibri', color: '111827' }),
+            new TextRun({
+              text: school || degreeLine,
+              bold: true,
+              size: 20,
+              font: 'Calibri',
+              color: '111827',
+            }),
             new TextRun({ text: '\t' }),
             new TextRun({ text: dates, size: 18, font: 'Calibri', color: '4B5563' }),
           ],
         }),
       )
-      if (line1 && school) {
-        children.push(bodyPara(school, { after: 60 }))
+      if (school && degreeLine) {
+        children.push(
+          new Paragraph({
+            spacing: { after: eduLoc ? 10 : 60 },
+            tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
+            children: [
+              new TextRun({ text: degreeLine, size: 20, font: 'Calibri', color: '1F2937' }),
+              new TextRun({ text: '\t' }),
+              new TextRun({ text: eduLoc, size: 18, font: 'Calibri', color: '4B5563' }),
+            ],
+          }),
+        )
+      } else if (eduLoc) {
+        children.push(bodyPara(eduLoc, { after: 60, run: { size: 18, color: '4B5563' } }))
       }
     }
   }
 
-  const margin = style.pageBorder ? 0.75 : (compact ? 0.55 : 0.7)
   const pageBorders = style.pageBorder
     ? {
         pageBorders: {
-          pageBorderTop: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
-          pageBorderRight: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
-          pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
-          pageBorderLeft: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 24 },
+          pageBorderTop: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 18 },
+          pageBorderRight: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 18 },
+          pageBorderBottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 18 },
+          pageBorderLeft: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 18 },
         },
       }
     : {}
@@ -521,8 +674,8 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
             margin: {
               top: convertInchesToTwip(margin),
               bottom: convertInchesToTwip(margin),
-              left: convertInchesToTwip(0.7),
-              right: convertInchesToTwip(0.7),
+              left: convertInchesToTwip(margin),
+              right: convertInchesToTwip(margin),
             },
             ...pageBorders,
           },

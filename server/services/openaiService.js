@@ -56,6 +56,7 @@ const JD_SCHEMA = {
   type: 'object',
   properties: {
     roleTitle: { type: 'string' },
+    yearsRequired: { type: 'number' },
     requiredSkills: { type: 'array', items: { type: 'string' } },
     preferredSkills: { type: 'array', items: { type: 'string' } },
     responsibilities: { type: 'array', items: { type: 'string' } },
@@ -64,7 +65,7 @@ const JD_SCHEMA = {
     mustHaveKeywords: { type: 'array', items: { type: 'string' } },
     niceToHaveKeywords: { type: 'array', items: { type: 'string' } },
   },
-  required: ['roleTitle', 'requiredSkills', 'preferredSkills', 'responsibilities', 'toolsTechnologies', 'domainKeywords', 'mustHaveKeywords', 'niceToHaveKeywords'],
+  required: ['roleTitle', 'yearsRequired', 'requiredSkills', 'preferredSkills', 'responsibilities', 'toolsTechnologies', 'domainKeywords', 'mustHaveKeywords', 'niceToHaveKeywords'],
   additionalProperties: false,
 }
 
@@ -176,15 +177,16 @@ const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or
 - Reject generic lines like "Delivered analysis and reporting to support decisions" unless tied to a named system, company domain, and JD skill.`
 
 /** Stricter rules for JD-tailored resume builds. */
-const JD_BULLET_RULES = `Experience bullet rules (strict — EVERY experience bullet MUST follow ALL of these):
-- Real-time project involvement: name the project/system, your role, technical approach, and business outcome.
-- Professional, clean, humanized, understandable — sounds like a real engineer/analyst wrote it.
-- Technical and specific (tools, frameworks, data, APIs, cloud, methods) — never vague filler.
-- EACH bullet MUST include at least ONE skill/tool/keyword from the job description (naturally woven in).
-- EACH bullet MUST be AT LEAST 2 lines when rendered (about 28–40 words). Prefer ~32–38 words. Never write a short one-liner.
-- Do NOT exceed ~42 words / about 2.5 lines.
-- Use strong action verbs and measurable impact where believable.
+const JD_BULLET_RULES = `Experience and summary bullet rules (strict — follow ALL):
+- Think like an intelligent senior resume strategist: every bullet must earn its place with real project ownership, technical depth, and business impact.
+- Write like a strong working professional: humanized, natural, advanced, modern, aggressive, impressive, and professional. NEVER robotic, generic, or AI filler.
+- EACH bullet MUST be EXACTLY two FULL lines when rendered on a standard resume page. Target 32–40 words. Never one-liners. Never half-empty second lines. Rarely exceed ~42 words / a short third line.
+- Every bullet must be meaningful: name the project or system, your concrete actions, tools/methods used, and a clear outcome or metric when believable.
+- Technical and current-market: use modern platforms, pipelines, analytics, cloud, automation, and delivery practices that hiring managers expect now.
+- EACH experience bullet MUST weave in at least ONE JD skill/tool/keyword naturally, and often a stronger adjacent advanced skill beyond the JD minimum.
+- Do NOT use hyphen/dash characters (-) or parentheses () inside bullets. Use combining words instead, e.g. "JSON, XML, and CSV" not "(JSON, XML, CSV)"; "SQL based reporting" not "SQL-based reporting".
 - Do NOT start with a bullet character. Plain sentence text only.
+- Sound like real-time experience from someone who lived the project, not a template.
 - No color instructions — content only.`
 
 function normalizeRating(value) {
@@ -362,12 +364,14 @@ export async function analyzeJd(jdText) {
   const data = await jsonCompletion(
     `Extract structured hiring signal from this cleaned job description.
 Return ONLY JSON. Keep lists short and concrete (skills/tools as short names, not sentences).
+roleTitle: the primary job title being hired for.
+yearsRequired: minimum years of experience required as a number (use 0 if not stated). Prefer the minimum when a range is given (e.g. "5-7 years" → 5, "5+ years" → 5).
 Always include concrete tools/platforms named in the JD (e.g. Agentforce, Cursor, Claude, Apex, LangChain, Snowflake, Databricks, BigQuery, Salesforce Data 360, Python, TypeScript, Java).
 Ignore any residual salary, benefits, location, EEO, or apply instructions.`,
     `Cleaned JD:\n${cleaned.slice(0, 6000)}`,
     'jd_analysis',
     JD_SCHEMA,
-    { maxTokens: 1200 },
+    { maxTokens: 1200, preferProviders: ['claude'] },
   )
 
   const enriched = enrichJdWithExtractedTools(data, cleaned)
@@ -674,13 +678,18 @@ Generate the complete resume JSON.`,
   )
 }
 
-/** Summary bullet count by years of experience (JD-Tailored builder). */
+/** Summary bullet count by years of experience (legacy Build New Resume). */
 export function summaryBulletCountForYears(years) {
   const y = Number(years) || 0
   if (y <= 4) return 5
   if (y <= 6) return 7
   if (y <= 10) return 10
   return 12
+}
+
+/** JD-Tailored builder always uses 6 professional summary bullets. */
+export function jdSummaryBulletCount() {
+  return 6
 }
 
 /**
@@ -690,7 +699,7 @@ export function summaryBulletCountForYears(years) {
 export async function generateResumeFromJd(formData, jdData) {
   const companies = Array.isArray(formData.companies) ? formData.companies : []
   const years = Number(formData.yearsOfExperience) || 0
-  const summaryCount = summaryBulletCountForYears(years)
+  const summaryCount = jdSummaryBulletCount()
   const roleTitle = String(jdData?.roleTitle || formData.role || '').trim()
 
   const jdSkills = [
@@ -704,43 +713,78 @@ export async function generateResumeFromJd(formData, jdData) {
   ]
 
   const companyLines = companies.map((c, i) => {
-    const loc = [c.city, c.state].filter(Boolean).join(', ')
+    const loc = [c.city, c.state, c.country].filter(Boolean).join(', ')
     const n = Math.min(15, Math.max(3, Number(c.bulletCount) || 8))
-    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | City/State="${loc || 'N/A'}" | BulletCount=${n} | OptionalSummaryGuidance="${String(c.summary || '').trim() || '(none)'}"`
+    const guidance = String(c.summary || '').trim()
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | Location="${loc || '(omit if unknown)'}" | BulletCount=${n} | Each bullet MUST be a FULL two-line meaningful project statement | JD-aligned guidance="${guidance || '(none — invent strong advanced JD-matched project bullets)'}"`
   }).join('\n')
 
+  const ref = formData.referenceMaterial || null
+  const refExperience = Array.isArray(ref?.experience) ? ref.experience : []
+  const refSummary = Array.isArray(ref?.summaryBullets) ? ref.summaryBullets : []
+  const refSkills = Array.isArray(ref?.skills) ? ref.skills : []
+  const refBullets = refExperience.flatMap((exp) => exp.bullets || []).filter(Boolean)
+  const refBlock = (refSummary.length || refBullets.length || refSkills.length)
+    ? [
+      'Approved reference material from uploaded PDFs/DOCX (CRITICAL):',
+      refSkills.length
+        ? `- Skills from references: ${refSkills.slice(0, 40).join(', ')}`
+        : '',
+      refSummary.length
+        ? `- Summary lines to preserve meaning from references (keep original wording when already strong; expand short lines to FULL two-line bullets without changing the core claim):\n${refSummary.slice(0, 12).map((b) => `  • ${b}`).join('\n')}`
+        : '',
+      refBullets.length
+        ? `- Experience/project bullets to preserve from references (keep original wording when already strong; if short, expand to a FULL two-line meaningful bullet while keeping the same project/tools/outcome):\n${refBullets.slice(0, 40).map((b) => `  • ${b}`).join('\n')}`
+        : '',
+    ].filter(Boolean).join('\n')
+    : ''
+
+  const aiModeNote = formData.aiMode
+    ? `\nAI MODE is ON (industry hint: ${formData.aiIndustry || 'from JD'}). First match the JD tightly, then elevate with advanced modern skills. Every experience bullet MUST be a FULL two-line, meaningful project bullet. Use each company's JD-aligned guidance. Prefer 10–12 dense bullets per company.`
+    : ''
+
   return jsonCompletion(
-    `You are an expert resume writer building a brand-new resume from scratch that is STRONGLY tailored to a specific job description.
+    `You are an elite resume strategist and intelligent AI writer. Build a brand-new resume that first MATCHES THE JD STRONGLY, then makes the candidate look advanced, modern, and market ready for "${roleTitle}".
+${aiModeNote}
 
 ${JD_BULLET_RULES}
 
+Strategy order (mandatory):
+1) JD fit first: cover required skills, tools, responsibilities, keywords, and seniority for ~${years} years of experience.
+2) Then elevate: add advanced skills beyond the JD minimum that still fit the role/industry and make the resume stronger than average applicants.
+3) Modernize: reflect current market practices and tools hiring managers expect now.
+4) Add AI intelligently: weave practical AI tool usage into bullets that already fit each company and project story. AI must feel native to the work, not pasted on.
+
 Hard rules:
-- The candidate has NO existing resume — invent believable, JD-aligned content from their facts + the JD.
 - Resume target role / title MUST be exactly: "${roleTitle}" (the JD role). Do not use a different title.
 - Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
 - For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
-- EVERY experience bullet must be ~2 lines (28–40 words) and must include at least one JD skill/tool/keyword.
-- Align every bullet to JD responsibilities, tools, and keywords — sound like someone who already does this job with real project ownership.
-- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets.
-- Older companies: still JD-aligned with real project stories; each bullet still needs ≥1 JD skill.
-- If a company has OptionalSummaryGuidance, use it as soft guidance for that company's bullets (do not copy it verbatim into bullets unless it fits).
-- summaryBullets: return EXACTLY ${summaryCount} strong, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
-- skillCategories: return 5–7 category headings. Include EVERY skill from the JD list below (required + preferred + tools + keywords) plus closely related skills. Do not omit JD skills.
-- skills + technicalSkills: flat list covering the SAME complete skill set (short names only). Prefer JD vocabulary.
-- email/phone/location: copy from user input.
+- EVERY summary bullet and EVERY experience bullet MUST be a FULL two lines (about 32–40 words). Reject short one-liners. Each bullet must be complete, neat, humanized, understandable, professional, natural, and meaningful.
+- Align every bullet to JD responsibilities, tools, and keywords with real project ownership and advanced delivery.
+- When JD-aligned guidance is provided for a company, follow it closely for that company's bullets.
+- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets, plus stronger adjacent advanced skills.
+- Older companies: still JD-aligned with real project stories; each bullet still needs ≥1 JD skill and advanced depth appropriate to that role level.
+- AI tools: include ONE summary bullet showing AI tools used at work, and include at least ONE experience AI bullet in EACH company when believable, especially the most recent role. Tie AI usage to that company's domain and existing project themes.
+- skillCategories: return 5–7 category headings. Include EVERY JD skill below, PLUS advanced modern related skills that strengthen the profile. Prefer current-market vocabulary.
+- skills + technicalSkills: flat list covering the SAME complete elevated skill set (short names only).
+- When reference material is provided: preserve strong original wording; expand short reference lines into FULL two-line meaningful bullets without inventing unrelated claims.
+- summaryBullets: return EXACTLY ${summaryCount} strong, FULL two-line, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
+- Never put hyphens (-) or parentheses () inside summary or experience bullets; use combining words instead.
+- Never invent placeholder location text like Remote or N/A.
+- email/phone/location: copy from user input; omit blank fields.
 - education: return [] (empty array) unless the user provided education below — then copy those entries.
 - Return experience entries in the SAME order as the companies listed.`,
     `Candidate:
 - Name: ${formData.name}
 - Email: ${formData.email || ''}
 - Phone: ${formData.phone || ''}
-- City/State: ${[formData.city, formData.state].filter(Boolean).join(', ') || formData.location || ''}
+- City/State: ${[formData.city, formData.state].filter(Boolean).join(', ') || '(not provided — omit)'}
 - User role hint: ${formData.role || '(use JD role)'}
 - Years of experience: ${years}
-- Required summary bullet count: ${summaryCount}
+- Required summary bullet count: ${summaryCount} (each FULL two lines)
 - Education (use as-is if present): ${JSON.stringify(formData.education || [])}
 
-JD analysis (tailor heavily to this):
+JD analysis (match FIRST, then elevate above this baseline):
 - Role title: ${roleTitle}
 - Required skills: ${(jdData?.requiredSkills || []).join(', ') || '(see JD text)'}
 - Preferred skills: ${(jdData?.preferredSkills || []).join(', ') || ''}
@@ -748,19 +792,196 @@ JD analysis (tailor heavily to this):
 - Must-have keywords: ${(jdData?.mustHaveKeywords || []).join(', ') || ''}
 - Domain keywords: ${(jdData?.domainKeywords || []).join(', ') || ''}
 - Key responsibilities: ${(jdData?.responsibilities || []).slice(0, 12).join(' | ') || ''}
-- All JD skills that MUST appear in skillCategories AND mostly in the PRESENT company bullets: ${jdSkills.join(', ') || '(extract from JD text)'}
+- JD skills that MUST appear, plus advanced related skills that make the resume stronger: ${jdSkills.join(', ') || '(extract from JD text)'}
 
 Companies (present→past order already applied by caller — #1 is present/most recent):
 ${companyLines || '(none)'}
 
+${refBlock || '(No reference document — invent strong, advanced, human, JD-matched project bullets with FULL two-line depth.)'}
+
 Raw JD excerpt (for extra context):
 ${String(formData.jdText || '').slice(0, 4500)}
 
-Generate the complete resume JSON.`,
+Generate the complete resume JSON. Every bullet must be a full two-line meaningful statement.`,
     'build_jd_resume',
     BUILD_RESUME_SCHEMA,
-    { maxTokens: 5096 },
+    { maxTokens: 8192, preferProviders: ['claude'] },
   )
+}
+
+const SUGGEST_COMPANIES_SCHEMA = {
+  type: 'object',
+  properties: {
+    industry: { type: 'string' },
+    companies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          companyName: { type: 'string' },
+          jobTitle: { type: 'string' },
+          country: { type: 'string' },
+          city: { type: 'string' },
+          state: { type: 'string' },
+          startDate: { type: 'string' },
+          endDate: { type: 'string' },
+          bulletCount: { type: 'number' },
+          bulletGuidance: { type: 'string' },
+        },
+        required: [
+          'companyName',
+          'jobTitle',
+          'country',
+          'city',
+          'state',
+          'startDate',
+          'endDate',
+          'bulletCount',
+          'bulletGuidance',
+        ],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['industry', 'companies'],
+  additionalProperties: false,
+}
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function formatMonYear(date) {
+  return `${MONTH_ABBR[date.getUTCMonth()]} ${date.getUTCFullYear()}`
+}
+
+/** Build present→past date ranges spanning totalYears across N companies. */
+export function buildPresentToPastRanges(companyCount, totalYears) {
+  const n = Math.min(6, Math.max(1, Number(companyCount) || 1))
+  const years = Math.min(40, Math.max(1, Number(totalYears) || 5))
+  const now = new Date()
+  const endExclusive = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+  const startEarliest = Date.UTC(now.getUTCFullYear() - years, now.getUTCMonth(), 1)
+  const totalMonths = Math.max(n, Math.round((endExclusive - startEarliest) / (30.44 * 24 * 3600 * 1000)))
+  const base = Math.floor(totalMonths / n)
+  let rem = totalMonths - base * n
+  const ranges = []
+  let cursorEnd = endExclusive
+  for (let i = 0; i < n; i++) {
+    const span = base + (rem > 0 ? 1 : 0)
+    if (rem > 0) rem -= 1
+    const endDate = new Date(cursorEnd)
+    const startDate = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth() - span, 1))
+    ranges.push({
+      startDate: formatMonYear(startDate),
+      endDate: i === 0 ? 'Present' : formatMonYear(endDate),
+    })
+    cursorEnd = startDate.getTime()
+  }
+  return ranges
+}
+
+/**
+ * Suggest industry-fit companies (USA/India split) with present→past dates for AI mode.
+ */
+export async function suggestCompaniesFromJd({
+  jdText,
+  roleTitle = '',
+  yearsOfExperience = 5,
+  companyCount = 3,
+  usaCount = 2,
+  indiaCount = 1,
+} = {}) {
+  const n = Math.min(6, Math.max(1, Number(companyCount) || 1))
+  let usa = Math.max(0, Number(usaCount) || 0)
+  let india = Math.max(0, Number(indiaCount) || 0)
+  if (usa + india !== n) {
+    // Normalize: fill remaining to USA
+    if (usa + india < n) usa += n - (usa + india)
+    else {
+      // trim India first
+      const overflow = usa + india - n
+      india = Math.max(0, india - overflow)
+      usa = n - india
+    }
+  }
+  const years = Math.min(40, Math.max(1, Number(yearsOfExperience) || 5))
+  const dateRanges = buildPresentToPastRanges(n, years)
+  const countryPlan = [
+    ...Array.from({ length: usa }, () => 'USA'),
+    ...Array.from({ length: india }, () => 'India'),
+  ]
+
+  const data = await jsonCompletion(
+    `You are a career strategist filling a resume company history for someone targeting a job.
+
+Hard rules:
+- Infer the JD industry (e.g. FinTech, Healthcare IT, SaaS, Consulting, E-commerce, Banking).
+- Return EXACTLY ${n} companies in present → past order (index 0 = current/most recent).
+- Country assignment for each company in order MUST be: ${countryPlan.join(', ')}.
+- Pick believable, well-known employers that fit the industry and country (real company names).
+- For USA: city + 2-letter US state code (e.g. Austin, TX).
+- For India: city + Indian state/region name (e.g. Bangalore, Karnataka). Do NOT invent US state codes for India.
+- jobTitle should progress sensibly toward "${roleTitle || 'the JD role'}" (more senior in recent roles).
+- bulletCount MUST be 10, 11, or 12 for EVERY company.
+- bulletGuidance: 1–2 sentences of JD-aligned themes/tools this company should emphasize (not full bullets).
+- Do NOT invent dates — the caller will overwrite dates. Still return placeholder startDate/endDate fields as empty strings if unsure.
+- companyName must be distinct and realistic.`,
+    `Target role: ${roleTitle || '(from JD)'}
+Years of experience to cover: ${years}
+Companies total: ${n} (USA=${usa}, India=${india})
+Country order (present→past): ${countryPlan.join(' → ')}
+
+Job description:
+${String(jdText || '').slice(0, 5500)}
+
+Return industry + companies JSON.`,
+    'suggest_jd_companies',
+    SUGGEST_COMPANIES_SCHEMA,
+    { maxTokens: 2200, preferProviders: ['claude'] },
+  )
+
+  const companies = (data.companies || []).slice(0, n).map((c, i) => {
+    const forcedCountry = countryPlan[i] || (/india/i.test(c.country || '') ? 'India' : 'USA')
+    const dates = dateRanges[i] || { startDate: 'Jan 2020', endDate: i === 0 ? 'Present' : 'Jan 2022' }
+    return {
+      companyName: String(c.companyName || '').trim(),
+      jobTitle: String(c.jobTitle || roleTitle || '').trim(),
+      country: forcedCountry,
+      city: String(c.city || '').trim(),
+      state: String(c.state || '').trim(),
+      startDate: dates.startDate,
+      endDate: dates.endDate,
+      bulletCount: Math.min(12, Math.max(10, Number(c.bulletCount) || 11)),
+      bulletGuidance: String(c.bulletGuidance || '').trim(),
+    }
+  })
+
+  // Pad if AI returned fewer
+  while (companies.length < n) {
+    const i = companies.length
+    const dates = dateRanges[i]
+    companies.push({
+      companyName: forcedPlaceholderName(countryPlan[i], i),
+      jobTitle: roleTitle || 'Professional',
+      country: countryPlan[i],
+      city: countryPlan[i] === 'India' ? 'Bangalore' : 'Austin',
+      state: countryPlan[i] === 'India' ? 'Karnataka' : 'TX',
+      startDate: dates.startDate,
+      endDate: dates.endDate,
+      bulletCount: 11,
+      bulletGuidance: 'Emphasize JD-required tools, delivery, and measurable outcomes.',
+    })
+  }
+
+  return {
+    industry: String(data.industry || '').trim(),
+    companies,
+  }
+}
+
+function forcedPlaceholderName(country, index) {
+  return country === 'India'
+    ? `Technology Services Co ${index + 1}`
+    : `Technology Solutions Inc ${index + 1}`
 }
 
 const EXTRA_BULLET_SCHEMA = {
