@@ -114,9 +114,11 @@ export function setUserComplimentaryAccess(email, enabled, planType = 'friend') 
     user.complimentaryPlanType = type
     user.complimentaryNote = planTypeLabel(type)
     user.complimentaryAt = new Date().toISOString()
-  } else if (user.complimentary || user.plan === 'professional') {
-    // Only downgrade complimentary grants — leave real paid plans alone later
-    user.plan = 'free'
+  } else if (user.complimentary) {
+    // Only revoke complimentary grants — leave Stripe-paid subscriptions alone
+    if (!user.stripeSubscriptionId || !isActiveStripeStatus(user.stripeSubscriptionStatus)) {
+      user.plan = 'free'
+    }
     user.complimentary = false
     user.complimentaryPlanType = null
     user.complimentaryNote = ''
@@ -273,6 +275,56 @@ export function findUserByGoogleId(googleId) {
   if (!googleId) return null
   const { users } = getUsers()
   return users.find((u) => u.googleId === googleId) || null
+}
+
+function isActiveStripeStatus(status) {
+  return status === 'active' || status === 'trialing'
+}
+
+export function findUserByStripeCustomerId(customerId) {
+  if (!customerId) return null
+  const { users } = getUsers()
+  return users.find((u) => u.stripeCustomerId === customerId) || null
+}
+
+/**
+ * Apply Stripe subscription state onto a user account.
+ * Complimentary whitelist still wins for unlimited access while listed.
+ */
+export function applyStripeSubscription(userId, {
+  customerId,
+  subscriptionId,
+  status,
+  planId,
+} = {}) {
+  const data = getUsers()
+  const user = data.users.find((u) => u.id === userId)
+  if (!user) return null
+
+  if (customerId) user.stripeCustomerId = customerId
+  if (subscriptionId !== undefined) user.stripeSubscriptionId = subscriptionId || null
+  if (status !== undefined) user.stripeSubscriptionStatus = status || null
+
+  const complimentary = isComplimentaryEmail(user.email) || Boolean(user.complimentary)
+  if (complimentary) {
+    user.complimentary = true
+    if (user.plan !== 'professional' && user.plan !== 'enterprise') {
+      user.plan = 'professional'
+    }
+  } else if (isActiveStripeStatus(status) && planId) {
+    user.plan = planId
+  } else if (!isActiveStripeStatus(status)) {
+    user.plan = 'free'
+    if (status === 'canceled' || status === 'unpaid' || status === 'incomplete_expired') {
+      user.stripeSubscriptionId = null
+    }
+  }
+
+  saveUsers(data)
+  console.log(
+    `[stripe] user ${user.email} → plan=${user.plan} status=${user.stripeSubscriptionStatus || 'none'}`,
+  )
+  return publicUser(user)
 }
 
 export function createUser({ name, email, password }) {

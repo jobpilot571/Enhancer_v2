@@ -5,11 +5,13 @@ import GoogleSignInButton from '../components/GoogleSignInButton'
 import { useAuth } from '../context/AuthContext'
 import { stashOtpHint } from '../api/otpHint'
 import { isLocalDevHost, shouldShowGoogleAuth } from '../utils/googleAuthUi'
+import { safeNextPath } from '../utils/safeRedirect'
 
 export default function LoginPage() {
   const { login, loginWithGoogle, loginLocalDev, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const nextPath = safeNextPath(searchParams.get('next'), '/')
   const [email, setEmail] = useState(searchParams.get('email') || '')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -20,8 +22,8 @@ export default function LoginPage() {
   const localDev = isLocalDevHost()
 
   useEffect(() => {
-    if (isAuthenticated) navigate('/', { replace: true })
-  }, [isAuthenticated, navigate])
+    if (isAuthenticated) navigate(nextPath, { replace: true })
+  }, [isAuthenticated, navigate, nextPath])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -31,7 +33,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       await login({ email, password })
-      navigate('/', { replace: true })
+      navigate(nextPath, { replace: true })
     } catch (err) {
       if (err.code === 'NOT_REGISTERED') {
         setNotRegisteredEmail(err.email || email)
@@ -59,7 +61,7 @@ export default function LoginPage() {
         navigate(`/verify?email=${encodeURIComponent(data.email)}`, { replace: true })
         return
       }
-      navigate('/', { replace: true })
+      navigate(nextPath, { replace: true })
     } catch (err) {
       setError(err.message || 'Google sign-in failed')
     } finally {
@@ -72,7 +74,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       await loginLocalDev()
-      navigate('/', { replace: true })
+      navigate(nextPath, { replace: true })
     } catch (err) {
       setError(err.message || 'Local dev sign-in failed. Set LOCAL_DEV_AUTH=true in .env and restart the server.')
     } finally {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchPublicPricing } from '../api/admin'
+import { useAuth } from '../context/AuthContext'
 
 const FALLBACK_PLANS = [
   {
@@ -54,8 +55,30 @@ const FALLBACK_PLANS = [
   },
 ]
 
+function ctaTo(plan, { isAuthenticated, userPlan }) {
+  const isFree = plan.id === 'starter' || plan.price === '0'
+  if (isFree) return '/signup'
+
+  if (plan.id === 'professional') {
+    if (userPlan === 'professional' || userPlan === 'enterprise') return '/services/resume-enhancer'
+    if (isAuthenticated) return '/billing/checkout?plan=professional'
+    return `/login?next=${encodeURIComponent('/billing/checkout?plan=professional')}`
+  }
+
+  return '/#contact'
+}
+
+function ctaLabel(plan, userPlan) {
+  if (plan.id === 'professional' && (userPlan === 'professional' || userPlan === 'enterprise')) {
+    return 'Go to app'
+  }
+  return plan.cta
+}
+
 export default function Pricing() {
   const [plans, setPlans] = useState(FALLBACK_PLANS)
+  const { isAuthenticated, user } = useAuth()
+  const userPlan = user?.plan || 'free'
 
   useEffect(() => {
     let cancelled = false
@@ -109,10 +132,10 @@ export default function Pricing() {
                 ))}
               </ul>
               <Link
-                to={plan.id === 'starter' || plan.price === '0' ? '/signup' : '/#contact'}
+                to={ctaTo(plan, { isAuthenticated, userPlan })}
                 className={`btn ${plan.featured ? 'btn--primary' : 'btn--outline'} btn--full`}
               >
-                {plan.cta}
+                {ctaLabel(plan, userPlan)}
               </Link>
             </div>
           ))}

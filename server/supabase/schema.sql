@@ -25,6 +25,14 @@ create table if not exists public.users (
 create index if not exists users_email_idx on public.users (email);
 create index if not exists users_google_id_idx on public.users (google_id);
 
+-- Stripe billing (safe to re-run)
+alter table public.users add column if not exists stripe_customer_id text;
+alter table public.users add column if not exists stripe_subscription_id text;
+alter table public.users add column if not exists stripe_subscription_status text;
+create unique index if not exists users_stripe_customer_id_uidx
+  on public.users (stripe_customer_id)
+  where stripe_customer_id is not null;
+
 -- ─── Monthly usage counters ───────────────────────────────────────────────
 create table if not exists public.usage_monthly (
   user_id uuid not null references public.users (id) on delete cascade,

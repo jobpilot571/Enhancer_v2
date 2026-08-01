@@ -9,6 +9,8 @@ import AdminPage from './pages/AdminPage'
 import LoginPage from './pages/LoginPage'
 import SignupPage from './pages/SignupPage'
 import VerifyEmailPage from './pages/VerifyEmailPage'
+import BillingCheckoutPage from './pages/BillingCheckoutPage'
+import BillingSuccessPage from './pages/BillingSuccessPage'
 import useScrollReveal, { useScrollToHash } from './hooks/useScrollReveal'
 
 export default function App() {
@@ -45,6 +47,8 @@ export default function App() {
           <Route path="/services/resume-enhancer" element={<ResumeEnhancerPage />} />
           <Route path="/services/resume-builder" element={<ResumeBuilderPage />} />
           <Route path="/services/jd-tailored-resume" element={<JDTailoredResumePage />} />
+          <Route path="/billing/checkout" element={<BillingCheckoutPage />} />
+          <Route path="/billing/success" element={<BillingSuccessPage />} />
         </Routes>
         <Footer />
       </div>

@@ -6,12 +6,14 @@ import builderRoutes from './routes/builder.js'
 import jdBuilderRoutes from './routes/jdBuilder.js'
 import adminRoutes from './routes/admin.js'
 import authRoutes from './routes/auth.js'
+import billingRoutes, { handleStripeWebhook } from './routes/billing.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
 import { isEmailConfigured, getEmailFromStatus } from './services/email.js'
 import { initComplimentaryStore, getComplimentaryStorageStatus } from './store/complimentaryStore.js'
 import { initDurableUserStore, getUserStorageStatus } from './store/durableUserData.js'
+import { isStripeConfigured } from './services/stripe.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -44,12 +46,26 @@ function buildCorsOrigin() {
 }
 
 app.use(cors({ origin: buildCorsOrigin(), credentials: true }))
+
+// Stripe webhooks need the raw body for signature verification (before json parser).
+app.post(
+  '/api/billing/webhook',
+  express.raw({ type: 'application/json' }),
+  (req, res) => {
+    handleStripeWebhook(req, res).catch((err) => {
+      console.error('[stripe] webhook unhandled:', err)
+      if (!res.headersSent) res.status(500).json({ error: 'Webhook failed' })
+    })
+  },
+)
+
 app.use(express.json({ limit: '2mb' }))
 app.use('/api/enhancer', enhancerRoutes)
 app.use('/api/builder', builderRoutes)
 app.use('/api/jd-builder', jdBuilderRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/auth', authRoutes)
+app.use('/api/billing', billingRoutes)
 
 app.get('/', (_req, res) => {
   res.json({
@@ -63,6 +79,7 @@ app.get('/', (_req, res) => {
       jdBuilder: '/api/jd-builder',
       admin: '/api/admin',
       auth: '/api/auth',
+      billing: '/api/billing',
     },
   })
 })
@@ -76,6 +93,7 @@ app.get('/api/health', (_req, res) => {
     emailConfigured: isEmailConfigured(),
     emailFrom: getEmailFromStatus(),
     googleAuthConfigured: isGoogleAuthConfigured(),
+    stripeConfigured: isStripeConfigured(),
     complimentaryStorage: getComplimentaryStorageStatus(),
     userStorage: getUserStorageStatus(),
   })

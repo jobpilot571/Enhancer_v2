@@ -55,6 +55,9 @@ export function rowToUser(row) {
     complimentaryAt: row.complimentary_at ?? null,
     emailVerifiedAt: row.email_verified_at ?? null,
     builderMemory: row.builder_memory ?? undefined,
+    stripeCustomerId: row.stripe_customer_id ?? null,
+    stripeSubscriptionId: row.stripe_subscription_id ?? null,
+    stripeSubscriptionStatus: row.stripe_subscription_status ?? null,
     createdAt: row.created_at || null,
   }
 }
@@ -74,6 +77,9 @@ export function userToRow(user) {
     complimentary_at: user.complimentaryAt ?? null,
     email_verified_at: user.emailVerifiedAt ?? null,
     builder_memory: user.builderMemory ?? null,
+    stripe_customer_id: user.stripeCustomerId ?? null,
+    stripe_subscription_id: user.stripeSubscriptionId ?? null,
+    stripe_subscription_status: user.stripeSubscriptionStatus ?? null,
     created_at: user.createdAt || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }
