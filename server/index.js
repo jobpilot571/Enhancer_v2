@@ -14,6 +14,7 @@ import { isEmailConfigured, getEmailFromStatus } from './services/email.js'
 import { initComplimentaryStore, getComplimentaryStorageStatus } from './store/complimentaryStore.js'
 import { initDurableUserStore, getUserStorageStatus } from './store/durableUserData.js'
 import { isStripeConfigured } from './services/stripe.js'
+import { isAiCostDbConfigured } from './store/aiCostStore.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -96,6 +97,11 @@ app.get('/api/health', (_req, res) => {
     stripeConfigured: isStripeConfigured(),
     complimentaryStorage: getComplimentaryStorageStatus(),
     userStorage: getUserStorageStatus(),
+    aiCostTracking: {
+      enabled: true,
+      version: 'phase1',
+      durableBackend: isAiCostDbConfigured() ? 'supabase' : 'local-json-fallback',
+    },
   })
 })
 

@@ -1,11 +1,23 @@
 import OpenAI from 'openai'
 import Anthropic from '@anthropic-ai/sdk'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import {
+  calculateCallCosts,
+  estimateCallCostUsd,
+  finalizeAiServiceCost,
+  getAiCostContext,
+  providerDisplayName,
+  recordAiRequest,
+  runWithAiCostContext,
+} from './aiCostTracking.js'
+
+export { estimateCallCostUsd, calculateCallCosts, runWithAiCostContext }
 
 /*
  * Multi-provider AI layer with automatic fallback.
  * Order is controlled by AI_PROVIDER_ORDER (comma-separated).
  * Each provider returns { result, usage } where usage has token counts.
+ * Every provider attempt is recorded by the centralized AI cost tracker.
  */
 
 function stripCodeFences(text) {
@@ -55,7 +67,13 @@ function estimateTokens(text) {
   return Math.ceil(String(text || '').length / 4)
 }
 
+/**
+ * Normalize provider usage. Marks usageSource as 'actual' when the API returned
+ * token counts, otherwise 'estimated' from character length.
+ */
 function normalizeUsage(raw, system, user, content) {
+  const hasPrompt = raw?.prompt_tokens != null || raw?.input_tokens != null
+  const hasCompletion = raw?.completion_tokens != null || raw?.output_tokens != null
   const prompt = raw?.prompt_tokens ?? raw?.input_tokens ?? estimateTokens(`${system}\n${user}`)
   const completion = raw?.completion_tokens ?? raw?.output_tokens ?? estimateTokens(content)
   const cached = raw?.prompt_tokens_details?.cached_tokens
@@ -67,28 +85,34 @@ function normalizeUsage(raw, system, user, content) {
     completionTokens: Number(completion) || 0,
     cachedInputTokens: Number(cached) || 0,
     totalTokens: (Number(prompt) || 0) + (Number(completion) || 0),
+    usageSource: (hasPrompt || hasCompletion) ? 'actual' : 'estimated',
   }
 }
 
-/* Approximate USD per 1M tokens — used for diagnostics only */
-const MODEL_PRICING = {
-  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
-  'gpt-4o-mini': { input: 0.15, output: 0.6 },
-  'gpt-4o': { input: 2.5, output: 10 },
-  'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 },
-  'claude-3-5-sonnet-latest': { input: 3, output: 15 },
-  'gemini-1.5-flash': { input: 0.075, output: 0.3 },
-  'gemini-2.0-flash': { input: 0.1, output: 0.4 },
+function attachUsageToError(err, usage) {
+  if (err && usage) {
+    try {
+      err.aiUsage = usage
+    } catch {
+      // ignore non-extensible errors
+    }
+  }
+  return err
 }
 
-export function estimateCallCostUsd(model, usage) {
-  const key = Object.keys(MODEL_PRICING).find((k) => String(model || '').includes(k)) || model
-  const rates = MODEL_PRICING[key] || { input: 0.5, output: 1.5 }
-  const cached = usage.cachedInputTokens || 0
-  const billedInput = Math.max(0, (usage.promptTokens || 0) - cached) + cached * 0.5
-  const inputCost = (billedInput / 1e6) * rates.input
-  const outputCost = ((usage.completionTokens || 0) / 1e6) * rates.output
-  return Math.round((inputCost + outputCost) * 1e6) / 1e6
+function usageFromError(err) {
+  const u = err?.aiUsage || err?.usage || err?.error?.usage || null
+  if (!u) return null
+  if (u.promptTokens != null || u.completionTokens != null) {
+    return {
+      promptTokens: Number(u.promptTokens) || 0,
+      completionTokens: Number(u.completionTokens) || 0,
+      cachedInputTokens: Number(u.cachedInputTokens) || 0,
+      totalTokens: Number(u.totalTokens) || ((Number(u.promptTokens) || 0) + (Number(u.completionTokens) || 0)),
+      usageSource: u.usageSource || 'actual',
+    }
+  }
+  return normalizeUsage(u, '', '', '')
 }
 
 /* ---------- OpenAI-compatible (OpenAI, Groq, Ollama) ---------- */
@@ -116,9 +140,11 @@ function makeOpenAICompatible({ apiKey, baseURL, model, useJsonSchema }) {
     const res = await client.chat.completions.create(params)
     const content = res.choices?.[0]?.message?.content
     if (!content) throw new Error('Empty response')
-    return {
-      result: extractJson(content),
-      usage: normalizeUsage(res.usage, system, user, content),
+    const usage = normalizeUsage(res.usage, system, user, content)
+    try {
+      return { result: extractJson(content), usage }
+    } catch (err) {
+      throw attachUsageToError(err, usage)
     }
   }
 }
@@ -136,9 +162,11 @@ function makeClaude({ apiKey, model }) {
     })
     const text = res.content?.map((b) => (b.type === 'text' ? b.text : '')).join('')
     if (!text) throw new Error('Empty response')
-    return {
-      result: extractJson(text),
-      usage: normalizeUsage(res.usage, system, user, text),
+    const usage = normalizeUsage(res.usage, system, user, text)
+    try {
+      return { result: extractJson(text), usage }
+    } catch (err) {
+      throw attachUsageToError(err, usage)
     }
   }
 }
@@ -160,12 +188,14 @@ function makeGemini({ apiKey, model }) {
     const text = res.response.text()
     if (!text) throw new Error('Empty response')
     const meta = res.response.usageMetadata || {}
-    return {
-      result: extractJson(text),
-      usage: normalizeUsage({
-        prompt_tokens: meta.promptTokenCount,
-        completion_tokens: meta.candidatesTokenCount,
-      }, system, user, text),
+    const usage = normalizeUsage({
+      prompt_tokens: meta.promptTokenCount,
+      completion_tokens: meta.candidatesTokenCount,
+    }, system, user, text)
+    try {
+      return { result: extractJson(text), usage }
+    } catch (err) {
+      throw attachUsageToError(err, usage)
     }
   }
 }
@@ -253,59 +283,82 @@ function getOrder() {
   return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
 }
 
-/** Per-async-context usage log for score reports / diagnostics */
-let usageLog = null
-
+/**
+ * Begin collecting AI usage for the current async context.
+ * Prefer runWithAiCostContext(...) at the job/route boundary; this remains for
+ * enhanceWorker compatibility and clears the in-context event list.
+ */
 export function beginAiUsageTracking() {
-  usageLog = []
-  return usageLog
+  const ctx = getAiCostContext()
+  if (ctx) {
+    ctx.events = []
+    return ctx.events
+  }
+  return []
 }
 
-export function endAiUsageTracking() {
-  const log = usageLog || []
-  usageLog = null
-  const byProvider = {}
-  let totalPrompt = 0
-  let totalCompletion = 0
-  let totalCached = 0
-  let totalCost = 0
-  for (const entry of log) {
-    const key = `${entry.provider}::${entry.model}`
-    if (!byProvider[key]) {
-      byProvider[key] = {
-        provider: entry.provider,
-        model: entry.model,
-        calls: 0,
-        tasks: [],
-        promptTokens: 0,
-        completionTokens: 0,
-        cachedInputTokens: 0,
-        costUsd: 0,
-      }
+/**
+ * Finalize and return AI usage collected in the active cost context.
+ * @param {{ status?: string, persist?: boolean }} [options]
+ */
+export function endAiUsageTracking(options = {}) {
+  return finalizeAiServiceCost({
+    status: options.status || 'completed',
+    persist: options.persist !== false,
+  })
+}
+
+function trackProviderAttempt({
+  providerKey,
+  providerLabel,
+  model,
+  task,
+  featureName,
+  usage,
+  durationMs,
+  status,
+  errorMessage = null,
+}) {
+  const hasTokens = Boolean(
+    usage
+    && ((usage.promptTokens || 0) + (usage.completionTokens || 0) > 0),
+  )
+  // Charge whenever tokens were consumed — including failed post-processing
+  const costs = hasTokens
+    ? calculateCallCosts(model, usage, providerLabel)
+    : {
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      totalCostUsd: 0,
+      pricingMissing: false,
+      pricingVersion: null,
+      pricingEffectiveDate: null,
     }
-    byProvider[key].calls += 1
-    byProvider[key].tasks.push(entry.task)
-    byProvider[key].promptTokens += entry.promptTokens || 0
-    byProvider[key].completionTokens += entry.completionTokens || 0
-    byProvider[key].cachedInputTokens += entry.cachedInputTokens || 0
-    byProvider[key].costUsd += entry.costUsd || 0
-    totalPrompt += entry.promptTokens || 0
-    totalCompletion += entry.completionTokens || 0
-    totalCached += entry.cachedInputTokens || 0
-    totalCost += entry.costUsd || 0
-  }
+  const event = recordAiRequest({
+    providerKey,
+    provider: providerDisplayName(providerKey) || providerLabel,
+    model,
+    task,
+    featureName,
+    promptTokens: usage?.promptTokens || 0,
+    completionTokens: usage?.completionTokens || 0,
+    cachedInputTokens: usage?.cachedInputTokens || 0,
+    totalTokens: usage?.totalTokens || 0,
+    inputCostUsd: costs.inputCostUsd,
+    outputCostUsd: costs.outputCostUsd,
+    totalCostUsd: costs.totalCostUsd,
+    pricingMissing: costs.pricingMissing,
+    pricingVersion: costs.pricingVersion,
+    pricingEffectiveDate: costs.pricingEffectiveDate,
+    processingTimeMs: durationMs,
+    status,
+    errorMessage,
+    usageSource: usage?.usageSource || (hasTokens ? 'actual' : 'unknown'),
+  })
   return {
-    calls: log,
-    summary: Object.values(byProvider),
-    primaryProvider: log[0]?.provider || null,
-    primaryModel: log[0]?.model || null,
-    totals: {
-      llmCalls: log.length,
-      promptTokens: totalPrompt,
-      completionTokens: totalCompletion,
-      cachedInputTokens: totalCached,
-      costUsd: Math.round(totalCost * 1e6) / 1e6,
-    },
+    ...costs,
+    costUsd: costs.totalCostUsd,
+    requestId: event.requestId,
   }
 }
 
@@ -347,14 +400,25 @@ export async function structuredJSON(system, user, schemaName, schema, options =
   }
 
   const errors = []
+  const featureName = options.featureName || null
   for (const name of order) {
     const callStarted = Date.now()
     try {
       const raw = await providers[name].run(system, user, schemaName, schema, options)
       const durationMs = Date.now() - callStarted
       const usage = raw.usage || normalizeUsage(null, system, user, '')
-      const costUsd = estimateCallCostUsd(providers[name].model, usage)
-      const info = {
+      const tracked = trackProviderAttempt({
+        providerKey: name,
+        providerLabel: providers[name].label,
+        model: providers[name].model,
+        task: schemaName,
+        featureName,
+        usage,
+        durationMs,
+        status: 'Success',
+      })
+      return {
+        result: raw.result,
         provider: providers[name].label,
         model: providers[name].model,
         task: schemaName,
@@ -362,13 +426,27 @@ export async function structuredJSON(system, user, schemaName, schema, options =
         completionTokens: usage.completionTokens,
         cachedInputTokens: usage.cachedInputTokens,
         totalTokens: usage.totalTokens,
+        usageSource: usage.usageSource,
         durationMs,
-        costUsd,
+        costUsd: tracked.costUsd,
+        inputCostUsd: tracked.inputCostUsd,
+        outputCostUsd: tracked.outputCostUsd,
+        requestId: tracked.requestId,
       }
-      if (usageLog) usageLog.push(info)
-      return { result: raw.result, ...info }
     } catch (err) {
-      console.warn(`[AI] ${providers[name].label} failed (${Date.now() - callStarted}ms): ${err.message}`)
+      const durationMs = Date.now() - callStarted
+      console.warn(`[AI] ${providers[name].label} failed (${durationMs}ms): ${err.message}`)
+      trackProviderAttempt({
+        providerKey: name,
+        providerLabel: providers[name].label,
+        model: providers[name].model,
+        task: schemaName,
+        featureName,
+        usage: usageFromError(err),
+        durationMs,
+        status: 'Failed',
+        errorMessage: err.message,
+      })
       errors.push(`${providers[name].label}: ${err.message}`)
     }
   }
@@ -388,17 +466,19 @@ export function getConfiguredProviders() {
  * Vision JSON completion for layout screenshot analysis.
  * Tries OpenAI (gpt-4o-mini) then Gemini vision models.
  */
-export async function visionStructuredJSON(system, userText, imageBuffer, mimeType, schemaName, schema) {
+export async function visionStructuredJSON(system, userText, imageBuffer, mimeType, schemaName, schema, options = {}) {
   if (!imageBuffer?.length) {
     throw new Error('No image buffer for vision analysis')
   }
   const base64 = Buffer.from(imageBuffer).toString('base64')
   const schemaText = schemaInstruction(schema)
   const errors = []
+  const featureName = options.featureName || null
 
   if (process.env.OPENAI_API_KEY) {
+    const callStarted = Date.now()
+    const model = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini'
     try {
-      const model = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini'
       const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 90000 })
       const res = await client.chat.completions.create({
         model,
@@ -418,28 +498,61 @@ export async function visionStructuredJSON(system, userText, imageBuffer, mimeTy
       })
       const content = res.choices?.[0]?.message?.content
       if (!content) throw new Error('Empty vision response')
+      const durationMs = Date.now() - callStarted
       const usage = normalizeUsage(res.usage, system, userText, content)
-      const info = {
-        provider: 'OpenAI Vision',
+      let parsed
+      try {
+        parsed = extractJson(content)
+      } catch (err) {
+        throw attachUsageToError(err, usage)
+      }
+      const tracked = trackProviderAttempt({
+        providerKey: 'openai',
+        providerLabel: 'OpenAI',
+        model,
+        task: schemaName,
+        featureName,
+        usage,
+        durationMs,
+        status: 'Success',
+      })
+      return {
+        result: parsed,
+        provider: 'OpenAI',
         model,
         task: schemaName,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
         cachedInputTokens: usage.cachedInputTokens,
         totalTokens: usage.totalTokens,
-        durationMs: 0,
-        costUsd: estimateCallCostUsd(model, usage),
+        usageSource: usage.usageSource,
+        durationMs,
+        costUsd: tracked.costUsd,
+        inputCostUsd: tracked.inputCostUsd,
+        outputCostUsd: tracked.outputCostUsd,
+        requestId: tracked.requestId,
       }
-      if (usageLog) usageLog.push(info)
-      return { result: extractJson(content), ...info }
     } catch (err) {
+      const durationMs = Date.now() - callStarted
+      trackProviderAttempt({
+        providerKey: 'openai',
+        providerLabel: 'OpenAI',
+        model,
+        task: schemaName,
+        featureName,
+        usage: usageFromError(err),
+        durationMs,
+        status: 'Failed',
+        errorMessage: err.message,
+      })
       errors.push(`OpenAI Vision: ${err.message}`)
     }
   }
 
   if (process.env.GEMINI_API_KEY) {
+    const callStarted = Date.now()
+    const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash'
     try {
-      const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash'
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
       const gModel = genAI.getGenerativeModel({
         model,
@@ -456,25 +569,57 @@ export async function visionStructuredJSON(system, userText, imageBuffer, mimeTy
       ])
       const text = res.response.text()
       if (!text) throw new Error('Empty Gemini vision response')
+      const durationMs = Date.now() - callStarted
       const meta = res.response.usageMetadata || {}
       const usage = normalizeUsage({
         prompt_tokens: meta.promptTokenCount,
         completion_tokens: meta.candidatesTokenCount,
       }, system, userText, text)
-      const info = {
-        provider: 'Gemini Vision',
+      let parsed
+      try {
+        parsed = extractJson(text)
+      } catch (err) {
+        throw attachUsageToError(err, usage)
+      }
+      const tracked = trackProviderAttempt({
+        providerKey: 'gemini',
+        providerLabel: 'Gemini',
+        model,
+        task: schemaName,
+        featureName,
+        usage,
+        durationMs,
+        status: 'Success',
+      })
+      return {
+        result: parsed,
+        provider: 'Gemini',
         model,
         task: schemaName,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
         cachedInputTokens: usage.cachedInputTokens,
         totalTokens: usage.totalTokens,
-        durationMs: 0,
-        costUsd: estimateCallCostUsd(model, usage),
+        usageSource: usage.usageSource,
+        durationMs,
+        costUsd: tracked.costUsd,
+        inputCostUsd: tracked.inputCostUsd,
+        outputCostUsd: tracked.outputCostUsd,
+        requestId: tracked.requestId,
       }
-      if (usageLog) usageLog.push(info)
-      return { result: extractJson(content), ...info }
     } catch (err) {
+      const durationMs = Date.now() - callStarted
+      trackProviderAttempt({
+        providerKey: 'gemini',
+        providerLabel: 'Gemini',
+        model,
+        task: schemaName,
+        featureName,
+        usage: usageFromError(err),
+        durationMs,
+        status: 'Failed',
+        errorMessage: err.message,
+      })
       errors.push(`Gemini Vision: ${err.message}`)
     }
   }

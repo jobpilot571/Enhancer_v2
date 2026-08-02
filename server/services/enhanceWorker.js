@@ -1,9 +1,6 @@
-import {
-  getSession,
-  updateSession,
-  setEnhancedDocx,
-  readFile,
-} from '../store/sessionStore.js'
+import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
+import { AI_SERVICES, ensureSessionOperationId, toFinalAiCost } from './aiCostTracking.js'
+import { getSession, updateSession, setEnhancedDocx, readFile } from '../store/sessionStore.js'
 import { updateEnhanceJob } from '../store/enhanceJobStore.js'
 import {
   patchDocx,
@@ -27,7 +24,6 @@ import {
 import { researchCompanyContexts } from './companyContextService.js'
 import { scoreResumeWithLlm, mergeAtsScores } from './llmScoreService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
-import { beginAiUsageTracking, endAiUsageTracking } from './aiProvider.js'
 import PizZip from 'pizzip'
 
 function log(jobId, message) {
@@ -49,7 +45,15 @@ function stageTimer() {
   }
 }
 
-export async function runEnhanceJob(jobId, sessionId, jdText) {
+export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } = {}) {
+  const operationId = ensureSessionOperationId(sessionId, getSession, updateSession)
+  return runWithAiCostContext({
+    userId,
+    sessionId,
+    jobId,
+    operationId,
+    serviceName: AI_SERVICES.ENHANCER,
+  }, async () => {
   beginAiUsageTracking()
   const timer = stageTimer()
   try {
@@ -362,7 +366,8 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     }
     timer.mark('score_after')
 
-    const aiUsage = endAiUsageTracking()
+    const aiUsage = endAiUsageTracking({ status: 'completed' })
+    const finalAiCost = toFinalAiCost(aiUsage)
     const totalMs = timer.totalMs()
     const processingMeta = {
       durationMs: totalMs,
@@ -422,6 +427,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
       enhancementPlan,
       atsScore: finalAfter,
       processingMeta,
+      finalAiCost,
       layoutQa,
     })
 
@@ -436,6 +442,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
         enhancementPlan,
         atsScore: finalAfter,
         processingMeta,
+        finalAiCost,
         layoutQa,
         readyForDownload,
         downloadUrl: readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
@@ -446,11 +453,15 @@ export async function runEnhanceJob(jobId, sessionId, jdText) {
     })
     log(jobId, 'completed')
   } catch (err) {
-    endAiUsageTracking()
+    const failedUsage = endAiUsageTracking({ status: 'failed' })
+    const finalAiCost = toFinalAiCost(failedUsage)
     console.error(`[enhance:${jobId.slice(0, 8)}] failed:`, err.message)
+    updateSession(sessionId, { finalAiCost })
     updateEnhanceJob(jobId, {
       status: 'failed',
       error: err.message || 'Enhancement failed',
+      result: { finalAiCost },
     })
   }
+  })
 }

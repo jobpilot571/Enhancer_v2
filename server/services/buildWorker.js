@@ -2,6 +2,8 @@ import { getSession, updateSession, setGeneratedDocx } from '../store/sessionSto
 import { updateBuildJob } from '../store/buildJobStore.js'
 import { generateResumeFromForm } from './openaiService.js'
 import { generateResumeDocx } from './resumeDocxGenerator.js'
+import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
+import { AI_SERVICES, toFinalAiCost } from './aiCostTracking.js'
 
 function log(jobId, message) {
   console.log(`[build:${jobId.slice(0, 8)}] ${message}`)
@@ -91,7 +93,15 @@ function mergeResumeWithForm(aiResume, formData) {
   }
 }
 
-export async function runBuildJob(jobId, sessionId) {
+export async function runBuildJob(jobId, sessionId, { userId = null } = {}) {
+  return runWithAiCostContext({
+    userId,
+    sessionId,
+    jobId,
+    operationId: jobId,
+    serviceName: AI_SERVICES.BUILDER,
+  }, async () => {
+  beginAiUsageTracking()
   try {
     const session = getSession(sessionId)
     if (!session) throw new Error('Session not found')
@@ -122,6 +132,10 @@ export async function runBuildJob(jobId, sessionId) {
     log(jobId, 'saving files')
     setGeneratedDocx(sessionId, buffer, buffer)
 
+    const aiUsage = endAiUsageTracking({ status: 'completed' })
+    const finalAiCost = toFinalAiCost(aiUsage)
+    updateSession(sessionId, { finalAiCost })
+
     const result = {
       sessionId,
       fileName: session.fileName,
@@ -129,15 +143,21 @@ export async function runBuildJob(jobId, sessionId) {
       previewUrl: `/api/builder/file/${sessionId}`,
       resumeData,
       templateId,
+      finalAiCost,
     }
 
     updateBuildJob(jobId, { status: 'completed', step: 'preparing_preview', result })
-    log(jobId, 'completed')
+    log(jobId, `completed — AI cost $${finalAiCost.totalCostUsd}`)
   } catch (err) {
+    const failedUsage = endAiUsageTracking({ status: 'failed' })
+    const finalAiCost = toFinalAiCost(failedUsage)
     console.error(`[build:${jobId.slice(0, 8)}] failed:`, err.message)
+    updateSession(sessionId, { finalAiCost })
     updateBuildJob(jobId, {
       status: 'failed',
       error: err.message || 'Resume build failed',
+      result: { finalAiCost },
     })
   }
+  })
 }

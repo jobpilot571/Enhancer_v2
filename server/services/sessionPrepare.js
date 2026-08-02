@@ -3,6 +3,7 @@ import { extractResumeText } from './resumeExtract.js'
 import { parseResume, analyzeJd } from './openaiService.js'
 import { parseResumeLocally } from './localResumeParse.js'
 import { saveResumeParseSnapshot } from './resumeParseCache.js'
+import { AI_SERVICES, ensureSessionOperationId, finalizeAiServiceCost, runWithAiCostContext } from './aiCostTracking.js'
 
 /** In-flight promises so concurrent callers share one parse. */
 const resumeParseInflight = new Map()
@@ -119,17 +120,47 @@ export async function ensureJdData(sessionOrId) {
   return promise
 }
 
-export function precomputeResume(sessionId) {
+export function precomputeResume(sessionId, { userId = null } = {}) {
   setImmediate(() => {
-    ensureResumeData(sessionId).catch((err) => {
+    const operationId = ensureSessionOperationId(sessionId, getSession, updateSession)
+    runWithAiCostContext({
+      userId,
+      sessionId,
+      operationId,
+      serviceName: AI_SERVICES.ENHANCER,
+    }, async () => {
+      try {
+        await ensureResumeData(sessionId)
+        // Persist request rows only; operation totals finalize on enhance job
+        // (same operationId) so precompute + enhance sum together.
+        finalizeAiServiceCost({ status: 'in_progress' })
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        console.error(`[precompute] resume session=${sessionId}:`, err.message)
+      }
+    }).catch((err) => {
       console.error(`[precompute] resume session=${sessionId}:`, err.message)
     })
   })
 }
 
-export function precomputeJd(sessionId) {
+export function precomputeJd(sessionId, { userId = null } = {}) {
   setImmediate(() => {
-    ensureJdData(sessionId).catch((err) => {
+    const operationId = ensureSessionOperationId(sessionId, getSession, updateSession)
+    runWithAiCostContext({
+      userId,
+      sessionId,
+      operationId,
+      serviceName: AI_SERVICES.ENHANCER,
+    }, async () => {
+      try {
+        await ensureJdData(sessionId)
+        finalizeAiServiceCost({ status: 'in_progress' })
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        console.error(`[precompute] jd session=${sessionId}:`, err.message)
+      }
+    }).catch((err) => {
       console.error(`[precompute] jd session=${sessionId}:`, err.message)
     })
   })

@@ -20,6 +20,7 @@ import { extractResumeText } from '../services/resumeExtract.js'
 import { parseResumeLocally } from '../services/localResumeParse.js'
 import { parseResume } from '../services/openaiService.js'
 import { mapResumeToBuilderSuggestions } from '../services/builderReferenceMap.js'
+import { AI_SERVICES, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
 
 const router = Router()
 
@@ -140,7 +141,19 @@ router.post('/reference-upload', optionalUser, upload.single('reference'), async
     let resumeData = local.data
     let method = 'local'
     if (local.confidence < LOCAL_CONFIDENCE_THRESHOLD) {
-      resumeData = await parseResume(resumeText)
+      resumeData = await runWithAiCostContext({
+        userId: req.user?.id || null,
+        serviceName: AI_SERVICES.BUILDER,
+      }, async () => {
+        try {
+          const parsed = await parseResume(resumeText)
+          finalizeAiServiceCost({ status: 'completed' })
+          return parsed
+        } catch (err) {
+          finalizeAiServiceCost({ status: 'failed' })
+          throw err
+        }
+      })
       method = 'AI fallback'
       if (!resumeData.skillCategories?.length && local.data.skillCategories?.length) {
         resumeData.skillCategories = local.data.skillCategories
@@ -227,7 +240,7 @@ router.post('/build', requireUser, checkUsage('builder'), (req, res, next) => {
     console.log(`[builder] job started jobId=${job.jobId} session=${session.sessionId} user=${req.user.id}`)
 
     setImmediate(() => {
-      runBuildJob(job.jobId, session.sessionId).catch((err) => {
+      runBuildJob(job.jobId, session.sessionId, { userId: req.user.id }).catch((err) => {
         console.error(`[builder] unhandled job error jobId=${job.jobId}:`, err.message)
       })
     })

@@ -1,56 +1,7 @@
--- JoBPilot.AI — Supabase / Postgres schema
--- Run this in Supabase → SQL Editor → New query → Run
+-- JoBPilot.AI — AI cost tracking tables only
+-- Paste into Supabase → SQL Editor → Run
 
 create extension if not exists "pgcrypto";
-
--- ─── Users (accounts + builder memory) ───────────────────────────────────────
-create table if not exists public.users (
-  id uuid primary key,
-  name text not null,
-  email text not null unique,
-  password_salt text,
-  password_hash text,
-  google_id text unique,
-  plan text not null default 'free',
-  complimentary boolean not null default false,
-  complimentary_plan_type text,
-  complimentary_note text,
-  complimentary_at timestamptz,
-  email_verified_at timestamptz,
-  builder_memory jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index if not exists users_email_idx on public.users (email);
-create index if not exists users_google_id_idx on public.users (google_id);
-
--- Stripe billing (safe to re-run)
-alter table public.users add column if not exists stripe_customer_id text;
-alter table public.users add column if not exists stripe_subscription_id text;
-alter table public.users add column if not exists stripe_subscription_status text;
-create unique index if not exists users_stripe_customer_id_uidx
-  on public.users (stripe_customer_id)
-  where stripe_customer_id is not null;
-
--- ─── Monthly usage counters ───────────────────────────────────────────────
-create table if not exists public.usage_monthly (
-  user_id uuid not null references public.users (id) on delete cascade,
-  month text not null,
-  enhancer integer not null default 0,
-  builder integer not null default 0,
-  jd_builder integer not null default 0,
-  updated_at timestamptz not null default now(),
-  primary key (user_id, month)
-);
-
--- ─── Complimentary email whitelist ────────────────────────────────────
-create table if not exists public.complimentary_emails (
-  email text primary key,
-  plan_type text not null default 'friend',
-  note text,
-  added_at timestamptz not null default now()
-);
 
 -- ─── AI cost tracking (per-request ledger) ────────────────────────────────
 create table if not exists public.ai_usage_events (
@@ -80,7 +31,6 @@ create table if not exists public.ai_usage_events (
   created_at timestamptz not null default now()
 );
 
--- Safe upgrades when table already exists
 alter table public.ai_usage_events add column if not exists operation_id uuid;
 alter table public.ai_usage_events add column if not exists usage_source text;
 alter table public.ai_usage_events add column if not exists pricing_missing boolean;
@@ -98,7 +48,7 @@ create index if not exists ai_usage_events_feature_name_idx on public.ai_usage_e
 create index if not exists ai_usage_events_status_idx on public.ai_usage_events (status);
 create index if not exists ai_usage_events_pricing_missing_idx on public.ai_usage_events (pricing_missing);
 
--- Operation-level totals (one row per completed user action / job)
+-- Operation-level totals
 create table if not exists public.ai_service_costs (
   id uuid primary key,
   operation_id uuid,
@@ -135,13 +85,5 @@ create unique index if not exists ai_service_costs_operation_id_uidx
   on public.ai_service_costs (operation_id)
   where operation_id is not null;
 
--- Server uses the service_role key (bypasses RLS).
--- Lock down anon/authenticated so the public API key cannot read auth data.
-alter table public.users enable row level security;
-alter table public.usage_monthly enable row level security;
-alter table public.complimentary_emails enable row level security;
 alter table public.ai_usage_events enable row level security;
 alter table public.ai_service_costs enable row level security;
-
--- No policies for anon/authenticated = deny all via PostgREST for those roles.
--- service_role still has full access.

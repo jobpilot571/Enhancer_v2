@@ -2,6 +2,8 @@ import { getSession, updateSession, setGeneratedDocx } from '../store/sessionSto
 import { updateBuildJob } from '../store/buildJobStore.js'
 import { analyzeJd, generateResumeFromJd, jdSummaryBulletCount } from './openaiService.js'
 import { generateResumeDocx } from './resumeDocxGenerator.js'
+import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
+import { AI_SERVICES, toFinalAiCost } from './aiCostTracking.js'
 
 function log(jobId, message) {
   console.log(`[jd-build:${jobId.slice(0, 8)}] ${message}`)
@@ -226,7 +228,15 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
   return enforceJdSkills(merged, jdData, orderedCompanies)
 }
 
-export async function runJdBuildJob(jobId, sessionId) {
+export async function runJdBuildJob(jobId, sessionId, { userId = null } = {}) {
+  return runWithAiCostContext({
+    userId,
+    sessionId,
+    jobId,
+    operationId: jobId,
+    serviceName: AI_SERVICES.JD_BUILDER,
+  }, async () => {
+  beginAiUsageTracking()
   try {
     const session = getSession(sessionId)
     if (!session) throw new Error('Session not found')
@@ -280,6 +290,10 @@ export async function runJdBuildJob(jobId, sessionId) {
     log(jobId, 'saving files')
     setGeneratedDocx(sessionId, buffer, buffer)
 
+    const aiUsage = endAiUsageTracking({ status: 'completed' })
+    const finalAiCost = toFinalAiCost(aiUsage)
+    updateSession(sessionId, { finalAiCost })
+
     const result = {
       sessionId,
       fileName: session.fileName,
@@ -288,15 +302,21 @@ export async function runJdBuildJob(jobId, sessionId) {
       resumeData,
       templateId,
       roleTitle,
+      finalAiCost,
     }
 
     updateBuildJob(jobId, { status: 'completed', step: 'preparing_preview', result })
-    log(jobId, 'completed')
+    log(jobId, `completed — AI cost $${finalAiCost.totalCostUsd}`)
   } catch (err) {
+    const failedUsage = endAiUsageTracking({ status: 'failed' })
+    const finalAiCost = toFinalAiCost(failedUsage)
     console.error(`[jd-build:${jobId.slice(0, 8)}] failed:`, err.message)
+    updateSession(sessionId, { finalAiCost })
     updateBuildJob(jobId, {
       status: 'failed',
       error: err.message || 'JD-tailored resume build failed',
+      result: { finalAiCost },
     })
   }
+  })
 }

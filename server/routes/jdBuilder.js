@@ -22,6 +22,7 @@ import {
   readJdResumeJdText,
   deleteJdResume,
 } from '../store/jdSavedResumeStore.js'
+import { AI_SERVICES, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
 
 const router = Router()
 
@@ -121,7 +122,7 @@ function extractYearsRequiredFromText(text) {
   return null
 }
 
-async function analyzeJdPayload(jdText) {
+async function analyzeJdPayload(jdText, { userId = null } = {}) {
   const cleaned = String(jdText || '').trim()
   if (cleaned.length < 40) {
     const err = new Error('Paste a fuller job description (at least a few sentences).')
@@ -135,13 +136,24 @@ async function analyzeJdPayload(jdText) {
   let method = 'local'
 
   try {
-    const { data } = await analyzeJd(cleaned)
-    roleTitle = String(data?.roleTitle || '').trim()
-    const aiYears = Number(data?.yearsRequired)
-    if (yearsFromText == null && Number.isFinite(aiYears) && aiYears >= 0) {
-      yearsRequired = aiYears
-    }
-    method = 'AI'
+    await runWithAiCostContext({
+      userId,
+      serviceName: AI_SERVICES.JD_BUILDER,
+    }, async () => {
+      try {
+        const { data } = await analyzeJd(cleaned)
+        roleTitle = String(data?.roleTitle || '').trim()
+        const aiYears = Number(data?.yearsRequired)
+        if (yearsFromText == null && Number.isFinite(aiYears) && aiYears >= 0) {
+          yearsRequired = aiYears
+        }
+        method = 'AI'
+        finalizeAiServiceCost({ status: 'completed' })
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
+    })
   } catch (err) {
     console.warn('[jd-builder] analyze-jd AI failed:', err.message)
     const titleMatch = cleaned.match(/(?:job\s*title|position|role)\s*[:\-–]\s*([^\n]{3,80})/i)
@@ -189,7 +201,19 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
         let resumeData = local.data
         if (local.confidence < 0.75 || contactWeak || educationWeak) {
           try {
-            resumeData = await parseResume(resumeText)
+            resumeData = await runWithAiCostContext({
+              userId: req.user?.id || null,
+              serviceName: AI_SERVICES.JD_BUILDER,
+            }, async () => {
+              try {
+                const parsed = await parseResume(resumeText)
+                finalizeAiServiceCost({ status: 'completed' })
+                return parsed
+              } catch (err) {
+                finalizeAiServiceCost({ status: 'failed' })
+                throw err
+              }
+            })
             method = 'text+AI'
           } catch (err) {
             console.warn('[jd-builder] extract-basics AI fallback failed:', err.message)
@@ -237,7 +261,7 @@ router.post('/extract-basics', optionalUser, upload.single('resume'), async (req
 /** Analyze pasted JD → target role + required years. */
 router.post('/analyze-jd', optionalUser, async (req, res, next) => {
   try {
-    const result = await analyzeJdPayload(req.body?.jdText || '')
+    const result = await analyzeJdPayload(req.body?.jdText || '', { userId: req.user?.id || null })
     const userTag = req.user?.id || 'guest'
     console.log(
       `[jd-builder] analyze-jd user=${userTag} method=${result.method} `
@@ -262,7 +286,7 @@ router.post('/analyze-jd-file', optionalUser, upload.single('jd'), async (req, r
       return res.status(400).json({ error: 'Could not read text from that document.' })
     }
 
-    const result = await analyzeJdPayload(jdText)
+    const result = await analyzeJdPayload(jdText, { userId: req.user?.id || null })
     const userTag = req.user?.id || 'guest'
     console.log(
       `[jd-builder] analyze-jd-file user=${userTag} file=${req.file.originalname} `
@@ -309,13 +333,25 @@ router.post('/suggest-companies', optionalUser, async (req, res, next) => {
       return res.status(400).json({ error: 'usaCount + indiaCount must equal companyCount' })
     }
 
-    const result = await suggestCompaniesFromJd({
-      jdText,
-      roleTitle,
-      yearsOfExperience,
-      companyCount: total,
-      usaCount: usa,
-      indiaCount: india,
+    const result = await runWithAiCostContext({
+      userId: req.user?.id || null,
+      serviceName: AI_SERVICES.JD_BUILDER,
+    }, async () => {
+      try {
+        const suggested = await suggestCompaniesFromJd({
+          jdText,
+          roleTitle,
+          yearsOfExperience,
+          companyCount: total,
+          usaCount: usa,
+          indiaCount: india,
+        })
+        finalizeAiServiceCost({ status: 'completed' })
+        return suggested
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
     })
 
     const userTag = req.user?.id || 'guest'
@@ -360,7 +396,7 @@ router.post('/build', requireUser, checkUsage('jdBuilder'), (req, res, next) => 
     console.log(`[jd-builder] job started jobId=${job.jobId} session=${session.sessionId} user=${req.user.id}`)
 
     setImmediate(() => {
-      runJdBuildJob(job.jobId, session.sessionId).catch((err) => {
+      runJdBuildJob(job.jobId, session.sessionId, { userId: req.user.id }).catch((err) => {
         console.error(`[jd-builder] unhandled job error jobId=${job.jobId}:`, err.message)
       })
     })

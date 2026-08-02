@@ -107,6 +107,11 @@ Scoring guidance for phase="${phase}":
         {
           maxTokens: 900,
           preferProviders: ['groq', 'ollama'],
+          featureName: phase === 'before'
+            ? 'ATS Score Before'
+            : phase === 'after'
+              ? 'ATS Score After'
+              : 'ATS Score',
         },
       )
 

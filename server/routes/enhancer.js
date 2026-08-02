@@ -15,6 +15,7 @@ import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
 import { getLastResumeParseSnapshot } from '../services/resumeParseCache.js'
 import { fixReportedLayoutIssue } from '../services/layoutIssueService.js'
 import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
+import { AI_SERVICES, ensureSessionOperationId, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
 
 const router = Router()
 
@@ -71,7 +72,7 @@ router.post('/upload', requireUser, checkUsage('enhancer'), upload.single('resum
     })
 
     // Warm cache while user pastes JD — does not block upload response
-    precomputeResume(session.sessionId)
+    precomputeResume(session.sessionId, { userId: req.user.id })
   } catch (err) {
     next(err)
   }
@@ -84,7 +85,20 @@ router.post('/extract/resume', async (req, res, next) => {
     const session = getSession(sessionId)
     if (!session) return res.status(404).json({ error: 'Session not found' })
 
-    const resumeData = await ensureResumeData(sessionId)
+    const resumeData = await runWithAiCostContext({
+      sessionId,
+      operationId: ensureSessionOperationId(sessionId, getSession, updateSession),
+      serviceName: AI_SERVICES.ENHANCER,
+    }, async () => {
+      try {
+        const data = await ensureResumeData(sessionId)
+        finalizeAiServiceCost({ status: 'in_progress' })
+        return data
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
+    })
     res.json({ resumeData, extracted: true })
   } catch (err) {
     next(err)
@@ -137,7 +151,7 @@ router.post('/enhance', requireUser, checkUsage('enhancer'), (req, res, next) =>
     console.log(`[enhance] job started jobId=${job.jobId} session=${sessionId} user=${req.user.id}`)
 
     setImmediate(() => {
-      runEnhanceJob(job.jobId, sessionId, jdText).catch((err) => {
+      runEnhanceJob(job.jobId, sessionId, jdText, { userId: req.user.id }).catch((err) => {
         console.error(`[enhance] unhandled job error jobId=${job.jobId}:`, err.message)
       })
     })
@@ -310,11 +324,24 @@ router.post(
         })
       }
 
-      const result = await fixReportedLayoutIssue({
+      const result = await runWithAiCostContext({
+        userId: req.user.id,
         sessionId,
-        message: message || 'Enhancer issue from uploaded evidence',
-        evidenceFile: req.file || null,
-        log: (msg) => console.log(`[enhancer-fix:${String(sessionId).slice(0, 8)}] ${msg}`),
+        serviceName: AI_SERVICES.LAYOUT_FIX,
+      }, async () => {
+        try {
+          const fixResult = await fixReportedLayoutIssue({
+            sessionId,
+            message: message || 'Enhancer issue from uploaded evidence',
+            evidenceFile: req.file || null,
+            log: (msg) => console.log(`[enhancer-fix:${String(sessionId).slice(0, 8)}] ${msg}`),
+          })
+          finalizeAiServiceCost({ status: 'completed' })
+          return fixResult
+        } catch (err) {
+          finalizeAiServiceCost({ status: 'failed' })
+          throw err
+        }
       })
 
       res.json({
