@@ -267,6 +267,7 @@ async function testBuilder(token, sb) {
     email: 'verify@example.com',
     phone: '555-0100',
     role: 'Software Engineer',
+    yearsOfExperience: 5,
     bulletsPerCompany: 5,
     templateId: 'classic-blue',
     companies: [{
@@ -311,6 +312,7 @@ writing tests, and collaborating with product. Preferred: TypeScript, AWS, Docke
     email: 'verify@example.com',
     phone: '555-0100',
     role: 'Backend Engineer',
+    yearsOfExperience: 4,
     jdText,
     templateId: 'compact-ats',
     fontFamily: 'Calibri',
