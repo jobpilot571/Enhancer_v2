@@ -89,8 +89,12 @@ function validateFormData(formData) {
     if (!String(c.city || '').trim()) return `Company ${i + 1}: city is required`
     if (!String(c.state || '').trim()) return `Company ${i + 1}: state is required`
     const bullets = Number(c.bulletCount)
-    if (!Number.isFinite(bullets) || bullets < 3 || bullets > 15) {
-      return `Company ${i + 1}: points/bullets must be between 3 and 15`
+    const ranges = [
+      [12, 14], [11, 13], [10, 12], [9, 11], [7, 9], [7, 12],
+    ]
+    const [minB, maxB] = ranges[i] || [3, 15]
+    if (!Number.isFinite(bullets) || bullets < minB || bullets > maxB) {
+      return `Company ${i + 1}: points/bullets must be between ${minB} and ${maxB}`
     }
   }
 

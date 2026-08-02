@@ -4,6 +4,8 @@ import { MonthYearPicker } from '../MonthYearPicker'
 import UsCityStateFields from '../UsCityStateFields'
 import {
   BULLET_OPTIONS,
+  bulletRangeForCompanyIndex,
+  defaultBulletCountForCompanyIndex,
   emptyExperience,
   computeYearsOfExperience,
   newId,
@@ -187,12 +189,13 @@ export default function TargetRoleStep({ project, onChange }) {
 
   function addCompany() {
     if (experiences.length >= 6) return
+    const index = experiences.length
     setExperiences([
       ...experiences,
       {
-        ...emptyExperience(),
+        ...emptyExperience(index),
         jobTitle: t.jobTitle || '',
-        bulletCount: '10',
+        bulletCount: defaultBulletCountForCompanyIndex(index),
       },
     ])
   }
@@ -221,19 +224,24 @@ export default function TargetRoleStep({ project, onChange }) {
       if (!companies.length) {
         throw new Error('AI did not return companies. Try again.')
       }
-      const next = companies.slice(0, 6).map((c) => ({
-        ...emptyExperience(),
-        id: newId('exp'),
-        companyName: String(c.companyName || c.name || '').trim(),
-        jobTitle: String(c.jobTitle || c.role || t.jobTitle || '').trim(),
-        city: String(c.city || '').trim(),
-        state: String(c.state || '').trim(),
-        startDate: String(c.startDate || '').trim(),
-        endDate: String(c.endDate || '').trim() || 'Present',
-        bulletCount: String(Math.min(12, Math.max(10, Number(c.bulletCount) || 11))),
-        summary: String(c.bulletGuidance || c.summary || '').trim(),
-        country: String(c.country || '').trim(),
-      }))
+      const next = companies.slice(0, 6).map((c, i) => {
+        const range = bulletRangeForCompanyIndex(i)
+        const raw = Number(c.bulletCount) || Number(range.default)
+        const bulletCount = String(Math.min(range.max, Math.max(range.min, raw)))
+        return {
+          ...emptyExperience(i),
+          id: newId('exp'),
+          companyName: String(c.companyName || c.name || '').trim(),
+          jobTitle: String(c.jobTitle || c.role || t.jobTitle || '').trim(),
+          city: String(c.city || '').trim(),
+          state: String(c.state || '').trim(),
+          startDate: String(c.startDate || '').trim(),
+          endDate: String(c.endDate || '').trim() || 'Present',
+          bulletCount,
+          summary: String(c.bulletGuidance || c.summary || '').trim(),
+          country: String(c.country || '').trim(),
+        }
+      })
       setExperiences(next, {
         yearsRequired: String(answers.yearsOfExperience),
         aiMode: true,
@@ -364,10 +372,14 @@ export default function TargetRoleStep({ project, onChange }) {
                   onChange={(loc) => patchExpLoc(index, loc)}
                 />
                 <FormField
-                  label="Required bullets"
-                  options={BULLET_OPTIONS}
-                  placeholder="Select 3–15"
-                  value={exp.bulletCount || '10'}
+                  label={`Required bullets (${bulletRangeForCompanyIndex(index).min}–${bulletRangeForCompanyIndex(index).max})`}
+                  options={BULLET_OPTIONS.filter((o) => {
+                    const n = Number(o.value)
+                    const r = bulletRangeForCompanyIndex(index)
+                    return n >= r.min && n <= r.max
+                  })}
+                  placeholder={`Select ${bulletRangeForCompanyIndex(index).min}–${bulletRangeForCompanyIndex(index).max}`}
+                  value={exp.bulletCount || defaultBulletCountForCompanyIndex(index)}
                   onChange={(e) => patchExp(index, 'bulletCount', e.target.value)}
                   required
                 />

@@ -58,6 +58,7 @@ const JD_SCHEMA = {
   type: 'object',
   properties: {
     roleTitle: { type: 'string' },
+    hiringCompany: { type: 'string' },
     yearsRequired: { type: 'number' },
     requiredSkills: { type: 'array', items: { type: 'string' } },
     preferredSkills: { type: 'array', items: { type: 'string' } },
@@ -67,7 +68,7 @@ const JD_SCHEMA = {
     mustHaveKeywords: { type: 'array', items: { type: 'string' } },
     niceToHaveKeywords: { type: 'array', items: { type: 'string' } },
   },
-  required: ['roleTitle', 'yearsRequired', 'requiredSkills', 'preferredSkills', 'responsibilities', 'toolsTechnologies', 'domainKeywords', 'mustHaveKeywords', 'niceToHaveKeywords'],
+  required: ['roleTitle', 'hiringCompany', 'yearsRequired', 'requiredSkills', 'preferredSkills', 'responsibilities', 'toolsTechnologies', 'domainKeywords', 'mustHaveKeywords', 'niceToHaveKeywords'],
   additionalProperties: false,
 }
 
@@ -182,14 +183,16 @@ const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or
 const JD_BULLET_RULES = `Experience and summary bullet rules (strict — follow ALL):
 - Think like an intelligent senior resume strategist: every bullet must earn its place with real project ownership, technical depth, and business impact.
 - Write like a strong working professional: humanized, natural, advanced, modern, aggressive, impressive, and professional. NEVER robotic, generic, or AI filler.
-- EACH bullet MUST be EXACTLY two FULL lines when rendered on a standard resume page. Target 32–40 words. Never one-liners. Never half-empty second lines. Rarely exceed ~42 words / a short third line.
+- MOST bullets MUST be EXACTLY two FULL lines when rendered (target 32–40 words). Never one-liners.
+- For Company #1 (most recent) and Company #2: the FIRST 2–3 bullets MUST be THREE full lines (target 48–58 words) with deeper project ownership, tools, and outcomes. Remaining bullets for those companies stay two lines (32–40 words).
+- Companies #3+ : all bullets two lines (32–40 words).
 - Every bullet must be meaningful: name the project or system, your concrete actions, tools/methods used, and a clear outcome or metric when believable.
 - Technical and current-market: use modern platforms, pipelines, analytics, cloud, automation, and delivery practices that hiring managers expect now.
 - EACH experience bullet MUST weave in at least ONE JD skill/tool/keyword naturally, and often a stronger adjacent advanced skill beyond the JD minimum.
 - Do NOT use hyphen/dash characters (-) or parentheses () inside bullets. Use combining words instead, e.g. "JSON, XML, and CSV" not "(JSON, XML, CSV)"; "SQL based reporting" not "SQL-based reporting".
-- Do NOT start with a bullet character. Plain sentence text only.
+- Do NOT start with a bullet character. Plain sentence text only — the document formatter adds real Word bullets.
 - Sound like real-time experience from someone who lived the project, not a template.
-- No color instructions — content only.`
+- No color instructions — content only. Do not bold or highlight keywords in the text.`
 
 function normalizeRating(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
@@ -367,6 +370,7 @@ export async function analyzeJd(jdText) {
     `Extract structured hiring signal from this cleaned job description.
 Return ONLY JSON. Keep lists short and concrete (skills/tools as short names, not sentences).
 roleTitle: the primary job title being hired for.
+hiringCompany: the employer / company posting this job (short legal or brand name). Use "" if unclear.
 yearsRequired: minimum years of experience required as a number (use 0 if not stated). Prefer the minimum when a range is given (e.g. "5-7 years" → 5, "5+ years" → 5).
 Always include concrete tools/platforms named in the JD (e.g. Agentforce, Cursor, Claude, Apex, LangChain, Snowflake, Databricks, BigQuery, Salesforce Data 360, Python, TypeScript, Java).
 Ignore any residual salary, benefits, location, EEO, or apply instructions.`,
@@ -717,9 +721,20 @@ export async function generateResumeFromJd(formData, jdData) {
 
   const companyLines = companies.map((c, i) => {
     const loc = [c.city, c.state, c.country].filter(Boolean).join(', ')
-    const n = Math.min(15, Math.max(3, Number(c.bulletCount) || 8))
+    const ranges = [
+      { min: 12, max: 14, def: 13 },
+      { min: 11, max: 13, def: 12 },
+      { min: 10, max: 12, def: 11 },
+      { min: 9, max: 11, def: 10 },
+      { min: 7, max: 9, def: 8 },
+    ]
+    const range = ranges[i] || { min: 7, max: 12, def: 8 }
+    const n = Math.min(range.max, Math.max(range.min, Number(c.bulletCount) || range.def))
     const guidance = String(c.summary || '').trim()
-    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | Location="${loc || '(omit if unknown)'}" | BulletCount=${n} | Each bullet MUST be a FULL two-line meaningful project statement | JD-aligned guidance="${guidance || '(none — invent strong advanced JD-matched project bullets)'}"`
+    const lengthRule = i <= 1
+      ? 'First 2-3 bullets = THREE full lines (48-58 words); remaining bullets = TWO lines (32-40 words)'
+      : 'ALL bullets = TWO full lines (32-40 words)'
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | Location="${loc || '(omit if unknown)'}" | BulletCount=${n} | Length=${lengthRule} | JD-aligned guidance="${guidance || '(none — invent strong advanced JD-matched project bullets)'}"`
   }).join('\n')
 
   const ref = formData.referenceMaterial || null
@@ -762,7 +777,8 @@ Hard rules:
 - Resume target role / title MUST be exactly: "${roleTitle}" (the JD role). Do not use a different title.
 - Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
 - For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
-- EVERY summary bullet and EVERY experience bullet MUST be a FULL two lines (about 32–40 words). Reject short one-liners. Each bullet must be complete, neat, humanized, understandable, professional, natural, and meaningful.
+- EVERY summary bullet MUST be a FULL two lines (about 32–40 words). For experience: follow per-company Length rules (Company #1 and #2 lead with 2–3 three-line bullets).
+- NEVER use the JD hiring company as an experience employer. Company names must be distinct from the employer posting the JD.
 - Align every bullet to JD responsibilities, tools, and keywords with real project ownership and advanced delivery.
 - When JD-aligned guidance is provided for a company, follow it closely for that company's bullets.
 - PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets, plus stronger adjacent advanced skills.
@@ -789,6 +805,7 @@ Hard rules:
 
 JD analysis (match FIRST, then elevate above this baseline):
 - Role title: ${roleTitle}
+- Hiring company (DO NOT use as an experience employer): ${String(jdData?.hiringCompany || '').trim() || '(infer from JD — still never reuse it)'}
 - Required skills: ${(jdData?.requiredSkills || []).join(', ') || '(see JD text)'}
 - Preferred skills: ${(jdData?.preferredSkills || []).join(', ') || ''}
 - Tools/technologies: ${(jdData?.toolsTechnologies || []).join(', ') || ''}
@@ -883,6 +900,44 @@ export function buildPresentToPastRanges(companyCount, totalYears) {
   return ranges
 }
 
+function normalizeEmployerKey(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\b(inc|llc|ltd|corp|corporation|company|co|plc|limited)\b\.?/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function namesLikelySame(a, b) {
+  const na = normalizeEmployerKey(a)
+  const nb = normalizeEmployerKey(b)
+  if (!na || !nb || na.length < 3 || nb.length < 3) return false
+  return na === nb || na.includes(nb) || nb.includes(na)
+}
+
+/** Lightweight hints for the JD employer so AI-mode companies never match it. */
+function extractLikelyHiringCompanies(jdText) {
+  const text = String(jdText || '')
+  const found = new Set()
+  const patterns = [
+    /(?:at|join|joining)\s+([A-Z][A-Za-z0-9&.'\-\s]{2,40}?)(?:\s+is\b|\s+as\b|,|\.|!)/g,
+    /(?:about|company|employer)\s*[:\-]\s*([A-Z][A-Za-z0-9&.'\-\s]{2,40})/gi,
+    /^([A-Z][A-Za-z0-9&.'\-]{2,}(?:\s+[A-Z][A-Za-z0-9&.'\-]{2,}){0,3})\s*$/gm,
+  ]
+  for (const re of patterns) {
+    let m
+    while ((m = re.exec(text)) !== null) {
+      const name = String(m[1] || '').trim()
+      if (name.length >= 3 && name.length <= 48) found.add(name)
+    }
+  }
+  return [...found]
+}
+
+function forcedPlaceholderEmployer(country, index) {
+  return forcedPlaceholderName(country, index)
+}
+
 /**
  * Suggest industry-fit companies (USA/India split) with present→past dates for AI mode.
  */
@@ -919,13 +974,14 @@ export async function suggestCompaniesFromJd({
 
 Hard rules:
 - Infer the JD industry (e.g. FinTech, Healthcare IT, SaaS, Consulting, E-commerce, Banking).
+- Extract the hiring employer from the JD (the company posting the job). NEVER return that employer (or close variants) as companyName.
 - Return EXACTLY ${n} companies in present → past order (index 0 = current/most recent).
 - Country assignment for each company in order MUST be: ${countryPlan.join(', ')}.
-- Pick believable, well-known employers that fit the industry and country (real company names).
+- Pick believable, well-known employers that fit the industry and country (real company names), different from the JD employer.
 - For USA: city + 2-letter US state code (e.g. Austin, TX).
 - For India: city + Indian state/region name (e.g. Bangalore, Karnataka). Do NOT invent US state codes for India.
 - jobTitle should progress sensibly toward "${roleTitle || 'the JD role'}" (more senior in recent roles).
-- bulletCount MUST be 10, 11, or 12 for EVERY company.
+- bulletCount by company index (present→past): #1 → 12–14, #2 → 11–13, #3 → 10–12, #4 → 9–11, #5 → 7–9 (use midpoint if unsure).
 - bulletGuidance: 1–2 sentences of JD-aligned themes/tools this company should emphasize (not full bullets).
 - Do NOT invent dates — the caller will overwrite dates. Still return placeholder startDate/endDate fields as empty strings if unsure.
 - companyName must be distinct and realistic.`,
@@ -943,18 +999,30 @@ Return industry + companies JSON.`,
     { maxTokens: 2200, preferProviders: ['claude'] },
   )
 
+  const hiringHints = extractLikelyHiringCompanies(jdText)
+  const bulletDefaults = [13, 12, 11, 10, 8, 8]
+  const bulletRanges = [
+    [12, 14], [11, 13], [10, 12], [9, 11], [7, 9], [7, 12],
+  ]
+
   const companies = (data.companies || []).slice(0, n).map((c, i) => {
     const forcedCountry = countryPlan[i] || (/india/i.test(c.country || '') ? 'India' : 'USA')
     const dates = dateRanges[i] || { startDate: 'Jan 2020', endDate: i === 0 ? 'Present' : 'Jan 2022' }
+    let companyName = String(c.companyName || '').trim()
+    if (hiringHints.some((h) => namesLikelySame(companyName, h))) {
+      companyName = forcedPlaceholderEmployer(forcedCountry, i)
+    }
+    const [minB, maxB] = bulletRanges[i] || [7, 12]
+    const rawB = Number(c.bulletCount) || bulletDefaults[i] || 8
     return {
-      companyName: String(c.companyName || '').trim(),
+      companyName,
       jobTitle: String(c.jobTitle || roleTitle || '').trim(),
       country: forcedCountry,
       city: String(c.city || '').trim(),
       state: String(c.state || '').trim(),
       startDate: dates.startDate,
       endDate: dates.endDate,
-      bulletCount: Math.min(12, Math.max(10, Number(c.bulletCount) || 11)),
+      bulletCount: Math.min(maxB, Math.max(minB, rawB)),
       bulletGuidance: String(c.bulletGuidance || '').trim(),
     }
   })
@@ -971,7 +1039,7 @@ Return industry + companies JSON.`,
       state: countryPlan[i] === 'India' ? 'Karnataka' : 'TX',
       startDate: dates.startDate,
       endDate: dates.endDate,
-      bulletCount: 11,
+      bulletCount: bulletDefaults[i] || 8,
       bulletGuidance: 'Emphasize JD-required tools, delivery, and measurable outcomes.',
     })
   }
@@ -983,9 +1051,10 @@ Return industry + companies JSON.`,
 }
 
 function forcedPlaceholderName(country, index) {
-  return country === 'India'
-    ? `Technology Services Co ${index + 1}`
-    : `Technology Solutions Inc ${index + 1}`
+  const usa = ['Northstar Analytics', 'Summit Data Group', 'BrightPath Systems', 'Lakeview Digital', 'Cascade Insights']
+  const india = ['Nimbus SoftTech', 'Aether Labs India', 'Orbit Analytics', 'PixelForge Solutions', 'Vantage Infotech']
+  const list = country === 'India' || /india/i.test(country) ? india : usa
+  return list[index % list.length]
 }
 
 const EXTRA_BULLET_SCHEMA = {

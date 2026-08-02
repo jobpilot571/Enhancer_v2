@@ -1,6 +1,10 @@
 import { RESUME_TEMPLATES } from '../../../../data/resumeTemplates'
 import TemplatePreview from '../../TemplatePreview'
-import { JD_PRODUCT_TEMPLATES } from '../jdProjectModel'
+import {
+  JD_FONT_OPTIONS,
+  JD_FONT_SIZE_OPTIONS,
+  JD_PRODUCT_TEMPLATES,
+} from '../jdProjectModel'
 
 export default function TemplateStep({
   project,
@@ -18,9 +22,51 @@ export default function TemplateStep({
       <header className="jd-step__header">
         <h4 className="jd-step__title">Templates</h4>
         <p className="jd-step__desc">
-          Choose a layout, then build your JD-tailored resume.
+          Choose a layout, font, and optional keyword highlighting, then build your JD-tailored resume.
         </p>
       </header>
+
+      <section className="jd-panel-card jd-template-options" aria-label="Font and highlight options">
+        <h5 className="jd-panel-card__title">Typography & highlights</h5>
+        <div className="form-grid form-grid--2">
+          <label className="form-field">
+            <span className="form-field__label">Font style</span>
+            <select
+              className="form-field__input"
+              value={project.fontFamily || 'Calibri'}
+              disabled={building}
+              onChange={(e) => onChange({ ...project, fontFamily: e.target.value })}
+            >
+              {JD_FONT_OPTIONS.map((f) => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span className="form-field__label">Font size</span>
+            <select
+              className="form-field__input"
+              value={String(project.fontSizePt || '12')}
+              disabled={building}
+              onChange={(e) => onChange({ ...project, fontSizePt: e.target.value })}
+            >
+              {JD_FONT_SIZE_OPTIONS.map((f) => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="jd-template-options__check">
+          <input
+            type="checkbox"
+            checked={Boolean(project.keywordHighlight)}
+            disabled={building}
+            onChange={(e) => onChange({ ...project, keywordHighlight: e.target.checked })}
+          />
+          <span>Keyword highlight (bold JD/skills terms in bullets)</span>
+        </label>
+        <p className="builder-hint">Default is 12 pt with no keyword highlighting.</p>
+      </section>
 
       <div className="template-grid">
         {JD_PRODUCT_TEMPLATES.map((prod) => {

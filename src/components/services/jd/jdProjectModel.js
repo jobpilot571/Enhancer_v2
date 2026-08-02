@@ -21,6 +21,38 @@ export const BULLET_OPTIONS = Array.from({ length: 13 }, (_, i) => ({
   label: `${i + 3} bullets`,
 }))
 
+/** Default / allowed bullet counts by company rank (0 = most recent / first). */
+export const COMPANY_BULLET_DEFAULTS = [
+  { min: 12, max: 14, default: '13' },
+  { min: 11, max: 13, default: '12' },
+  { min: 10, max: 12, default: '11' },
+  { min: 9, max: 11, default: '10' },
+  { min: 7, max: 9, default: '8' },
+]
+
+export function bulletRangeForCompanyIndex(index) {
+  return COMPANY_BULLET_DEFAULTS[index] || { min: 7, max: 12, default: '8' }
+}
+
+export function defaultBulletCountForCompanyIndex(index) {
+  return bulletRangeForCompanyIndex(index).default
+}
+
+export const JD_FONT_OPTIONS = [
+  { value: 'Calibri', label: 'Calibri' },
+  { value: 'Arial', label: 'Arial' },
+  { value: 'Times New Roman', label: 'Times New Roman' },
+  { value: 'Georgia', label: 'Georgia' },
+]
+
+export const JD_FONT_SIZE_OPTIONS = [
+  { value: '10', label: '10 pt' },
+  { value: '11', label: '11 pt' },
+  { value: '12', label: '12 pt' },
+  { value: '13', label: '13 pt' },
+  { value: '14', label: '14 pt' },
+]
+
 export const JD_PRODUCT_TEMPLATES = [
   {
     id: 'modern-data',
@@ -88,7 +120,7 @@ export function formatEducationDates(edu) {
   return year
 }
 
-export function emptyExperience() {
+export function emptyExperience(companyIndex = 0) {
   return {
     id: newId('exp'),
     companyName: '',
@@ -97,7 +129,7 @@ export function emptyExperience() {
     state: '',
     startDate: '',
     endDate: '',
-    bulletCount: '10',
+    bulletCount: defaultBulletCountForCompanyIndex(companyIndex),
     summary: '',
     country: '',
   }
@@ -106,7 +138,7 @@ export function emptyExperience() {
 export function syncExperiences(experiences, count) {
   const n = Math.min(6, Math.max(1, Number(count) || 1))
   const next = (experiences || []).slice(0, n)
-  while (next.length < n) next.push(emptyExperience())
+  while (next.length < n) next.push(emptyExperience(next.length))
   return next
 }
 
@@ -212,6 +244,9 @@ export function createEmptyProject() {
     referenceDocuments: [],
     referenceItems: [],
     selectedTemplateId: 'compact-ats',
+    fontFamily: 'Calibri',
+    fontSizePt: '12',
+    keywordHighlight: false,
     generatedResume: null,
     sessionId: null,
     previewReady: false,
@@ -277,8 +312,14 @@ export function validateStep(project, stepIndex) {
       if (!String(e.city || '').trim()) return `Company ${i + 1}: select the city.`
       if (!String(e.state || '').trim()) return `Company ${i + 1}: select the state.`
       const bullets = Number(e.bulletCount)
-      if (!Number.isFinite(bullets) || bullets < 3 || bullets > 15) {
-        return `Company ${i + 1}: select required bullets (3–15).`
+      const range = bulletRangeForCompanyIndex(i)
+      if (!Number.isFinite(bullets) || bullets < range.min || bullets > range.max) {
+        return `Company ${i + 1}: select ${range.min}–${range.max} bullets.`
+      }
+      const jdText = String(t.jobDescription || '')
+      const companyName = String(e.companyName || '').trim()
+      if (companyName && jdEmployerLooksLike(companyName, jdText, t.jobTitle)) {
+        return `Company ${i + 1}: company name must not match the employer named in the JD.`
       }
     }
   }
@@ -288,13 +329,36 @@ export function validateStep(project, stepIndex) {
   return ''
 }
 
+/** True when a company name appears to be the JD's hiring company. */
+export function jdEmployerLooksLike(companyName, jdText, roleTitle = '') {
+  const company = String(companyName || '').trim().toLowerCase()
+  if (company.length < 3) return false
+  const jd = String(jdText || '')
+  const lower = jd.toLowerCase()
+  if (!lower.includes(company)) return false
+  // Role title alone is not an employer match
+  const role = String(roleTitle || '').trim().toLowerCase()
+  if (role && company === role) return false
+  // Strong signals near the company mention
+  const escaped = company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const nearHire = new RegExp(
+    `(?:at|join|joining|for|about|employer|company|organization|inc\\.?|llc|ltd)\\s+[^\\n.]{0,40}${escaped}`
+    + `|${escaped}\\s+(?:is hiring|is looking|seeks|is seeking)`,
+    'i',
+  )
+  if (nearHire.test(jd)) return true
+  // Company appears in first ~400 chars of JD (often header / about company)
+  const head = lower.slice(0, 400)
+  return head.includes(company)
+}
+
 /**
  * Bridge to legacy /api/jd-builder/build payload until Phase 6 replaces generation.
  */
 export function toLegacyBuildPayload(project) {
   const b = project.basicInformation || {}
   const t = project.targetRole || {}
-  const companies = (project.experiences || []).slice(0, 6).map((e) => ({
+  const companies = (project.experiences || []).slice(0, 6).map((e, idx) => ({
     name: String(e.companyName || '').trim(),
     role: String(e.jobTitle || t.jobTitle || '').trim(),
     startDate: String(e.startDate || '').trim(),
@@ -302,7 +366,7 @@ export function toLegacyBuildPayload(project) {
     city: String(e.city || b.city || '').trim(),
     state: String(e.state || b.state || '').trim(),
     summary: String(e.summary || '').trim(),
-    bulletCount: Number(e.bulletCount) || (t.aiMode ? 11 : 8),
+    bulletCount: Number(e.bulletCount) || Number(defaultBulletCountForCompanyIndex(idx)),
     country: String(e.country || '').trim(),
   }))
   const yearsFromDates = computeYearsOfExperience(companies.map((c) => ({
@@ -340,6 +404,9 @@ export function toLegacyBuildPayload(project) {
     aiMode: Boolean(t.aiMode),
     aiIndustry: String(t.aiIndustry || '').trim(),
     templateId: project.selectedTemplateId || 'compact-ats',
+    fontFamily: project.fontFamily || 'Calibri',
+    fontSizePt: Number(project.fontSizePt) || 12,
+    keywordHighlight: Boolean(project.keywordHighlight),
     jdText: String(t.jobDescription || '').trim(),
     education: (b.education || [])
       .filter((e) => String(e.school || e.degree || '').trim())

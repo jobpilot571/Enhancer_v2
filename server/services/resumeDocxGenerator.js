@@ -9,11 +9,21 @@ import {
   TabStopPosition,
   convertInchesToTwip,
   ShadingType,
+  LevelFormat,
 } from 'docx'
 import { getTemplateStyle } from './resumeTemplates.js'
 
 function clean(text) {
   return String(text || '').replace(/\s+/g, ' ').trim()
+}
+
+function fontOf(style) {
+  return style?.fontFamily || 'Calibri'
+}
+
+function bodySizeOf(style) {
+  const n = Number(style?.bodySize)
+  return Number.isFinite(n) && n >= 16 ? n : 24 // default 12pt
 }
 
 function formatDates(start, end) {
@@ -57,11 +67,11 @@ function collectKeywords(resume) {
   return out.sort((a, b) => b.length - a.length)
 }
 
-function buildHighlightedRuns(text, keywords, { size = 20, color = '1F2937', boldAll = false } = {}) {
+function buildHighlightedRuns(text, keywords, { size = 24, color = '1F2937', boldAll = false, font = 'Calibri' } = {}) {
   const full = String(text || '')
   if (!full) return []
   if (boldAll || !keywords?.length) {
-    return [new TextRun({ text: full, size, font: 'Calibri', color, bold: boldAll })]
+    return [new TextRun({ text: full, size, font, color, bold: boldAll })]
   }
 
   const lower = full.toLowerCase()
@@ -100,7 +110,7 @@ function buildHighlightedRuns(text, keywords, { size = 20, color = '1F2937', bol
     .map((p) => new TextRun({
       text: p.text,
       size,
-      font: 'Calibri',
+      font,
       color,
       bold: p.bold,
     }))
@@ -109,6 +119,8 @@ function buildHighlightedRuns(text, keywords, { size = 20, color = '1F2937', bol
 function sectionHeading(text, accent, compact, style = {}) {
   const isClassic = style.headingStyle === 'underline-colon'
   const label = isClassic ? `${text.toUpperCase()}:` : text.toUpperCase()
+  const font = fontOf(style)
+  const size = Math.max(22, bodySizeOf(style) + 2)
 
   return new Paragraph({
     spacing: { before: compact ? 160 : 240, after: compact ? 60 : 80 },
@@ -121,8 +133,8 @@ function sectionHeading(text, accent, compact, style = {}) {
       new TextRun({
         text: label,
         bold: true,
-        size: 22,
-        font: 'Calibri',
+        size,
+        font,
         color: accent,
         underline: isClassic ? {} : undefined,
       }),
@@ -130,14 +142,14 @@ function sectionHeading(text, accent, compact, style = {}) {
   })
 }
 
-function bodyPara(text, opts = {}) {
+function bodyPara(text, opts = {}, style = {}) {
   return new Paragraph({
     spacing: { after: opts.after ?? 60 },
     children: [
       new TextRun({
         text: clean(text),
-        size: 20,
-        font: 'Calibri',
+        size: opts.run?.size || bodySizeOf(style),
+        font: fontOf(style),
         color: '1F2937',
         ...opts.run,
       }),
@@ -145,13 +157,20 @@ function bodyPara(text, opts = {}) {
   })
 }
 
-function bulletPara(text, compact, keywords = []) {
+/** Real Word list bullets (numPr) — Enter/new bullet works correctly in Word. */
+function bulletPara(text, compact, keywords = [], style = {}) {
   const body = clean(text).replace(/^[•\-\*]\s*/, '')
-  const size = compact ? 18 : 20
-  const runs = buildHighlightedRuns(`• ${body}`, keywords, { size, color: '1F2937' })
+  const size = bodySizeOf(style)
+  const font = fontOf(style)
+  const useHighlight = style.keywordHighlight === true
+  const runs = buildHighlightedRuns(body, useHighlight ? keywords : [], {
+    size,
+    font,
+    color: '1F2937',
+  })
   return new Paragraph({
+    numbering: { reference: 'resume-bullets', level: 0 },
     spacing: { after: compact ? 24 : 40 },
-    indent: { left: convertInchesToTwip(0.15) },
     children: runs,
   })
 }
@@ -194,7 +213,7 @@ function buildHeader(resume, style) {
             text: name.toUpperCase(),
             bold: true,
             size: 36,
-            font: 'Calibri',
+            font: fontOf(style),
             color: 'FFFFFF',
           }),
         ],
@@ -210,7 +229,7 @@ function buildHeader(resume, style) {
             new TextRun({
               text: title,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: 'E5E7EB',
             }),
           ],
@@ -227,7 +246,7 @@ function buildHeader(resume, style) {
             new TextRun({
               text: contact,
               size: 16,
-              font: 'Calibri',
+              font: fontOf(style),
               color: 'F3F4F6',
             }),
           ],
@@ -247,7 +266,7 @@ function buildHeader(resume, style) {
           text: name.toUpperCase(),
           bold: true,
           size: 36,
-          font: 'Calibri',
+          font: fontOf(style),
           color: nameColor,
         }),
       ],
@@ -264,7 +283,7 @@ function buildHeader(resume, style) {
             text: title,
             bold: true,
             size: 22,
-            font: 'Calibri',
+            font: fontOf(style),
             color: '000000',
           }),
         ],
@@ -281,7 +300,7 @@ function buildHeader(resume, style) {
           new TextRun({
             text: contact,
             size: 18,
-            font: 'Calibri',
+            font: fontOf(style),
             color: '000000',
           }),
         ],
@@ -299,7 +318,7 @@ function buildHeader(resume, style) {
             text: title,
             italics: true,
             size: 20,
-            font: 'Calibri',
+            font: fontOf(style),
             color: '374151',
           }),
         ],
@@ -343,9 +362,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company, bold: true, size: 20, font: fontOf(style), color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+          new TextRun({ text: dates, bold: true, size: 18, font: fontOf(style), color: ink }),
         ],
       }),
     )
@@ -355,9 +374,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
           spacing: { after: 40 },
           tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
           children: [
-            new TextRun({ text: title, bold: true, italics: true, size: 20, font: 'Calibri', color: ink }),
+            new TextRun({ text: title, bold: true, italics: true, size: 20, font: fontOf(style), color: ink }),
             new TextRun({ text: '\t' }),
-            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+            new TextRun({ text: loc, size: 18, font: fontOf(style), color: muted }),
           ],
         }),
       )
@@ -368,9 +387,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company, bold: true, size: 20, font: fontOf(style), color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+          new TextRun({ text: dates, bold: true, size: 18, font: fontOf(style), color: ink }),
         ],
       }),
     )
@@ -385,11 +404,11 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
               italics: !style.showResponsibilitiesLabel,
               bold: true,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: '000000',
             }),
             new TextRun({ text: '\t' }),
-            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+            new TextRun({ text: loc, size: 18, font: fontOf(style), color: muted }),
           ],
         }),
       )
@@ -403,7 +422,7 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
               text: 'Responsibilities:',
               bold: true,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: '000000',
             }),
           ],
@@ -416,9 +435,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: fontOf(style), color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+          new TextRun({ text: dates, bold: true, size: 18, font: fontOf(style), color: ink }),
         ],
       }),
     )
@@ -433,11 +452,11 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
               bold: true,
               italics: true,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: ink,
             }),
             new TextRun({ text: '\t' }),
-            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+            new TextRun({ text: loc, size: 18, font: fontOf(style), color: muted }),
           ],
         }),
       )
@@ -448,9 +467,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: fontOf(style), color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+          new TextRun({ text: dates, bold: true, size: 18, font: fontOf(style), color: ink }),
         ],
       }),
     )
@@ -459,9 +478,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { after: 40 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company ? title : '', bold: true, size: 20, font: 'Calibri', color: companyColor }),
+          new TextRun({ text: company ? title : '', bold: true, size: 20, font: fontOf(style), color: companyColor }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+          new TextRun({ text: loc, size: 18, font: fontOf(style), color: muted }),
         ],
       }),
     )
@@ -472,9 +491,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
         spacing: { before: compact ? 80 : 120, after: 20 },
         tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
         children: [
-          new TextRun({ text: company || title, bold: true, size: 20, font: 'Calibri', color: ink }),
+          new TextRun({ text: company || title, bold: true, size: 20, font: fontOf(style), color: ink }),
           new TextRun({ text: '\t' }),
-          new TextRun({ text: dates, bold: true, size: 18, font: 'Calibri', color: ink }),
+          new TextRun({ text: dates, bold: true, size: 18, font: fontOf(style), color: ink }),
         ],
       }),
     )
@@ -489,11 +508,11 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
               bold: true,
               italics: true,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: muted,
             }),
             new TextRun({ text: '\t' }),
-            new TextRun({ text: loc, size: 18, font: 'Calibri', color: muted }),
+            new TextRun({ text: loc, size: 18, font: fontOf(style), color: muted }),
           ],
         }),
       )
@@ -501,7 +520,7 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
   }
 
   for (const b of (job.bullets || []).map(clean).filter(Boolean)) {
-    paras.push(bulletPara(b, compact, keywords))
+    paras.push(bulletPara(b, compact, keywords, style))
   }
   return paras
 }
@@ -510,6 +529,9 @@ function buildExperienceEntry(job, style, compact, keywords = []) {
  * Build a professional DOCX from structured resume JSON + template id.
  * @param {object} [options]
  * @param {boolean} [options.forceBlack] — JD Builder: all text/accents black only
+ * @param {string} [options.fontFamily] — e.g. Calibri, Arial, Times New Roman, Georgia
+ * @param {number} [options.fontSizePt] — body font size in points (default 12)
+ * @param {boolean} [options.keywordHighlight] — bold JD/skill keywords in bullets (default false)
  */
 export async function generateResumeDocx(resume, templateId = 'classic-blue', options = {}) {
   let style = { ...getTemplateStyle(templateId) }
@@ -524,6 +546,13 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
       headerStyle: style.headerStyle === 'banner' ? 'centered' : style.headerStyle,
     }
   }
+  const fontSizePt = Number(options.fontSizePt)
+  style.fontFamily = String(options.fontFamily || style.fontFamily || 'Calibri').trim() || 'Calibri'
+  style.bodySize = Number.isFinite(fontSizePt) && fontSizePt >= 9 && fontSizePt <= 14
+    ? Math.round(fontSizePt * 2)
+    : 24
+  style.keywordHighlight = options.keywordHighlight === true
+
   const accent = style.accent || '1E40AF'
   const compact = !!style.compact
   const margin = style.pageBorder ? 0.5 : (compact ? 0.4 : 0.45)
@@ -542,9 +571,9 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
   if (summaryText || summaryBullets.length) {
     children.push(sectionHeading('Professional Summary', accent, compact, style))
     if (summaryText && !summaryBullets.length) {
-      children.push(bodyPara(summaryText, { after: 80 }))
+      children.push(bodyPara(summaryText, { after: 80 }, style))
     }
-    for (const b of summaryBullets) children.push(bulletPara(b, compact, keywords))
+    for (const b of summaryBullets) children.push(bulletPara(b, compact, keywords, style))
   }
 
   // Categorized skills if provided, else flat list
@@ -566,12 +595,22 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
         if (style.skillsAsBullets) {
           children.push(
             new Paragraph({
+              numbering: { reference: 'resume-bullets', level: 0 },
               spacing: { after: compact ? 24 : 40 },
-              indent: { left: convertInchesToTwip(0.15) },
               children: [
-                new TextRun({ text: '• ', size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
-                new TextRun({ text: `${label}: `, bold: true, size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
-                new TextRun({ text: items.join(', '), size: compact ? 18 : 20, font: 'Calibri', color: '000000' }),
+                new TextRun({
+                  text: `${label}: `,
+                  bold: true,
+                  size: bodySizeOf(style),
+                  font: fontOf(style),
+                  color: '000000',
+                }),
+                new TextRun({
+                  text: items.join(', '),
+                  size: bodySizeOf(style),
+                  font: fontOf(style),
+                  color: '000000',
+                }),
               ],
             }),
           )
@@ -580,11 +619,17 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
             new Paragraph({
               spacing: { after: 40 },
               children: [
-                new TextRun({ text: `${label}: `, bold: true, size: 20, font: 'Calibri', color: accent }),
+                new TextRun({
+                  text: `${label}: `,
+                  bold: true,
+                  size: bodySizeOf(style),
+                  font: fontOf(style),
+                  color: accent,
+                }),
                 new TextRun({
                   text: items.join(', '),
-                  size: 20,
-                  font: 'Calibri',
+                  size: bodySizeOf(style),
+                  font: fontOf(style),
                   color: style.forceBlack ? '000000' : '1F2937',
                 }),
               ],
@@ -593,7 +638,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
         }
       }
     } else {
-      children.push(bodyPara(flatSkills.join(' · '), { after: 80 }))
+      children.push(bodyPara(flatSkills.join(' · '), { after: 80 }, style))
     }
   }
 
@@ -610,7 +655,7 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
     children.push(sectionHeading('Education', accent, compact, style))
     for (const edu of education) {
       if (typeof edu === 'string') {
-        children.push(bodyPara(edu, { after: 60 }))
+        children.push(bodyPara(edu, { after: 60 }, style))
         continue
       }
       const school = clean(edu.school || edu.university || edu.college)
@@ -629,11 +674,11 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
               text: school || degreeLine,
               bold: true,
               size: 20,
-              font: 'Calibri',
+              font: fontOf(style),
               color: '111827',
             }),
             new TextRun({ text: '\t' }),
-            new TextRun({ text: dates, size: 18, font: 'Calibri', color: '4B5563' }),
+            new TextRun({ text: dates, size: 18, font: fontOf(style), color: '4B5563' }),
           ],
         }),
       )
@@ -643,14 +688,14 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
             spacing: { after: eduLoc ? 10 : 60 },
             tabStops: [{ type: TabStopType.RIGHT, position: rightTabStop(style) }],
             children: [
-              new TextRun({ text: degreeLine, size: 20, font: 'Calibri', color: '1F2937' }),
+              new TextRun({ text: degreeLine, size: 20, font: fontOf(style), color: '1F2937' }),
               new TextRun({ text: '\t' }),
-              new TextRun({ text: eduLoc, size: 18, font: 'Calibri', color: '4B5563' }),
+              new TextRun({ text: eduLoc, size: 18, font: fontOf(style), color: '4B5563' }),
             ],
           }),
         )
       } else if (eduLoc) {
-        children.push(bodyPara(eduLoc, { after: 60, run: { size: 18, color: '4B5563' } }))
+        children.push(bodyPara(eduLoc, { after: 60, run: { size: 18, color: '4B5563' } }, style))
       }
     }
   }
@@ -667,6 +712,29 @@ export async function generateResumeDocx(resume, templateId = 'classic-blue', op
     : {}
 
   const doc = new Document({
+    numbering: {
+      config: [
+        {
+          reference: 'resume-bullets',
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.BULLET,
+              text: '•',
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: {
+                  indent: {
+                    left: convertInchesToTwip(0.25),
+                    hanging: convertInchesToTwip(0.15),
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
     sections: [
       {
         properties: {

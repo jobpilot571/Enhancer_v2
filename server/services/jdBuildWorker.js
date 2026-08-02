@@ -102,9 +102,17 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
   ].map((s) => String(s || '').trim()).filter(Boolean))]
 
   const experience = (resumeData.experience || []).map((job, jobIdx) => {
+    const ranges = [
+      { min: 12, max: 14, def: 13 },
+      { min: 11, max: 13, def: 12 },
+      { min: 10, max: 12, def: 11 },
+      { min: 9, max: 11, def: 10 },
+      { min: 7, max: 9, def: 8 },
+    ]
+    const range = ranges[jobIdx] || { min: 7, max: 12, def: 8 }
     const maxBullets = Math.min(
-      15,
-      Math.max(3, Number(orderedCompanies[jobIdx]?.bulletCount) || job.bullets?.length || 8),
+      range.max,
+      Math.max(range.min, Number(orderedCompanies[jobIdx]?.bulletCount) || job.bullets?.length || range.def),
     )
     const bullets = [...(job.bullets || [])].slice(0, maxBullets).map((raw) => {
       let text = String(raw || '').trim()
@@ -261,7 +269,12 @@ export async function runJdBuildJob(jobId, sessionId) {
     updateBuildJob(jobId, { step: 'building_docx' })
     const templateId = formData.templateId || 'compact-ats'
     log(jobId, `building DOCX template=${templateId}`)
-    const buffer = await generateResumeDocx(resumeData, templateId, { forceBlack: true })
+    const buffer = await generateResumeDocx(resumeData, templateId, {
+      forceBlack: true,
+      fontFamily: formData.fontFamily || 'Calibri',
+      fontSizePt: Number(formData.fontSizePt) || 12,
+      keywordHighlight: Boolean(formData.keywordHighlight),
+    })
 
     updateBuildJob(jobId, { step: 'preparing_preview' })
     log(jobId, 'saving files')

@@ -4739,6 +4739,23 @@ body:has(.service-block--enhancer) .footer__col h4 {
   padding-top: 12px;
   justify-content: flex-end;
 }
+.jd-template-options {
+  margin-bottom: 20px;
+}
+.jd-template-options__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 0.9375rem;
+  color: var(--gray-700);
+  cursor: pointer;
+}
+.jd-template-options__check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--green-600);
+}
 .service-block--jd-wizard .jd-templates-build {
   margin-top: 1.25rem;
   justify-content: flex-end;
