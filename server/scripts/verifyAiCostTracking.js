@@ -268,6 +268,7 @@ async function testBuilder(token, sb) {
     phone: '555-0100',
     role: 'Software Engineer',
     yearsOfExperience: 5,
+    companyCount: 1,
     bulletsPerCompany: 5,
     templateId: 'classic-blue',
     companies: [{
@@ -279,7 +280,13 @@ async function testBuilder(token, sb) {
       endDate: 'Present',
       skills: ['JavaScript', 'Node.js'],
     }],
-    education: { school: 'State University', degree: 'BS CS', startDate: '2016', endDate: '2020' },
+    education: {
+      school: 'State University',
+      degree: 'BS',
+      course: 'Computer Science',
+      startDate: '2016',
+      endDate: '2020',
+    },
   }
   const start = await api('/api/builder/build', { method: 'POST', token, body: { formData } })
   assert(start.status < 400 && start.json?.jobId, `builder start failed: ${start.text}`)
@@ -311,8 +318,11 @@ writing tests, and collaborating with product. Preferred: TypeScript, AWS, Docke
     name: 'Verify User',
     email: 'verify@example.com',
     phone: '555-0100',
+    city: 'Seattle',
+    state: 'WA',
     role: 'Backend Engineer',
     yearsOfExperience: 4,
+    companyCount: 1,
     jdText,
     templateId: 'compact-ats',
     fontFamily: 'Calibri',
@@ -325,9 +335,10 @@ writing tests, and collaborating with product. Preferred: TypeScript, AWS, Docke
       country: 'USA',
       startDate: '2022-01',
       endDate: 'Present',
+      bulletCount: 12,
       skills: ['Node.js', 'PostgreSQL'],
     }],
-    education: [{ school: 'State University', degree: 'BS CS', startDate: '2016', endDate: '2020' }],
+    education: [{ school: 'State University', degree: 'BS', course: 'Computer Science', startDate: '2016', endDate: '2020' }],
   }
 
   const start = await api('/api/jd-builder/build', { method: 'POST', token, body: { formData } })
