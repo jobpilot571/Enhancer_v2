@@ -558,3 +558,43 @@ export function toFinalAiCost(summary) {
     features: summary.features || {},
   }
 }
+
+/**
+ * Public-safe AI usage snapshot for score reports / matchAnalysis.
+ * Keeps legacy diagnostics (tokens + costUsd) but strips Phase 1 ledger fields
+ * that must stay backend/admin-only (input/output splits, pricing flags, feature costs).
+ */
+export function toPublicAiUsage(summary) {
+  if (!summary) return null
+  return {
+    calls: (summary.calls || []).map((c) => ({
+      task: c.task,
+      provider: c.provider,
+      model: c.model,
+      promptTokens: c.promptTokens || 0,
+      completionTokens: c.completionTokens || 0,
+      cachedInputTokens: c.cachedInputTokens || 0,
+      durationMs: c.durationMs || 0,
+      costUsd: c.costUsd || 0,
+    })),
+    summary: (summary.summary || []).map((s) => ({
+      provider: s.provider,
+      model: s.model,
+      calls: s.calls || 0,
+      tasks: s.tasks || [],
+      promptTokens: s.promptTokens || 0,
+      completionTokens: s.completionTokens || 0,
+      cachedInputTokens: s.cachedInputTokens || 0,
+      costUsd: s.costUsd || 0,
+    })),
+    primaryProvider: summary.primaryProvider || null,
+    primaryModel: summary.primaryModel || null,
+    totals: {
+      llmCalls: summary.totals?.llmCalls ?? summary.requestCount ?? 0,
+      promptTokens: summary.totals?.promptTokens ?? summary.totalPromptTokens ?? 0,
+      completionTokens: summary.totals?.completionTokens ?? summary.totalCompletionTokens ?? 0,
+      cachedInputTokens: summary.totals?.cachedInputTokens ?? summary.cachedInputTokens ?? 0,
+      costUsd: summary.totals?.costUsd ?? summary.totalCostUsd ?? 0,
+    },
+  }
+}

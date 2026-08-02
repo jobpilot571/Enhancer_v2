@@ -1,5 +1,5 @@
 import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
-import { AI_SERVICES, ensureSessionOperationId, toFinalAiCost } from './aiCostTracking.js'
+import { AI_SERVICES, ensureSessionOperationId, toPublicAiUsage } from './aiCostTracking.js'
 import { getSession, updateSession, setEnhancedDocx, readFile } from '../store/sessionStore.js'
 import { updateEnhanceJob } from '../store/enhanceJobStore.js'
 import {
@@ -367,7 +367,8 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
     timer.mark('score_after')
 
     const aiUsage = endAiUsageTracking({ status: 'completed' })
-    const finalAiCost = toFinalAiCost(aiUsage)
+    // Persist full ledger via finalize above; only expose sanitized diagnostics to clients.
+    const publicAiUsage = toPublicAiUsage(aiUsage)
     const totalMs = timer.totalMs()
     const processingMeta = {
       durationMs: totalMs,
@@ -377,13 +378,13 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
       resumeParseConfidence: afterParse.resumeParseConfidence ?? null,
       jdAnalysisCached: jdCached,
       planRepaired: repaired,
-      llmCalls: aiUsage.totals?.llmCalls ?? aiUsage.calls?.length ?? 0,
+      llmCalls: publicAiUsage?.totals?.llmCalls ?? publicAiUsage?.calls?.length ?? 0,
       tokenUsage: {
-        promptTokens: aiUsage.totals?.promptTokens ?? 0,
-        completionTokens: aiUsage.totals?.completionTokens ?? 0,
-        cachedInputTokens: aiUsage.totals?.cachedInputTokens ?? 0,
-        costUsd: aiUsage.totals?.costUsd ?? 0,
-        calls: (aiUsage.calls || []).map((c) => ({
+        promptTokens: publicAiUsage?.totals?.promptTokens ?? 0,
+        completionTokens: publicAiUsage?.totals?.completionTokens ?? 0,
+        cachedInputTokens: publicAiUsage?.totals?.cachedInputTokens ?? 0,
+        costUsd: publicAiUsage?.totals?.costUsd ?? 0,
+        calls: (publicAiUsage?.calls || []).map((c) => ({
           task: c.task,
           provider: c.provider,
           model: c.model,
@@ -394,7 +395,7 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
           costUsd: c.costUsd,
         })),
       },
-      aiUsage,
+      aiUsage: publicAiUsage,
       scoringEngine: newComparison.atsMarks.scoringMethod,
       llmScoring: {
         before: llmBefore,
@@ -427,7 +428,6 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
       enhancementPlan,
       atsScore: finalAfter,
       processingMeta,
-      finalAiCost,
       layoutQa,
     })
 
@@ -442,7 +442,6 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
         enhancementPlan,
         atsScore: finalAfter,
         processingMeta,
-        finalAiCost,
         layoutQa,
         readyForDownload,
         downloadUrl: readyForDownload ? `/api/enhancer/download/${sessionId}` : null,
@@ -453,14 +452,11 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
     })
     log(jobId, 'completed')
   } catch (err) {
-    const failedUsage = endAiUsageTracking({ status: 'failed' })
-    const finalAiCost = toFinalAiCost(failedUsage)
+    endAiUsageTracking({ status: 'failed' })
     console.error(`[enhance:${jobId.slice(0, 8)}] failed:`, err.message)
-    updateSession(sessionId, { finalAiCost })
     updateEnhanceJob(jobId, {
       status: 'failed',
       error: err.message || 'Enhancement failed',
-      result: { finalAiCost },
     })
   }
   })

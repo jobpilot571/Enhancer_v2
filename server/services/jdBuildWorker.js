@@ -3,7 +3,7 @@ import { updateBuildJob } from '../store/buildJobStore.js'
 import { analyzeJd, generateResumeFromJd, jdSummaryBulletCount } from './openaiService.js'
 import { generateResumeDocx } from './resumeDocxGenerator.js'
 import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
-import { AI_SERVICES, toFinalAiCost } from './aiCostTracking.js'
+import { AI_SERVICES } from './aiCostTracking.js'
 
 function log(jobId, message) {
   console.log(`[jd-build:${jobId.slice(0, 8)}] ${message}`)
@@ -291,8 +291,7 @@ export async function runJdBuildJob(jobId, sessionId, { userId = null } = {}) {
     setGeneratedDocx(sessionId, buffer, buffer)
 
     const aiUsage = endAiUsageTracking({ status: 'completed' })
-    const finalAiCost = toFinalAiCost(aiUsage)
-    updateSession(sessionId, { finalAiCost })
+    log(jobId, `completed — AI calls=${aiUsage.requestCount || 0} cost=$${aiUsage.totalCostUsd || 0}`)
 
     const result = {
       sessionId,
@@ -302,20 +301,16 @@ export async function runJdBuildJob(jobId, sessionId, { userId = null } = {}) {
       resumeData,
       templateId,
       roleTitle,
-      finalAiCost,
     }
 
     updateBuildJob(jobId, { status: 'completed', step: 'preparing_preview', result })
-    log(jobId, `completed — AI cost $${finalAiCost.totalCostUsd}`)
+    log(jobId, 'completed')
   } catch (err) {
-    const failedUsage = endAiUsageTracking({ status: 'failed' })
-    const finalAiCost = toFinalAiCost(failedUsage)
+    endAiUsageTracking({ status: 'failed' })
     console.error(`[jd-build:${jobId.slice(0, 8)}] failed:`, err.message)
-    updateSession(sessionId, { finalAiCost })
     updateBuildJob(jobId, {
       status: 'failed',
       error: err.message || 'JD-tailored resume build failed',
-      result: { finalAiCost },
     })
   }
   })
