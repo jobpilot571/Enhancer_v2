@@ -103,6 +103,13 @@ export async function deleteTemplateSample(templateId) {
   return request(`/templates/${templateId}/sample`, { method: 'DELETE' })
 }
 
+export async function seedDemoTemplateSamples({ force = false, onlyJd = true } = {}) {
+  return request('/templates/seed-demo-samples', {
+    method: 'POST',
+    body: JSON.stringify({ force, onlyJd }),
+  })
+}
+
 export async function fetchAdminPricing() {
   return request('/pricing')
 }

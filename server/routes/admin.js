@@ -15,6 +15,8 @@ import {
   saveSample,
   deleteSample,
   getTemplateIds,
+  ensureDemoSamples,
+  JD_DEMO_TEMPLATE_IDS,
 } from '../store/adminStore.js'
 import {
   listComplimentaryEmails,
@@ -131,10 +133,27 @@ router.get('/templates', requireAdmin, (_req, res) => {
       id,
       accent: style.accent,
       headerStyle: style.headerStyle,
+      jdGallery: JD_DEMO_TEMPLATE_IDS.includes(id),
       sample: samples[id] || null,
     }
   })
-  res.json({ templates })
+  res.json({ templates, jdTemplateIds: JD_DEMO_TEMPLATE_IDS })
+})
+
+router.post('/templates/seed-demo-samples', requireAdmin, async (req, res, next) => {
+  try {
+    const force = Boolean(req.body?.force)
+    const onlyJd = req.body?.onlyJd !== false
+    const templateIds = onlyJd ? JD_DEMO_TEMPLATE_IDS : null
+    const result = await ensureDemoSamples({ templateIds, force })
+    res.json({
+      ok: true,
+      message: `Generated ${result.created.length} demo sample(s) with fake details (${result.dummyName}).`,
+      ...result,
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
 router.post('/templates/:templateId/sample', requireAdmin, upload.single('sample'), (req, res, next) => {

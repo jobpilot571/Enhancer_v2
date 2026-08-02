@@ -12,6 +12,7 @@ import {
   fetchAdminTemplates,
   uploadTemplateSample,
   deleteTemplateSample,
+  seedDemoTemplateSamples,
   fetchAdminPricing,
   saveAdminPricing,
   getSampleFileUrl,
@@ -100,6 +101,7 @@ function AdminLogin({ onSuccess }) {
 
 function TemplatesPanel({ templates, catalog, onRefresh }) {
   const [busyId, setBusyId] = useState('')
+  const [seeding, setSeeding] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
@@ -135,12 +137,56 @@ function TemplatesPanel({ templates, catalog, onRefresh }) {
     }
   }
 
+  async function handleSeedDemos(force = false) {
+    setSeeding(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await seedDemoTemplateSamples({ force, onlyJd: true })
+      setMessage(
+        result.message
+        || `Seeded ${result.created?.length || 0} demo sample(s) with fake name/role details.`,
+      )
+      await onRefresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   return (
     <div className="admin-panel">
       <div className="admin-panel__header">
         <div>
           <h2>Template samples</h2>
-          <p>Upload a real DOCX or PDF per template so the builder picker shows a better preview.</p>
+          <p>
+            Upload a real DOCX/PDF per template, or generate fictional demo resumes
+            (Alex Morgan / Business Analyst) for the JD Builder gallery. Uploads are
+            auto-anonymized so public previews never show real personal data.
+          </p>
+        </div>
+        <div className="admin-actions">
+          <button
+            type="button"
+            className="btn btn--outline btn--sm"
+            disabled={seeding}
+            onClick={() => handleSeedDemos(false)}
+          >
+            {seeding ? 'Working…' : 'Generate missing demos'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            disabled={seeding}
+            onClick={() => {
+              if (confirm('Replace JD gallery demos with fresh fake Alex Morgan samples?')) {
+                handleSeedDemos(true)
+              }
+            }}
+          >
+            Regenerate JD demos
+          </button>
         </div>
       </div>
 
@@ -172,7 +218,10 @@ function TemplatesPanel({ templates, catalog, onRefresh }) {
                       />
                       <div>
                         <strong>{meta.name}</strong>
-                        <span className="admin-muted">{meta.description || tpl.id}</span>
+                        <span className="admin-muted">
+                          {meta.description || tpl.id}
+                          {tpl.jdGallery ? ' · JD Builder gallery' : ''}
+                        </span>
                       </div>
                     </div>
                   </td>
@@ -184,10 +233,11 @@ function TemplatesPanel({ templates, catalog, onRefresh }) {
                         </a>
                         <span className="admin-muted">
                           {sample.fileType?.toUpperCase()} · {formatBytes(sample.size)}
+                          {sample.demoGenerated ? ' · demo' : ''}
                         </span>
                       </div>
                     ) : (
-                      <span className="admin-muted">No sample yet</span>
+                      <span className="admin-muted">No sample yet — upload or generate demo</span>
                     )}
                   </td>
                   <td>

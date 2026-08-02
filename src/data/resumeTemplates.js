@@ -6,7 +6,7 @@
 export const RESUME_TEMPLATES = [
   {
     id: 'classic-blue',
-    name: 'Classic Blue',
+    name: 'Navy Pro',
     description: 'Blue name & headings, city | phone | email',
     accent: '1E40AF',
     headerStyle: 'centered',

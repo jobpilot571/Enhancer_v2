@@ -109,4 +109,15 @@ await initDurableUserStore()
 
 app.listen(PORT, () => {
   console.log(`Resume Enhancer API running on port ${PORT}`)
+  // Seed fictional DOCX samples for JD gallery templates (never overwrites admin uploads)
+  import('./store/adminStore.js')
+    .then(({ ensureDemoSamples, JD_DEMO_TEMPLATE_IDS }) =>
+      ensureDemoSamples({ templateIds: JD_DEMO_TEMPLATE_IDS, force: false }),
+    )
+    .then((result) => {
+      if (result?.created?.length) {
+        console.log(`[samples] seeded ${result.created.length} demo template preview(s)`)
+      }
+    })
+    .catch((err) => console.warn('[samples] demo seed skipped:', err.message))
 })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { renderAsync } from 'docx-preview'
 
-const RENDER_OPTIONS = {
+const DEFAULT_RENDER_OPTIONS = {
   className: 'docx',
   inWrapper: true,
   ignoreWidth: false,
@@ -14,7 +14,21 @@ const RENDER_OPTIONS = {
   useBase64URL: true,
 }
 
-function fitDocxToWidth(container, scalerEl, bodyEl) {
+/** Compact gallery cards — crop to top of page so fonts/style stay readable */
+const CARD_RENDER_OPTIONS = {
+  className: 'docx',
+  inWrapper: true,
+  ignoreWidth: true,
+  ignoreHeight: true,
+  ignoreFonts: false,
+  breakPages: false,
+  renderHeaders: false,
+  renderFooters: false,
+  renderFootnotes: false,
+  useBase64URL: true,
+}
+
+function fitDocxToWidth(container, scalerEl, bodyEl, { cover = false } = {}) {
   const wrapper = bodyEl.querySelector('.docx-wrapper')
   if (!wrapper || !container || !scalerEl) return
 
@@ -23,36 +37,43 @@ function fitDocxToWidth(container, scalerEl, bodyEl) {
   bodyEl.style.height = ''
   scalerEl.style.height = ''
 
-  const pad = 10
+  const pad = cover ? 0 : 4
   const availW = Math.max(container.clientWidth - pad * 2, 1)
 
   const naturalW = wrapper.scrollWidth
   const naturalH = wrapper.scrollHeight
   if (naturalW <= 0 || naturalH <= 0) return
 
-  const scale = Math.min(availW / naturalW, 1)
+  // Always fit full page width so sides aren't cropped; height scrolls in the card.
+  const scale = availW / naturalW
 
   bodyEl.style.width = `${naturalW}px`
   bodyEl.style.height = `${naturalH}px`
   bodyEl.style.transform = `scale(${scale})`
   bodyEl.style.transformOrigin = 'top center'
 
-  scalerEl.style.height = `${naturalH * scale}px`
+  scalerEl.style.height = `${Math.ceil(naturalH * scale)}px`
 }
 
-export default function DocxViewer({ blob, className = '', emptyLabel = 'Upload a DOCX or PDF resume to preview' }) {
+export default function DocxViewer({
+  blob,
+  className = '',
+  emptyLabel = 'Upload a DOCX or PDF resume to preview',
+  previewMode = 'default',
+}) {
   const containerRef = useRef(null)
   const scalerRef = useRef(null)
   const bodyRef = useRef(null)
   const styleRef = useRef(null)
+  const isCard = previewMode === 'card'
 
   const fitToWidth = useCallback(() => {
     const container = containerRef.current
     const scalerEl = scalerRef.current
     const bodyEl = bodyRef.current
     if (!container || !scalerEl || !bodyEl?.querySelector('.docx-wrapper')) return
-    fitDocxToWidth(container, scalerEl, bodyEl)
-  }, [])
+    fitDocxToWidth(container, scalerEl, bodyEl, { cover: false })
+  }, [isCard])
 
   useEffect(() => {
     const bodyEl = bodyRef.current
@@ -68,7 +89,8 @@ export default function DocxViewer({ blob, className = '', emptyLabel = 'Upload 
     bodyEl.style.height = ''
     if (scalerRef.current) scalerRef.current.style.height = ''
 
-    renderAsync(blob, bodyEl, styleEl, RENDER_OPTIONS)
+    const options = isCard ? CARD_RENDER_OPTIONS : DEFAULT_RENDER_OPTIONS
+    renderAsync(blob, bodyEl, styleEl, options)
       .then(() => {
         if (cancelled) return
         requestAnimationFrame(() => {
@@ -83,7 +105,7 @@ export default function DocxViewer({ blob, className = '', emptyLabel = 'Upload 
     return () => {
       cancelled = true
     }
-  }, [blob, fitToWidth])
+  }, [blob, fitToWidth, isCard])
 
   useEffect(() => {
     const container = containerRef.current
@@ -109,7 +131,10 @@ export default function DocxViewer({ blob, className = '', emptyLabel = 'Upload 
   }
 
   return (
-    <div ref={containerRef} className={`docx-viewer ${className}`.trim()}>
+    <div
+      ref={containerRef}
+      className={`docx-viewer ${isCard ? 'docx-viewer--card' : ''} ${className}`.trim()}
+    >
       <div ref={scalerRef} className="docx-viewer__scaler">
         <div ref={styleRef} className="docx-viewer__styles" aria-hidden="true" />
         <div ref={bodyRef} className="docx-viewer__body" />

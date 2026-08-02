@@ -1,3 +1,4 @@
+import { RESUME_TEMPLATES } from '../../../../data/resumeTemplates'
 import { collectWarnings, JD_PRODUCT_TEMPLATES } from '../jdProjectModel'
 
 export default function BuildReviewStep({ project, building, buildStepLabel }) {
@@ -6,6 +7,8 @@ export default function BuildReviewStep({ project, building, buildStepLabel }) {
   const warnings = collectWarnings(project)
   const approved = (project.referenceItems || []).filter((i) => i.approved).length
   const tpl = JD_PRODUCT_TEMPLATES.find((x) => x.id === project.selectedTemplateId)
+  const catalog = RESUME_TEMPLATES.find((x) => x.id === project.selectedTemplateId)
+  const templateName = tpl?.productName || catalog?.name || project.selectedTemplateId || '—'
 
   return (
     <div className="jd-step">
@@ -35,7 +38,7 @@ export default function BuildReviewStep({ project, building, buildStepLabel }) {
         <div className="jd-build-summary__card">
           <h5>References & template</h5>
           <p>{approved} approved reference items</p>
-          <p>{tpl?.productName || project.selectedTemplateId || '—'}</p>
+          <p>{templateName}</p>
         </div>
       </div>
 

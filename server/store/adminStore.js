@@ -3,6 +3,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
 import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
+import { generateResumeDocx } from '../services/resumeDocxGenerator.js'
+import { DEMO_SAMPLE_RESUME, JD_DEMO_TEMPLATE_IDS } from '../services/sampleResumeData.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../admin-data')
@@ -150,6 +152,9 @@ export function listSamples() {
         fileType: info.fileType,
         uploadedAt: info.uploadedAt,
         size: info.size,
+        demoGenerated: Boolean(info.demoGenerated),
+        dummyName: info.dummyName || null,
+        anonymized: Boolean(info.anonymized),
       }
     }
   }
@@ -226,4 +231,50 @@ export function deleteSample(templateId) {
   return { ok: true }
 }
 
-export { DEFAULT_PRICING }
+/**
+ * Generate fictional Alex Morgan DOCX samples for templates that have none.
+ * Does not overwrite admin-uploaded samples unless force=true.
+ */
+export async function ensureDemoSamples({ templateIds = null, force = false } = {}) {
+  ensureDirs()
+  const ids = (templateIds && templateIds.length)
+    ? templateIds
+    : [...new Set([...JD_DEMO_TEMPLATE_IDS, ...Object.keys(TEMPLATE_STYLES)])]
+  const created = []
+  const skipped = []
+
+  for (const templateId of ids) {
+    if (!TEMPLATE_STYLES[templateId]) {
+      skipped.push({ templateId, reason: 'unknown_template' })
+      continue
+    }
+    const existing = getSample(templateId)
+    if (existing && !force) {
+      skipped.push({ templateId, reason: 'already_has_sample' })
+      continue
+    }
+    if (existing && force) {
+      try { deleteSample(templateId) } catch { /* continue */ }
+    }
+
+    const forceBlack = /black|ats|minimal|compact|charcoal|technical/i.test(templateId)
+    const buffer = await generateResumeDocx(DEMO_SAMPLE_RESUME, templateId, {
+      forceBlack,
+      fontFamily: 'Calibri',
+      fontSizePt: 11,
+      keywordHighlight: false,
+    })
+    const saved = saveSample(templateId, `${templateId}-demo.docx`, 'docx', buffer)
+    const meta = getSamplesMeta()
+    if (meta.samples?.[templateId]) {
+      meta.samples[templateId].demoGenerated = true
+      meta.samples[templateId].dummyName = DEMO_SAMPLE_RESUME.name
+      saveSamplesMeta(meta)
+    }
+    created.push(saved)
+  }
+
+  return { created, skipped, dummyName: DEMO_SAMPLE_RESUME.name }
+}
+
+export { DEFAULT_PRICING, DEMO_SAMPLE_RESUME, JD_DEMO_TEMPLATE_IDS }

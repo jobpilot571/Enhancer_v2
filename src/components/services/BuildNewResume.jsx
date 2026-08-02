@@ -1138,24 +1138,30 @@ export default function BuildNewResume() {
             {RESUME_TEMPLATES.map((tpl) => {
               const sample = templateSamples[tpl.id]
               return (
-                <button
+                <div
                   key={tpl.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={form.templateId === tpl.id}
                   className={`template-card ${form.templateId === tpl.id ? 'is-selected' : ''}`}
                   onClick={() => {
                     setForm((f) => ({ ...f, templateId: tpl.id }))
                     setError('')
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setForm((f) => ({ ...f, templateId: tpl.id }))
+                      setError('')
+                    }
+                  }}
                 >
                   <div className="template-card__preview">
-                    <TemplatePreview
-                      template={tpl}
-                      sampleBlob={sampleBlobs[tpl.id] || null}
-                      sampleFileType={sample?.fileType || null}
-                      sampleUrl={sample ? getSampleFileUrl(tpl.id) : null}
-                    />
+                    <TemplatePreview template={tpl} mode="card" />
                     {sample && (
-                      <span className="template-card__sample-badge">Sample ready</span>
+                      <span className="template-card__sample-badge">
+                        {sample.demoGenerated ? 'Demo sample' : 'Sample ready'}
+                      </span>
                     )}
                   </div>
                   <div className="template-card__meta">
@@ -1178,7 +1184,7 @@ export default function BuildNewResume() {
                   {form.templateId === tpl.id && (
                     <span className="template-card__check" aria-hidden="true">✓</span>
                   )}
-                </button>
+                </div>
               )
             })}
           </div>
