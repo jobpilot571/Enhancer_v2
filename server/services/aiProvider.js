@@ -150,24 +150,70 @@ function makeOpenAICompatible({ apiKey, baseURL, model, useJsonSchema }) {
 }
 
 /* ---------- Anthropic Claude ---------- */
+/** Retired / invalid IDs still set in some Render envs → current Sonnet. */
+const CLAUDE_MODEL_REMAP = {
+  'claude-3-5-sonnet-latest': 'claude-sonnet-5',
+  'claude-3-5-sonnet': 'claude-sonnet-5',
+  'claude-3-5-sonnet-20241022': 'claude-sonnet-5',
+  'claude-3-5-sonnet-20240620': 'claude-sonnet-5',
+  'claude-3-7-sonnet-latest': 'claude-sonnet-5',
+  'claude-3-7-sonnet-20250219': 'claude-sonnet-5',
+}
+
+const CLAUDE_MODEL_FALLBACKS = [
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+]
+
+function resolveClaudeModel(raw) {
+  const requested = String(raw || 'claude-sonnet-5').trim() || 'claude-sonnet-5'
+  const mapped = CLAUDE_MODEL_REMAP[requested] || requested
+  if (mapped !== requested) {
+    console.warn(`[AI] CLAUDE_MODEL "${requested}" is retired; using "${mapped}"`)
+  }
+  return mapped
+}
+
+function isClaudeModelNotFound(err) {
+  const msg = String(err?.message || err || '')
+  return /not_found_error|model:/i.test(msg) && /404|not[_ ]found/i.test(msg)
+}
+
 function makeClaude({ apiKey, model }) {
   const client = new Anthropic({ apiKey })
+  const primary = resolveClaudeModel(model)
+  const candidates = [primary, ...CLAUDE_MODEL_FALLBACKS.filter((m) => m !== primary)]
+
   return async (system, user, _schemaName, schema, options = {}) => {
-    const res = await client.messages.create({
-      model,
-      max_tokens: options.maxTokens || 4096,
-      temperature: 0.2,
-      system: system + schemaInstruction(schema),
-      messages: [{ role: 'user', content: user }],
-    })
-    const text = res.content?.map((b) => (b.type === 'text' ? b.text : '')).join('')
-    if (!text) throw new Error('Empty response')
-    const usage = normalizeUsage(res.usage, system, user, text)
-    try {
-      return { result: extractJson(text), usage }
-    } catch (err) {
-      throw attachUsageToError(err, usage)
+    let lastErr = null
+    for (const candidate of candidates) {
+      try {
+        const res = await client.messages.create({
+          model: candidate,
+          max_tokens: options.maxTokens || 4096,
+          temperature: 0.2,
+          system: system + schemaInstruction(schema),
+          messages: [{ role: 'user', content: user }],
+        })
+        const text = res.content?.map((b) => (b.type === 'text' ? b.text : '')).join('')
+        if (!text) throw new Error('Empty response')
+        const usage = normalizeUsage(res.usage, system, user, text)
+        try {
+          return { result: extractJson(text), usage, modelUsed: candidate }
+        } catch (err) {
+          throw attachUsageToError(err, usage)
+        }
+      } catch (err) {
+        lastErr = err
+        if (isClaudeModelNotFound(err)) {
+          console.warn(`[AI] Claude model "${candidate}" not found; trying next`)
+          continue
+        }
+        throw err
+      }
     }
+    throw lastErr || new Error('All Claude model IDs failed')
   }
 }
 
@@ -232,7 +278,7 @@ function buildProviders() {
   }
 
   if (process.env.ANTHROPIC_API_KEY) {
-    const model = process.env.CLAUDE_MODEL || 'claude-sonnet-5'
+    const model = resolveClaudeModel(process.env.CLAUDE_MODEL || 'claude-sonnet-5')
     providers.claude = {
       label: 'Anthropic Claude',
       model,

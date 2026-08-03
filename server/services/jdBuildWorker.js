@@ -259,7 +259,7 @@ export async function runJdBuildJob(jobId, sessionId, { userId = null } = {}) {
     if (!roleTitle) throw new Error('Could not determine role from JD — add a clearer job title in the JD or Role field')
 
     updateBuildJob(jobId, { step: 'generating_content' })
-    log(jobId, `generating JD-tailored content via Claude for ${formData.name} / ${roleTitle}`)
+    log(jobId, `generating JD-tailored content (Claude → ChatGPT → Gemini) for ${formData.name} / ${roleTitle}`)
 
     const aiResume = await generateResumeFromJd(
       { ...formData, companies: ordered, role: roleTitle },
