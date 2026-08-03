@@ -3875,10 +3875,98 @@ body:has(.service-block--enhancer) .footer__col h4 {
   font-size: 0.8125rem;
 }
 .jd-revision-chat {
-  margin-top: 16px;
+  width: 100%;
+  margin: 0 0 20px;
+  padding: 16px 18px 18px;
+  border: 1.5px solid rgba(22, 199, 132, 0.35);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 48%);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
-.jd-revision-chat .layout-issue-chat__panel {
-  margin-top: 0;
+.jd-revision-chat__head {
+  margin-bottom: 12px;
+}
+.jd-revision-chat__title {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--gray-900);
+}
+.jd-revision-chat__subtitle {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--gray-600);
+}
+.jd-revision-chat__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.jd-revision-chat__thread {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--gray-200);
+  background: #fff;
+}
+.jd-revision-chat__empty {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--gray-500);
+  line-height: 1.45;
+}
+.jd-revision-chat__bubble {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+.jd-revision-chat__bubble p { margin: 0; }
+.jd-revision-chat__bubble--user {
+  margin-left: 18%;
+  background: #ecfdf5;
+  color: var(--gray-900);
+}
+.jd-revision-chat__bubble--assistant {
+  margin-right: 18%;
+  background: var(--gray-100);
+  color: var(--gray-800);
+}
+.jd-revision-chat__label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--gray-600);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.jd-revision-chat__input {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: 0.9375rem;
+  background: #fff;
+}
+.jd-revision-chat__input:focus {
+  outline: none;
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px rgba(22, 199, 132, 0.15);
+}
+.jd-revision-chat__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.jd-revision-chat__error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.8125rem;
 }
 
 .comparison-title {

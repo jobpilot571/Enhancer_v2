@@ -62,9 +62,16 @@ export default function PreviewDownloadStep({
             ? (buildStepLabel || 'Building your resume…')
             : previewBlob
               ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the chat below to change companies, bullets, or anything else.`
-              : 'Your generated resume will appear here after Build.'}
+              : 'Build a resume, then use the AI chat to revise companies, bullets, and more.'}
         </p>
       </header>
+
+      <JdRevisionChat
+        sessionId={sessionId}
+        ready={Boolean(previewBlob && sessionId)}
+        disabled={building || saving || revising}
+        onRevised={handleRevised}
+      />
 
       {building && !previewBlob && (
         <p className="enhancer-progress">{buildStepLabel || 'Building resume…'}</p>
@@ -88,15 +95,6 @@ export default function PreviewDownloadStep({
             No resume yet. Choose a template and click Build Resume.
           </p>
         )
-      )}
-
-      {previewBlob && sessionId && (
-        <JdRevisionChat
-          sessionId={sessionId}
-          forceOpen
-          disabled={building || saving || revising}
-          onRevised={handleRevised}
-        />
       )}
 
       {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
