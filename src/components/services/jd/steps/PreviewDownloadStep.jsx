@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import DocumentPreview from '../../DocumentPreview'
+import JdRevisionChat from '../JdRevisionChat'
 
 export default function PreviewDownloadStep({
   previewBlob,
@@ -7,12 +8,15 @@ export default function PreviewDownloadStep({
   downloadUrl,
   building,
   buildStepLabel,
+  sessionId = null,
   onStartNew,
   onDownloadAndSave,
+  onPreviewRevised,
 }) {
   const [saving, setSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState('')
   const [saveError, setSaveError] = useState('')
+  const [revising, setRevising] = useState(false)
 
   async function handleDownload() {
     if (!previewBlob || saving) return
@@ -24,7 +28,6 @@ export default function PreviewDownloadStep({
       setSaveNotice('Downloaded and saved to Saved Resumes.')
     } catch (err) {
       setSaveError(err.message || 'Download failed.')
-      // Still try a direct browser download as fallback if URL exists
       if (downloadUrl) {
         const a = document.createElement('a')
         a.href = downloadUrl
@@ -36,6 +39,20 @@ export default function PreviewDownloadStep({
     }
   }
 
+  async function handleRevised(result) {
+    setRevising(true)
+    setSaveNotice('')
+    setSaveError('')
+    try {
+      await onPreviewRevised?.(result)
+      setSaveNotice('Resume updated from your chat request.')
+    } catch (err) {
+      setSaveError(err.message || 'Preview refresh failed.')
+    } finally {
+      setRevising(false)
+    }
+  }
+
   return (
     <div className="jd-step">
       <header className="jd-step__header">
@@ -44,7 +61,7 @@ export default function PreviewDownloadStep({
           {building
             ? (buildStepLabel || 'Building your resume…')
             : previewBlob
-              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}`
+              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the chat below to change companies, bullets, or anything else.`
               : 'Your generated resume will appear here after Build.'}
         </p>
       </header>
@@ -57,7 +74,11 @@ export default function PreviewDownloadStep({
         <div className="builder-preview-panel">
           <div className="upload-box">
             <div className="upload-box__content upload-box__content--docx">
-              <DocumentPreview blob={previewBlob} fileType="docx" emptyLabel="Preview will appear here" />
+              <DocumentPreview
+                blob={previewBlob}
+                fileType="docx"
+                emptyLabel={revising ? 'Updating preview…' : 'Preview will appear here'}
+              />
             </div>
           </div>
         </div>
@@ -69,6 +90,15 @@ export default function PreviewDownloadStep({
         )
       )}
 
+      {previewBlob && sessionId && (
+        <JdRevisionChat
+          sessionId={sessionId}
+          forceOpen
+          disabled={building || saving || revising}
+          onRevised={handleRevised}
+        />
+      )}
+
       {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
       {saveError && <p className="builder-error" role="alert">{saveError}</p>}
 
@@ -77,7 +107,7 @@ export default function PreviewDownloadStep({
           type="button"
           className="btn btn--outline btn--xl"
           onClick={onStartNew}
-          disabled={building || saving}
+          disabled={building || saving || revising}
         >
           Build new resume
         </button>
@@ -86,7 +116,7 @@ export default function PreviewDownloadStep({
             type="button"
             className="btn btn--primary btn--xl"
             onClick={handleDownload}
-            disabled={building || saving}
+            disabled={building || saving || revising}
           >
             {saving ? 'Saving…' : 'Download DOCX'}
           </button>

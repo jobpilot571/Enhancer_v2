@@ -253,3 +253,17 @@ export async function deleteSavedJdResume(id) {
   })
   return res.json()
 }
+
+/**
+ * Chat revision for a built JD-tailored resume (Claude → ChatGPT → Gemini).
+ */
+export async function reviseJdResume(sessionId, message) {
+  const res = await request('/revise', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, message }),
+    signal: AbortSignal.timeout(180000),
+  })
+  return res.json()
+}
+

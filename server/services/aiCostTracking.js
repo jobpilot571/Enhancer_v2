@@ -39,6 +39,7 @@ export const AI_SERVICES = {
   ENHANCER: 'Resume Enhancer',
   BUILDER: 'Resume Builder',
   JD_BUILDER: 'JD-Tailored Resume Builder',
+  JD_REVISION: 'JD Resume Revision Chat',
   LAYOUT_FIX: 'Layout Fix Chat',
 }
 

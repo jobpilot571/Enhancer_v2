@@ -456,8 +456,15 @@ export default function JdBuilderWizard() {
             downloadUrl={project.sessionId ? getDownloadUrl(project.sessionId) : null}
             building={building}
             buildStepLabel={getJdBuildStepLabel(buildStep)}
+            sessionId={project.sessionId || null}
             onStartNew={handleStartNewResume}
             onDownloadAndSave={handleDownloadAndSave}
+            onPreviewRevised={async (result) => {
+              if (!project.sessionId) return
+              const blob = await fetchFileBlob(project.sessionId)
+              setPreviewBlob(blob)
+              if (result?.roleTitle) setBuiltRole(result.roleTitle)
+            }}
           />
         )}
         {stepId === 'saved' && (

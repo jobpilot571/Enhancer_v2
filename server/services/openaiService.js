@@ -1174,3 +1174,91 @@ Describe what is wrong in this resume preview screenshot.`,
     section: String(result?.section || '').slice(0, 80),
   }
 }
+
+const JD_REVISE_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    resume: {
+      type: 'object',
+      properties: BUILD_RESUME_SCHEMA.properties,
+      required: BUILD_RESUME_SCHEMA.required,
+      additionalProperties: false,
+    },
+  },
+  required: ['reply', 'resume'],
+  additionalProperties: false,
+}
+
+/**
+ * Apply a user chat request to an existing JD-tailored resume JSON.
+ * Prefers Claude, then ChatGPT, then Gemini.
+ */
+export async function reviseJdResumeFromChat({
+  resumeData,
+  message,
+  jdData = null,
+  builderInput = null,
+}) {
+  const text = String(message || '').trim()
+  if (!text) throw new Error('Revision message is required')
+  if (!resumeData || typeof resumeData !== 'object') {
+    throw new Error('No resume data available to revise — build a resume first')
+  }
+
+  const form = builderInput && typeof builderInput === 'object' ? builderInput : {}
+  const roleTitle = String(jdData?.roleTitle || form.role || resumeData.title || '').trim()
+
+  const result = await jsonCompletion(
+    `You are JoBPilot's JD-Tailored Resume revision assistant.
+The user already has a generated resume. Apply ONLY what they ask in their message.
+Return the FULL updated resume JSON plus a short reply confirming what you changed.
+
+Rules:
+- Prefer Claude-quality writing: strong action verbs, JD-aligned keywords, human tone.
+- Keep contact identity (name/email/phone/location) unless the user explicitly asks to change them.
+- If they ask to rename/replace companies, update experience company names and related bullets.
+- If they ask to add/remove/rewrite bullets, skills, summary, education, or titles — do that precisely.
+- Preserve overall structure (summaryBullets, skillCategories, experience, education).
+- Do not invent a brand-new resume from scratch unless they ask for a full rewrite.
+- reply: 1–3 short sentences describing what you changed (no JSON in reply).`,
+    `User revision request:
+${text.slice(0, 4000)}
+
+Target role: ${roleTitle || '(from resume)'}
+Hiring company (do not reuse as employer unless user asks): ${String(jdData?.hiringCompany || '').trim() || '(n/a)'}
+JD skills/keywords: ${[
+      ...(jdData?.requiredSkills || []),
+      ...(jdData?.mustHaveKeywords || []),
+      ...(jdData?.toolsTechnologies || []),
+    ].slice(0, 40).join(', ') || '(n/a)'}
+
+Current resume JSON:
+${JSON.stringify(resumeData).slice(0, 28000)}
+
+Return updated resume JSON and a short reply.`,
+    'revise_jd_resume',
+    JD_REVISE_SCHEMA,
+    { maxTokens: 8192, preferProviders: ['claude', 'openai', 'gemini'] },
+  )
+
+  const next = result?.resume && typeof result.resume === 'object' ? result.resume : null
+  if (!next) throw new Error('AI did not return an updated resume')
+
+  // Keep identity stable unless the user clearly asked to change contact fields
+  const keepContact = !/\b(change|update|fix|replace)\b.{0,40}\b(name|email|phone|contact|location|linkedin)\b/i.test(text)
+  if (keepContact) {
+    next.name = resumeData.name || form.name || next.name
+    next.email = resumeData.email || form.email || next.email
+    next.phone = resumeData.phone || form.phone || next.phone
+    next.location = resumeData.location
+      || [form.city, form.state].filter(Boolean).join(', ')
+      || next.location
+  }
+
+  return {
+    reply: String(result?.reply || 'Updated your resume.').slice(0, 800),
+    resumeData: next,
+  }
+}
+

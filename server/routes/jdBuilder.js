@@ -23,6 +23,7 @@ import {
   deleteJdResume,
 } from '../store/jdSavedResumeStore.js'
 import { AI_SERVICES, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
+import { applyJdResumeRevision } from '../services/jdRevisionService.js'
 
 const router = Router()
 
@@ -403,6 +404,46 @@ router.post('/build', requireUser, checkUsage('jdBuilder'), (req, res, next) => 
 
     res.json({ jobId: job.jobId, sessionId: session.sessionId, status: 'processing', usage })
   } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/revise', requireUser, async (req, res, next) => {
+  try {
+    const sessionId = String(req.body?.sessionId || '').trim()
+    const message = String(req.body?.message || '').trim()
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' })
+    if (!message) {
+      return res.status(400).json({
+        error: 'Describe what to change (companies, bullets, skills, summary, etc.).',
+      })
+    }
+
+    const result = await runWithAiCostContext({
+      userId: req.user.id,
+      sessionId,
+      serviceName: AI_SERVICES.JD_REVISION,
+    }, async () => {
+      try {
+        const fixResult = await applyJdResumeRevision(sessionId, message)
+        finalizeAiServiceCost({ status: 'completed' })
+        return fixResult
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
+    })
+
+    res.json({
+      ok: result.ok,
+      reply: result.reply,
+      previewUpdated: result.previewUpdated !== false,
+      downloadUrl: result.downloadUrl,
+      previewUrl: result.previewUrl,
+      roleTitle: result.roleTitle || '',
+    })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)
   }
 })

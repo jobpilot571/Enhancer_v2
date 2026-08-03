@@ -3874,6 +3874,12 @@ body:has(.service-block--enhancer) .footer__col h4 {
   color: #b91c1c;
   font-size: 0.8125rem;
 }
+.jd-revision-chat {
+  margin-top: 16px;
+}
+.jd-revision-chat .layout-issue-chat__panel {
+  margin-top: 0;
+}
 
 .comparison-title {
   text-align: center;
