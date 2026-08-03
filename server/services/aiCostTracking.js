@@ -84,6 +84,22 @@ export const MODEL_PRICING = [
   },
   {
     provider: 'Claude',
+    model: 'claude-sonnet-5',
+    inputPer1M: 3,
+    outputPer1M: 15,
+    version: PRICING_VERSION,
+    effectiveDate: '2026-08-01',
+  },
+  {
+    provider: 'Claude',
+    model: 'claude-sonnet-4-6',
+    inputPer1M: 3,
+    outputPer1M: 15,
+    version: PRICING_VERSION,
+    effectiveDate: '2026-08-01',
+  },
+  {
+    provider: 'Claude',
     model: 'claude-3-5-sonnet-latest',
     inputPer1M: 3,
     outputPer1M: 15,

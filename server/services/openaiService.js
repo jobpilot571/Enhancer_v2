@@ -825,8 +825,8 @@ ${String(formData.jdText || '').slice(0, 4500)}
 Generate the complete resume JSON. Every bullet must be a full two-line meaningful statement.`,
     'build_jd_resume',
     BUILD_RESUME_SCHEMA,
-    // Claude-only: JD-Tailored Builder bullets must not fall back to cheaper models
-    { maxTokens: 8192, providersOnly: ['claude'] },
+    // Prefer Claude, then ChatGPT, then Gemini (continue through remaining configured providers)
+    { maxTokens: 8192, preferProviders: ['claude', 'openai', 'gemini'] },
   )
 }
 

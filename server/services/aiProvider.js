@@ -232,7 +232,7 @@ function buildProviders() {
   }
 
   if (process.env.ANTHROPIC_API_KEY) {
-    const model = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-latest'
+    const model = process.env.CLAUDE_MODEL || 'claude-sonnet-5'
     providers.claude = {
       label: 'Anthropic Claude',
       model,
