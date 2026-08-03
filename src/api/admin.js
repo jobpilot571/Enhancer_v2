@@ -138,6 +138,24 @@ export async function removeComplimentaryEmail(email) {
   })
 }
 
+export async function fetchAiCostMeta() {
+  return request('/ai-costs/meta')
+}
+
+export async function fetchAiCostDashboard(params = {}) {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  const q = qs.toString()
+  return request(`/ai-costs/dashboard${q ? `?${q}` : ''}`)
+}
+
+export async function fetchAiCostOperation(operationId) {
+  return request(`/ai-costs/operations/${encodeURIComponent(operationId)}`)
+}
+
 /** Public — no auth */
 export async function fetchPublicPricing() {
   const res = await fetch(`${API_BASE}/public/pricing`, { signal: AbortSignal.timeout(8000) })

@@ -20,8 +20,10 @@ import {
   addComplimentaryEmail,
   removeComplimentaryEmail,
 } from '../api/admin'
+import AiCostPanel from './admin/AiCostPanel'
 
 const TABS = [
+  { id: 'costs', label: 'AI costs' },
   { id: 'templates', label: 'Templates' },
   { id: 'pricing', label: 'Pricing' },
   { id: 'access', label: 'Free access' },
@@ -68,7 +70,7 @@ function AdminLogin({ onSuccess }) {
           <span><BrandName /></span>
         </div>
         <h1 className="admin-login__title">Admin console</h1>
-        <p className="admin-login__desc">Private access for template samples and pricing.</p>
+        <p className="admin-login__desc">Private access for AI costs, templates, and pricing.</p>
 
         {configured === false && (
           <p className="admin-banner admin-banner--warn">
@@ -621,7 +623,7 @@ function ComplimentaryPanel({ entries, onChange, onSessionExpired, storage }) {
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false)
   const [checking, setChecking] = useState(true)
-  const [tab, setTab] = useState('templates')
+  const [tab, setTab] = useState('costs')
   const [templates, setTemplates] = useState([])
   const [plans, setPlans] = useState([])
   const [complimentary, setComplimentary] = useState([])
@@ -758,8 +760,19 @@ export default function AdminPage() {
         ))}
       </nav>
 
-      <main className="admin-main">
+      <main className={`admin-main ${tab === 'costs' ? 'admin-main--wide' : ''}`}>
         {loadError && <p className="admin-error">{loadError}</p>}
+        {tab === 'costs' && (
+          <AiCostPanel
+            onSessionExpired={() => {
+              setAuthed(false)
+              setTemplates([])
+              setPlans([])
+              setComplimentary([])
+              setComplimentaryStorage(null)
+            }}
+          />
+        )}
         {tab === 'templates' && (
           <TemplatesPanel
             templates={templates}

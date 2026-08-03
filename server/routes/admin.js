@@ -30,6 +30,12 @@ import { setUserComplimentaryAccess } from '../store/userStore.js'
 import { migrateUsersFromGistToSupabase, getUserStorageStatus } from '../store/durableUserData.js'
 import { TEMPLATE_STYLES } from '../services/resumeTemplates.js'
 import { anonymizeSampleBuffer } from '../services/sampleAnonymize.js'
+import {
+  parseAiCostFilters,
+  getAiCostDashboard,
+  getAiCostOperationDetail,
+  getAiCostAdminMeta,
+} from '../services/aiCostAdminService.js'
 
 const router = Router()
 
@@ -250,8 +256,33 @@ router.delete('/complimentary/:email', requireAdmin, async (req, res, next) => {
   }
 })
 
+// ——— AI cost dashboard (admin only; reads stored ledger tables) ———
+
+router.get('/ai-costs/meta', requireAdmin, (_req, res) => {
+  res.json(getAiCostAdminMeta())
+})
+
+router.get('/ai-costs/dashboard', requireAdmin, async (req, res, next) => {
+  try {
+    const filters = parseAiCostFilters(req.query || {})
+    const data = await getAiCostDashboard(filters)
+    res.json(data)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/ai-costs/operations/:operationId', requireAdmin, async (req, res, next) => {
+  try {
+    const data = await getAiCostOperationDetail(req.params.operationId)
+    res.json(data)
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** One-shot: copy Gist users/usage/complimentary → Supabase */
-router.post('/migrate-from-gist', requireAdmin, async (_req, res, next) => {
+router.post('/migrate-from-gist', requireAdmin, async (req, res, next) => {
   try {
     const out = { ok: true, complimentary: null, users: null, errors: [] }
 
