@@ -1262,3 +1262,175 @@ Return updated resume JSON and a short reply.`,
   }
 }
 
+const JD_CHAT_EXPERIENCE_SCHEMA = {
+  type: 'object',
+  properties: {
+    companyName: { type: 'string' },
+    jobTitle: { type: 'string' },
+    city: { type: 'string' },
+    state: { type: 'string' },
+    startDate: { type: 'string' },
+    endDate: { type: 'string' },
+    bulletCount: { type: 'string' },
+    summary: { type: 'string' },
+    country: { type: 'string' },
+  },
+  required: [
+    'companyName',
+    'jobTitle',
+    'city',
+    'state',
+    'startDate',
+    'endDate',
+    'bulletCount',
+    'summary',
+    'country',
+  ],
+  additionalProperties: false,
+}
+
+const JD_WIZARD_CHAT_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    navigateToStep: {
+      type: 'string',
+      description: 'Optional step id: basic, jd, target, references, templates, preview, saved, or empty',
+    },
+    reviseGeneratedResume: {
+      type: 'boolean',
+      description: 'True when user wants changes to the already-built DOCX resume content',
+    },
+    projectUpdates: {
+      type: 'object',
+      properties: {
+        basicInformation: {
+          type: 'object',
+          properties: {
+            fullName: { type: 'string' },
+            email: { type: 'string' },
+            phone: { type: 'string' },
+            linkedin: { type: 'string' },
+            city: { type: 'string' },
+            state: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        targetRole: {
+          type: 'object',
+          properties: {
+            jobTitle: { type: 'string' },
+            yearsRequired: { type: 'string' },
+            companyCount: { type: 'string' },
+            jobDescription: { type: 'string' },
+            aiIndustry: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+        experiences: {
+          type: 'array',
+          items: JD_CHAT_EXPERIENCE_SCHEMA,
+        },
+        selectedTemplateId: { type: 'string' },
+        fontFamily: { type: 'string' },
+        fontSizePt: { type: 'string' },
+        keywordHighlight: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+  },
+  required: ['reply', 'reviseGeneratedResume'],
+  additionalProperties: false,
+}
+
+/**
+ * Conversational JD wizard assistant — edits draft project fields and/or flags DOCX revision.
+ */
+export async function chatJdWizardAssistant({
+  message,
+  project = null,
+  stepId = '',
+  thread = [],
+  hasBuiltResume = false,
+}) {
+  const text = String(message || '').trim()
+  if (!text) throw new Error('Message is required')
+
+  const recent = (Array.isArray(thread) ? thread : [])
+    .slice(-8)
+    .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${String(m.text || '').slice(0, 500)}`)
+    .join('\n')
+
+  const slimProject = {
+    basicInformation: project?.basicInformation || {},
+    targetRole: {
+      jobTitle: project?.targetRole?.jobTitle || '',
+      yearsRequired: project?.targetRole?.yearsRequired || '',
+      companyCount: project?.targetRole?.companyCount || '',
+      jobDescription: String(project?.targetRole?.jobDescription || '').slice(0, 2500),
+      aiIndustry: project?.targetRole?.aiIndustry || '',
+    },
+    experiences: (project?.experiences || []).map((e) => ({
+      companyName: e.companyName || '',
+      jobTitle: e.jobTitle || '',
+      city: e.city || '',
+      state: e.state || '',
+      startDate: e.startDate || '',
+      endDate: e.endDate || '',
+      bulletCount: String(e.bulletCount || ''),
+      summary: String(e.summary || '').slice(0, 400),
+      country: e.country || '',
+    })),
+    selectedTemplateId: project?.selectedTemplateId || '',
+    fontFamily: project?.fontFamily || '',
+    fontSizePt: String(project?.fontSizePt || ''),
+    keywordHighlight: Boolean(project?.keywordHighlight),
+    sessionId: project?.sessionId || null,
+  }
+
+  const result = await jsonCompletion(
+    `You are JoBPilot's JD-Tailored Resume Builder assistant chat.
+You help across ALL wizard steps (basics, JD, target/companies, references, templates, preview).
+
+Return JSON with:
+- reply: short helpful answer (what you changed or what user should do next)
+- projectUpdates: only fields the user asked to change (omit unchanged sections)
+- experiences: when renaming/replacing/adding/removing companies, return the FULL updated experiences list (1–6 items)
+- reviseGeneratedResume: true ONLY if a resume was already built AND the user wants content changes in that generated DOCX (bullets/summary/skills rewrite). False for draft form edits only.
+- navigateToStep: optional step id if you want to send them somewhere (basic|jd|target|references|templates|preview|saved)
+
+Rules:
+- Prefer Claude-quality clarity. Do exactly what the user asks.
+- Dates format like "Jan 2020" or "Present".
+- bulletCount must be a string number within allowed ranges by company rank (1st 12-14, 2nd 11-13, 3rd 10-12, 4th 9-11, 5th+ 7-9).
+- Never invent a full fake JD unless asked.
+- If hasBuiltResume is false, set reviseGeneratedResume=false and edit draft fields instead.
+- If user asks to change companies before build, update experiences (not reviseGeneratedResume).
+- If user asks to change companies/bullets after build, set reviseGeneratedResume=true AND update experiences when names/roles change.`,
+    `Current step: ${stepId || '(unknown)'}
+Has built resume DOCX: ${hasBuiltResume ? 'yes' : 'no'}
+
+Recent chat:
+${recent || '(none)'}
+
+Current project JSON:
+${JSON.stringify(slimProject).slice(0, 18000)}
+
+User message:
+${text.slice(0, 4000)}`,
+    'jd_wizard_chat',
+    JD_WIZARD_CHAT_SCHEMA,
+    { maxTokens: 4096, preferProviders: ['claude', 'openai', 'gemini'] },
+  )
+
+  return {
+    reply: String(result?.reply || 'Okay.').slice(0, 1200),
+    projectUpdates: result?.projectUpdates && typeof result.projectUpdates === 'object'
+      ? result.projectUpdates
+      : null,
+    navigateToStep: String(result?.navigateToStep || '').trim() || null,
+    reviseGeneratedResume: Boolean(result?.reviseGeneratedResume),
+  }
+}
+
+

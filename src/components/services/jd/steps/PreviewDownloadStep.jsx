@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import DocumentPreview from '../../DocumentPreview'
-import JdRevisionChat from '../JdRevisionChat'
 
 export default function PreviewDownloadStep({
   previewBlob,
@@ -8,15 +7,12 @@ export default function PreviewDownloadStep({
   downloadUrl,
   building,
   buildStepLabel,
-  sessionId = null,
   onStartNew,
   onDownloadAndSave,
-  onPreviewRevised,
 }) {
   const [saving, setSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState('')
   const [saveError, setSaveError] = useState('')
-  const [revising, setRevising] = useState(false)
 
   async function handleDownload() {
     if (!previewBlob || saving) return
@@ -39,20 +35,6 @@ export default function PreviewDownloadStep({
     }
   }
 
-  async function handleRevised(result) {
-    setRevising(true)
-    setSaveNotice('')
-    setSaveError('')
-    try {
-      await onPreviewRevised?.(result)
-      setSaveNotice('Resume updated from your chat request.')
-    } catch (err) {
-      setSaveError(err.message || 'Preview refresh failed.')
-    } finally {
-      setRevising(false)
-    }
-  }
-
   return (
     <div className="jd-step">
       <header className="jd-step__header">
@@ -61,17 +43,10 @@ export default function PreviewDownloadStep({
           {building
             ? (buildStepLabel || 'Building your resume…')
             : previewBlob
-              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the chat below to change companies, bullets, or anything else.`
-              : 'Build a resume, then use the AI chat to revise companies, bullets, and more.'}
+              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the AI Assistant chat (bottom-right) to revise companies, bullets, or anything else.`
+              : 'Build a resume, then use the AI Assistant chat anytime to revise it.'}
         </p>
       </header>
-
-      <JdRevisionChat
-        sessionId={sessionId}
-        ready={Boolean(previewBlob && sessionId)}
-        disabled={building || saving || revising}
-        onRevised={handleRevised}
-      />
 
       {building && !previewBlob && (
         <p className="enhancer-progress">{buildStepLabel || 'Building resume…'}</p>
@@ -81,11 +56,7 @@ export default function PreviewDownloadStep({
         <div className="builder-preview-panel">
           <div className="upload-box">
             <div className="upload-box__content upload-box__content--docx">
-              <DocumentPreview
-                blob={previewBlob}
-                fileType="docx"
-                emptyLabel={revising ? 'Updating preview…' : 'Preview will appear here'}
-              />
+              <DocumentPreview blob={previewBlob} fileType="docx" emptyLabel="Preview will appear here" />
             </div>
           </div>
         </div>
@@ -105,7 +76,7 @@ export default function PreviewDownloadStep({
           type="button"
           className="btn btn--outline btn--xl"
           onClick={onStartNew}
-          disabled={building || saving || revising}
+          disabled={building || saving}
         >
           Build new resume
         </button>
@@ -114,7 +85,7 @@ export default function PreviewDownloadStep({
             type="button"
             className="btn btn--primary btn--xl"
             onClick={handleDownload}
-            disabled={building || saving || revising}
+            disabled={building || saving}
           >
             {saving ? 'Saving…' : 'Download DOCX'}
           </button>

@@ -30,6 +30,8 @@ import ReferenceDocsStep from './steps/ReferenceDocsStep'
 import TemplateStep from './steps/TemplateStep'
 import PreviewDownloadStep from './steps/PreviewDownloadStep'
 import SavedResumesStep from './steps/SavedResumesStep'
+import JdWizardChat from './JdWizardChat'
+import { applyJdChatProjectUpdates } from './jdChatApply'
 
 export default function JdBuilderWizard() {
   const user = getStoredUser?.() || null
@@ -384,7 +386,7 @@ export default function JdBuilderWizard() {
         <div>
           <h3 className="service-block__title">JD-Tailored Resume Builder</h3>
           <p className="service-block__desc">
-            Guided steps to build a JD-aligned resume from scratch.
+            Guided steps to build a JD-aligned resume — use the AI Assistant chat on any step to change companies, details, or the built resume.
           </p>
         </div>
       </div>
@@ -456,15 +458,8 @@ export default function JdBuilderWizard() {
             downloadUrl={project.sessionId ? getDownloadUrl(project.sessionId) : null}
             building={building}
             buildStepLabel={getJdBuildStepLabel(buildStep)}
-            sessionId={project.sessionId || null}
             onStartNew={handleStartNewResume}
             onDownloadAndSave={handleDownloadAndSave}
-            onPreviewRevised={async (result) => {
-              if (!project.sessionId) return
-              const blob = await fetchFileBlob(project.sessionId)
-              setPreviewBlob(blob)
-              if (result?.roleTitle) setBuiltRole(result.roleTitle)
-            }}
           />
         )}
         {stepId === 'saved' && (
@@ -503,6 +498,30 @@ export default function JdBuilderWizard() {
           </div>
         )}
       </div>
+
+      <JdWizardChat
+        project={project}
+        stepId={stepId || ''}
+        sessionId={project.sessionId || null}
+        hasPreview={Boolean(previewBlob)}
+        disabled={building || basicUploading || !signedIn}
+        onApplyResult={async (result) => {
+          if (result?.projectUpdates) {
+            updateProject((prev) => applyJdChatProjectUpdates(prev, result.projectUpdates))
+          }
+          if (result?.navigateToStep) {
+            const idx = JD_STEPS.findIndex((s) => s.id === result.navigateToStep)
+            if (idx >= 0) goToStep(idx)
+          }
+          if (result?.previewUpdated && project.sessionId) {
+            const blob = await fetchFileBlob(project.sessionId)
+            setPreviewBlob(blob)
+            if (result.roleTitle) setBuiltRole(result.roleTitle)
+            const previewIdx = JD_STEPS.findIndex((s) => s.id === 'preview')
+            if (previewIdx >= 0 && step !== previewIdx) goToStep(previewIdx)
+          }
+        }}
+      />
     </div>
   )
 }

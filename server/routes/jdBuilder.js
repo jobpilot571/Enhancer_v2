@@ -24,6 +24,7 @@ import {
 } from '../store/jdSavedResumeStore.js'
 import { AI_SERVICES, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
 import { applyJdResumeRevision } from '../services/jdRevisionService.js'
+import { handleJdWizardChat } from '../services/jdChatService.js'
 
 const router = Router()
 
@@ -442,6 +443,46 @@ router.post('/revise', requireUser, async (req, res, next) => {
       previewUrl: result.previewUrl,
       roleTitle: result.roleTitle || '',
     })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    next(err)
+  }
+})
+
+/** Wizard-wide assistant chat (any step): edit draft fields and/or revise built DOCX. */
+router.post('/chat', requireUser, async (req, res, next) => {
+  try {
+    const message = String(req.body?.message || '').trim()
+    const sessionId = String(req.body?.sessionId || '').trim() || null
+    const stepId = String(req.body?.stepId || '').trim()
+    const project = req.body?.project && typeof req.body.project === 'object' ? req.body.project : null
+    const thread = Array.isArray(req.body?.thread) ? req.body.thread : []
+    if (!message) {
+      return res.status(400).json({ error: 'Type a message for the assistant.' })
+    }
+
+    const result = await runWithAiCostContext({
+      userId: req.user.id,
+      sessionId: sessionId || undefined,
+      serviceName: AI_SERVICES.JD_CHAT,
+    }, async () => {
+      try {
+        const chatResult = await handleJdWizardChat({
+          message,
+          project,
+          stepId,
+          sessionId,
+          thread,
+        })
+        finalizeAiServiceCost({ status: 'completed' })
+        return chatResult
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
+    })
+
+    res.json(result)
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)

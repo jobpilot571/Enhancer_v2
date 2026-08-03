@@ -267,3 +267,26 @@ export async function reviseJdResume(sessionId, message) {
   return res.json()
 }
 
+/**
+ * Wizard-wide assistant chat (any step).
+ */
+export async function chatJdWizard({ message, project, stepId, sessionId, thread }) {
+  const res = await request('/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      project,
+      stepId,
+      sessionId: sessionId || null,
+      thread: (thread || []).slice(-8).map((m) => ({
+        role: m.role,
+        text: String(m.text || '').slice(0, 500),
+      })),
+    }),
+    signal: AbortSignal.timeout(180000),
+  })
+  return res.json()
+}
+
+
