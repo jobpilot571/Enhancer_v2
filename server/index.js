@@ -7,6 +7,7 @@ import jdBuilderRoutes from './routes/jdBuilder.js'
 import adminRoutes from './routes/admin.js'
 import authRoutes from './routes/auth.js'
 import billingRoutes, { handleStripeWebhook } from './routes/billing.js'
+import assistantRoutes from './routes/assistant.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
@@ -67,6 +68,7 @@ app.use('/api/jd-builder', jdBuilderRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/billing', billingRoutes)
+app.use('/api/assistant', assistantRoutes)
 
 app.get('/', (_req, res) => {
   res.json({
@@ -78,6 +80,7 @@ app.get('/', (_req, res) => {
       enhancer: '/api/enhancer',
       builder: '/api/builder',
       jdBuilder: '/api/jd-builder',
+      assistant: '/api/assistant',
       admin: '/api/admin',
       auth: '/api/auth',
       billing: '/api/billing',

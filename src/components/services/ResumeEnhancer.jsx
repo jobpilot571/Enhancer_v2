@@ -11,137 +11,9 @@ import {
   downloadScoreReportPdf,
   checkApiHealth,
   setJD,
-  reportLayoutIssue,
 } from '../../api/enhancer'
 import { useAuth } from '../../context/AuthContext'
-
-function EnhancerFixChat({
-  sessionId,
-  disabled,
-  onFixed,
-  forceOpen = false,
-}) {
-  const [open, setOpen] = useState(Boolean(forceOpen))
-  const [message, setMessage] = useState('')
-  const [evidence, setEvidence] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [thread, setThread] = useState([])
-  const [localError, setLocalError] = useState('')
-  const fileRef = useRef(null)
-
-  useEffect(() => {
-    if (forceOpen) setOpen(true)
-  }, [forceOpen])
-
-  const send = async () => {
-    if (!sessionId || busy) return
-    const text = message.trim()
-    if (!text && !evidence) {
-      setLocalError('Describe the issue or attach a screenshot.')
-      return
-    }
-    setLocalError('')
-    setBusy(true)
-    const userLine = {
-      role: 'user',
-      text: text || '(attached file)',
-      fileName: evidence?.name || null,
-    }
-    setThread((prev) => [...prev, userLine])
-    try {
-      const result = await reportLayoutIssue(sessionId, { message: text, evidence })
-      setThread((prev) => [...prev, { role: 'assistant', text: result.reply || 'Done.' }])
-      setMessage('')
-      setEvidence(null)
-      if (fileRef.current) fileRef.current.value = ''
-      await onFixed?.(result)
-    } catch (err) {
-      setThread((prev) => [...prev, {
-        role: 'assistant',
-        text: err.message || 'Could not apply a fix. Please try again.',
-      }])
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (!sessionId) return null
-
-  return (
-    <section className="layout-issue-chat" aria-label="Request a revision">
-      {!forceOpen && (
-        <button
-          type="button"
-          className="layout-issue-chat__toggle"
-          onClick={() => setOpen((v) => !v)}
-          disabled={disabled}
-        >
-          {open ? 'Close' : 'Need a revision?'}
-        </button>
-      )}
-
-      {(open || forceOpen) && (
-        <div className="layout-issue-chat__panel">
-          <p className="layout-issue-chat__hint">
-            Tell us what to adjust and we’ll update your enhanced resume automatically.
-          </p>
-
-          <div className="layout-issue-chat__thread" role="log" aria-live="polite">
-            {thread.length === 0 && (
-              <p className="layout-issue-chat__empty">
-                Example: “Add one more bullet under my most recent role”
-              </p>
-            )}
-            {thread.map((item, idx) => (
-              <div
-                key={`${item.role}-${idx}`}
-                className={`layout-issue-chat__bubble layout-issue-chat__bubble--${item.role}`}
-              >
-                <p>{item.text}</p>
-                {item.fileName && <small>Attached: {item.fileName}</small>}
-              </div>
-            ))}
-          </div>
-
-          <label className="layout-issue-chat__label" htmlFor="layout-issue-message">
-            Your request
-          </label>
-          <textarea
-            id="layout-issue-message"
-            className="layout-issue-chat__input"
-            rows={3}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="What would you like changed?"
-            disabled={busy || disabled}
-          />
-
-          <div className="layout-issue-chat__actions">
-            <label className="layout-issue-chat__file">
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                onChange={(e) => setEvidence(e.target.files?.[0] || null)}
-                disabled={busy || disabled}
-              />
-              <span>{evidence ? evidence.name : 'Attach screenshot (optional)'}</span>
-            </label>
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={send}
-              disabled={busy || disabled}
-            >
-              {busy ? 'Updating…' : 'Update resume'}
-            </button>
-          </div>
-          {localError && <p className="layout-issue-chat__error">{localError}</p>}
-        </div>
-      )}
-    </section>
-  )
-}
+import { useAssistantWorkspace } from '../../context/AssistantContext'
 
 function ScoreRing({ score, label = '/ 100', gradId = 'scoreGrad', size = 'sm' }) {
   const pct = Math.min(100, Math.max(0, Number(score) || 0))
@@ -564,6 +436,7 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
 
 export default function ResumeEnhancer() {
   const { user, isAuthenticated, refreshUser } = useAuth()
+  const { setWorkspace, clearWorkspace } = useAssistantWorkspace()
   const enhancerLeft = user?.usage?.remaining?.enhancer
   const enhancerLimit = user?.usage?.limits?.enhancer
   const enhancerUsed = user?.usage?.used?.enhancer
@@ -634,6 +507,34 @@ export default function ResumeEnhancer() {
       }
     })
   }, [])
+
+  useEffect(() => {
+    setWorkspace({
+      service: 'enhancer',
+      sessionId: sessionId || null,
+      hasPreview: Boolean(enhancedBlob),
+      label: 'Resume Enhancer',
+      meta: { step, fileName },
+    })
+    return () => clearWorkspace()
+  }, [sessionId, enhancedBlob, step, fileName, setWorkspace, clearWorkspace])
+
+  useEffect(() => {
+    async function onPreviewUpdated(e) {
+      const detail = e.detail || {}
+      const sid = detail.sessionId || sessionId
+      if (!sid || detail.service !== 'enhancer') return
+      try {
+        const blob = await fetchFileBlob(sid, 'enhanced')
+        setEnhancedBlob(blob)
+        setReadyForDownload(true)
+        setDownloadPhase('ready')
+        setError('')
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('jobpilot:assistant-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('jobpilot:assistant-preview-updated', onPreviewUpdated)
+  }, [sessionId])
 
   // Failsafe: if the enhanced file is present, never leave Download locked
   useEffect(() => {
@@ -1189,23 +1090,9 @@ export default function ResumeEnhancer() {
         )}
 
         {sessionId && enhancedBlob && readyForDownload && (
-          <EnhancerFixChat
-            sessionId={sessionId}
-            disabled={enhancing || uploading}
-            forceOpen={false}
-            onFixed={async (result) => {
-              setLayoutQa(result.layoutQa || null)
-              setReadyForDownload(true)
-              setDownloadPhase('ready')
-              setError('')
-              try {
-                const enhanced = await fetchFileBlob(sessionId, 'enhanced')
-                setEnhancedBlob(enhanced)
-              } catch {
-                // Preview refresh is best-effort
-              }
-            }}
-          />
+          <p className="enhancer-assistant-hint">
+            Need a format or layout fix? Use the sticky <strong>AI Assistant</strong> (bottom-right) — attach a screenshot if helpful.
+          </p>
         )}
       </section>
 

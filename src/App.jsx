@@ -1,6 +1,7 @@
 import { Routes, Route, useLocation } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
+import GlobalAiAssistant from './components/GlobalAiAssistant'
 import HomePage from './pages/HomePage'
 import ResumeEnhancerPage from './pages/ResumeEnhancerPage'
 import ResumeBuilderPage from './pages/ResumeBuilderPage'
@@ -52,6 +53,7 @@ export default function App() {
         </Routes>
         <Footer />
       </div>
+      <GlobalAiAssistant />
     </div>
   )
 }

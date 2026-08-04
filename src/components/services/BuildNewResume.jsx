@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useAssistantWorkspace } from '../../context/AssistantContext'
 import { Link } from 'react-router-dom'
 import FormField from './FormField'
 import DocumentPreview from './DocumentPreview'
@@ -282,6 +283,7 @@ function syncCompanies(companies, count) {
 }
 
 export default function BuildNewResume() {
+  const { setWorkspace, clearWorkspace } = useAssistantWorkspace()
   const [step, setStep] = useState(0)
   const [form, setForm] = useState(initialForm)
   const [error, setError] = useState('')
@@ -302,6 +304,17 @@ export default function BuildNewResume() {
   const buildingRef = useRef(false)
   const cacheTimerRef = useRef(null)
   const signedIn = Boolean(getAuthToken() && getStoredUser())
+
+  useEffect(() => {
+    setWorkspace({
+      service: 'builder',
+      sessionId: sessionId || null,
+      hasPreview: Boolean(previewBlob),
+      label: 'Resume Builder',
+      meta: { step },
+    })
+    return () => clearWorkspace()
+  }, [sessionId, previewBlob, step, setWorkspace, clearWorkspace])
 
   useEffect(() => {
     let cancelled = false

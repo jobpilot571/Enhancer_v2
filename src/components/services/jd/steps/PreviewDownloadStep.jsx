@@ -43,8 +43,8 @@ export default function PreviewDownloadStep({
           {building
             ? (buildStepLabel || 'Building your resume…')
             : previewBlob
-              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the AI Assistant chat (bottom-right) to revise companies, bullets, or anything else.`
-              : 'Build a resume, then use the AI Assistant chat anytime to revise it.'}
+              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the sticky AI Assistant (bottom-right) if you need changes.`
+              : 'Build a resume, then use the sticky AI Assistant anytime if you get stuck.'}
         </p>
       </header>
 

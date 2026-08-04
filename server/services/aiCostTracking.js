@@ -41,6 +41,7 @@ export const AI_SERVICES = {
   JD_BUILDER: 'JD-Tailored Resume Builder',
   JD_REVISION: 'JD Resume Revision Chat',
   JD_CHAT: 'JD Builder Assistant Chat',
+  SITE_ASSISTANT: 'Site AI Assistant',
   LAYOUT_FIX: 'Layout Fix Chat',
 }
 

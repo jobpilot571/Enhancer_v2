@@ -30,13 +30,14 @@ import ReferenceDocsStep from './steps/ReferenceDocsStep'
 import TemplateStep from './steps/TemplateStep'
 import PreviewDownloadStep from './steps/PreviewDownloadStep'
 import SavedResumesStep from './steps/SavedResumesStep'
-import JdWizardChat from './JdWizardChat'
 import { applyJdChatProjectUpdates } from './jdChatApply'
+import { useAssistantWorkspace } from '../../../context/AssistantContext'
 
 export default function JdBuilderWizard() {
   const user = getStoredUser?.() || null
   const userId = user?.id || null
   const signedIn = Boolean(getAuthToken())
+  const { setWorkspace, clearWorkspace } = useAssistantWorkspace()
 
   const [project, setProject] = useState(() => {
     const saved = readJdDraft(userId)
@@ -379,6 +380,48 @@ export default function JdBuilderWizard() {
   const isTemplates = stepId === 'templates'
   const isPreview = stepId === 'preview'
 
+  useEffect(() => {
+    setWorkspace({
+      service: 'jd',
+      sessionId: project.sessionId || null,
+      hasPreview: Boolean(previewBlob),
+      label: 'JD-Tailored Resume Builder',
+      meta: { stepId, project },
+    })
+    return () => clearWorkspace()
+  }, [project, previewBlob, stepId, setWorkspace, clearWorkspace])
+
+  useEffect(() => {
+    function onProjectUpdate(e) {
+      const detail = e.detail || {}
+      if (detail.projectUpdates) {
+        updateProject((prev) => applyJdChatProjectUpdates(prev, detail.projectUpdates))
+      }
+      if (detail.navigateToStep) {
+        const idx = JD_STEPS.findIndex((s) => s.id === detail.navigateToStep)
+        if (idx >= 0) goToStep(idx)
+      }
+    }
+    async function onPreviewUpdated(e) {
+      const detail = e.detail || {}
+      const sid = detail.sessionId || projectRef.current.sessionId
+      if (!sid || detail.service !== 'jd') return
+      try {
+        const blob = await fetchFileBlob(sid)
+        setPreviewBlob(blob)
+        if (detail.roleTitle) setBuiltRole(detail.roleTitle)
+        const previewIdx = JD_STEPS.findIndex((s) => s.id === 'preview')
+        if (previewIdx >= 0) goToStep(previewIdx)
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('jobpilot:assistant-project-update', onProjectUpdate)
+    window.addEventListener('jobpilot:assistant-preview-updated', onPreviewUpdated)
+    return () => {
+      window.removeEventListener('jobpilot:assistant-project-update', onProjectUpdate)
+      window.removeEventListener('jobpilot:assistant-preview-updated', onPreviewUpdated)
+    }
+  }, [])
+
   return (
     <div className="service-block service-block--jd-wizard">
       <div className="service-block__header">
@@ -386,7 +429,7 @@ export default function JdBuilderWizard() {
         <div>
           <h3 className="service-block__title">JD-Tailored Resume Builder</h3>
           <p className="service-block__desc">
-            Guided steps to build a JD-aligned resume — use the AI Assistant chat on any step to change companies, details, or the built resume.
+            Guided steps to build a JD-aligned resume. Use the sticky AI Assistant anytime if you get stuck.
           </p>
         </div>
       </div>
@@ -498,30 +541,6 @@ export default function JdBuilderWizard() {
           </div>
         )}
       </div>
-
-      <JdWizardChat
-        project={project}
-        stepId={stepId || ''}
-        sessionId={project.sessionId || null}
-        hasPreview={Boolean(previewBlob)}
-        disabled={building || basicUploading || !signedIn}
-        onApplyResult={async (result) => {
-          if (result?.projectUpdates) {
-            updateProject((prev) => applyJdChatProjectUpdates(prev, result.projectUpdates))
-          }
-          if (result?.navigateToStep) {
-            const idx = JD_STEPS.findIndex((s) => s.id === result.navigateToStep)
-            if (idx >= 0) goToStep(idx)
-          }
-          if (result?.previewUpdated && project.sessionId) {
-            const blob = await fetchFileBlob(project.sessionId)
-            setPreviewBlob(blob)
-            if (result.roleTitle) setBuiltRole(result.roleTitle)
-            const previewIdx = JD_STEPS.findIndex((s) => s.id === 'preview')
-            if (previewIdx >= 0 && step !== previewIdx) goToStep(previewIdx)
-          }
-        }}
-      />
     </div>
   )
 }
