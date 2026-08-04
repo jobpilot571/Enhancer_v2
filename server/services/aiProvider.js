@@ -158,6 +158,8 @@ const CLAUDE_MODEL_REMAP = {
   'claude-3-5-sonnet-20240620': 'claude-sonnet-5',
   'claude-3-7-sonnet-latest': 'claude-sonnet-5',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-5',
+  'claude-3-opus-latest': 'claude-opus-4-6',
+  'claude-3-opus-20240229': 'claude-opus-4-6',
 }
 
 const CLAUDE_MODEL_FALLBACKS = [
@@ -167,8 +169,19 @@ const CLAUDE_MODEL_FALLBACKS = [
 ]
 
 function resolveClaudeModel(raw) {
-  const requested = String(raw || 'claude-sonnet-5').trim() || 'claude-sonnet-5'
-  const mapped = CLAUDE_MODEL_REMAP[requested] || requested
+  let requested = String(raw || 'claude-sonnet-5').trim() || 'claude-sonnet-5'
+  // Env UIs sometimes wrap values in quotes
+  if (
+    (requested.startsWith('"') && requested.endsWith('"'))
+    || (requested.startsWith("'") && requested.endsWith("'"))
+  ) {
+    requested = requested.slice(1, -1).trim()
+  }
+  let mapped = CLAUDE_MODEL_REMAP[requested] || requested
+  // Catch any remaining Claude 3.x Sonnet IDs that are no longer on the API
+  if (/claude-3(?:\.\d)?-?5?-?sonnet/i.test(mapped) || /claude-3-7-sonnet/i.test(mapped)) {
+    mapped = 'claude-sonnet-5'
+  }
   if (mapped !== requested) {
     console.warn(`[AI] CLAUDE_MODEL "${requested}" is retired; using "${mapped}"`)
   }

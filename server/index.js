@@ -92,6 +92,16 @@ app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'jobpilot-ai',
+    deploy: {
+      gitSha: process.env.RENDER_GIT_COMMIT
+        || process.env.GIT_COMMIT
+        || process.env.SOURCE_VERSION
+        || null,
+      claudeModelEnv: process.env.CLAUDE_MODEL || null,
+      claudeModelResolved: process.env.ANTHROPIC_API_KEY
+        ? (getConfiguredProviders().find((p) => /claude/i.test(p.label))?.model || null)
+        : null,
+    },
     aiProviders: getConfiguredProviders(),
     adminConfigured: isAdminConfigured(),
     emailConfigured: isEmailConfigured(),
@@ -118,6 +128,10 @@ await initDurableUserStore()
 
 app.listen(PORT, () => {
   console.log(`Resume Enhancer API running on port ${PORT}`)
+  const claude = getConfiguredProviders().find((p) => /claude/i.test(p.label))
+  if (claude) {
+    console.log(`[AI] Claude model: ${claude.model} (env CLAUDE_MODEL=${process.env.CLAUDE_MODEL || '(unset)'})`)
+  }
   // Seed fictional DOCX samples for JD gallery templates (never overwrites admin uploads)
   import('./store/adminStore.js')
     .then(({ ensureDemoSamples, JD_DEMO_TEMPLATE_IDS }) =>
