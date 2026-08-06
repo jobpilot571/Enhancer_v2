@@ -9,6 +9,7 @@ import authRoutes from './routes/auth.js'
 import billingRoutes, { handleStripeWebhook } from './routes/billing.js'
 import assistantRoutes from './routes/assistant.js'
 import { getConfiguredProviders } from './services/aiProvider.js'
+import { isTavilyConfigured } from './services/tavilySearch.js'
 import { isAdminConfigured } from './middleware/adminAuth.js'
 import { isGoogleAuthConfigured } from './services/googleAuth.js'
 import { isEmailConfigured, getEmailFromStatus } from './services/email.js'
@@ -103,6 +104,7 @@ app.get('/api/health', (_req, res) => {
         : null,
     },
     aiProviders: getConfiguredProviders(),
+    tavilyConfigured: isTavilyConfigured(),
     adminConfigured: isAdminConfigured(),
     emailConfigured: isEmailConfigured(),
     emailFrom: getEmailFromStatus(),

@@ -179,20 +179,155 @@ const BULLET_RULES = `Bullet writing rules (strict — apply when writing NEW or
 - skillAdditions: ONLY concrete tools/platforms (SQL, Jira, Azure DevOps, Power BI, Tableau, Salesforce). NEVER soft fluff (Iterative, facilitation skills, reporting, customer service).
 - Reject generic lines like "Delivered analysis and reporting to support decisions" unless tied to a named system, company domain, and JD skill.`
 
-/** Stricter rules for JD-tailored resume builds. */
-const JD_BULLET_RULES = `Experience and summary bullet rules (strict — follow ALL):
-- Think like an intelligent senior resume strategist: every bullet must earn its place with real project ownership, technical depth, and business impact.
-- Write like a strong working professional: humanized, natural, advanced, modern, aggressive, impressive, and professional. NEVER robotic, generic, or AI filler.
-- MOST bullets MUST be EXACTLY two FULL lines when rendered (target 32–40 words). Never one-liners.
-- For Company #1 (most recent) and Company #2: the FIRST 2–3 bullets MUST be THREE full lines (target 48–58 words) with deeper project ownership, tools, and outcomes. Remaining bullets for those companies stay two lines (32–40 words).
-- Companies #3+ : all bullets two lines (32–40 words).
-- Every bullet must be meaningful: name the project or system, your concrete actions, tools/methods used, and a clear outcome or metric when believable.
-- Technical and current-market: use modern platforms, pipelines, analytics, cloud, automation, and delivery practices that hiring managers expect now.
-- EACH experience bullet MUST weave in at least ONE JD skill/tool/keyword naturally, and often a stronger adjacent advanced skill beyond the JD minimum.
+/** Shared formatting rules for JD resume bullets (summary + experience). */
+const JD_BULLET_FORMAT_RULES = `Bullet formatting (strict — follow ALL):
+- Write like a strong working professional: humanized, natural, professional, and easy to understand. NEVER robotic, generic, repetitive, or AI filler.
+- Experience length: MOST experience bullets MUST be EXACTLY two FULL lines when rendered (target 32–40 words). Never one-liners.
+- For Company #1 (most recent) and Company #2: the FIRST 2–3 experience bullets MUST be THREE full lines (target 48–58 words). Remaining experience bullets for those companies stay two lines (32–40 words).
+- Companies #3+: all experience bullets two lines (32–40 words).
+- Summary length: each summary bullet is concise (about 12–22 words) — clear and scannable, not a mini paragraph and not a one-word fragment.
 - Do NOT use hyphen/dash characters (-) or parentheses () inside bullets. Use combining words instead, e.g. "JSON, XML, and CSV" not "(JSON, XML, CSV)"; "SQL based reporting" not "SQL-based reporting".
 - Do NOT start with a bullet character. Plain sentence text only — the document formatter adds real Word bullets.
-- Sound like real-time experience from someone who lived the project, not a template.
 - No color instructions — content only. Do not bold or highlight keywords in the text.`
+
+/**
+ * Professional Summary rules for JD-tailored builds (exactly 6 bullets).
+ * Experience / Skills / merge behavior are intentionally NOT covered here.
+ */
+const JD_SUMMARY_BULLET_RULES = `Professional Summary — exactly 6 bullets (strict):
+Return EXACTLY 6 summaryBullets. Leave "summary" as a short 1–2 sentence overview only.
+
+The 6 bullets must collectively cover these purposes IN ORDER:
+1) Total years of experience and target role
+2) Primary technical expertise (a few core tools/skills only — do not overload)
+3) Relevant industry or business domain experience
+4) Project delivery and problem-solving experience
+5) Stakeholder or team collaboration
+6) One clear achievement or business impact (believable; no fake exact metrics)
+
+Tone and quality:
+- Concise, natural, professional, easy to understand — written like a real experienced person.
+- Must match the candidate's career level and the experience generated for the companies.
+- Help a recruiter grasp the background in a few seconds.
+
+JD keywords:
+- Use important JD keywords naturally ACROSS the six bullets.
+- Do NOT copy the JD or paraphrase the whole posting.
+- Do NOT repeat the same tools, skills, or phrases across multiple summary bullets.
+- Do NOT overload one bullet with a long technology dump.
+
+Truthfulness:
+- Do not add unsupported claims, fake certifications, fake domain expertise, or exact metrics not supported by candidate info or generated experience.
+- Prefer qualitative impact when precise numbers are not supported.
+
+Banned robotic phrases (never use):
+- Results-driven professional
+- Highly motivated individual
+- Proven track record
+- Dynamic professional
+- Seasoned expert
+- Also avoid similar clichés: passionate about, leveraging synergies, best-in-class, go-getter.`
+
+/**
+ * Experience-only project storytelling rules for JD-tailored builds.
+ * Summary / Skills / merge behavior are intentionally NOT covered here.
+ */
+const JD_EXPERIENCE_PROJECT_RULES = `Experience bullets — project context first (strict):
+Before writing bullets for EACH company, silently create ONE clear, realistic project context for that company using:
+1) user-provided experience / JD-aligned guidance for that company,
+2) company research (verified + industryTypical),
+3) target role and JD requirements,
+4) candidate seniority at that company (senior | mid | junior).
+Each company MUST get a DIFFERENT project context, tool mix, responsibilities, sentence structures, and outcomes.
+
+Then write the company's bullets so the SET collectively tells that project story. Do NOT force the full story into every individual bullet.
+
+Across the company's bullets, cover:
+- the project or business problem worked on,
+- what the person personally designed, developed, configured, analyzed, supported, or improved,
+- relevant tools and technologies used,
+- collaboration with users, technical teams, or stakeholders,
+- a practical result or business impact when believable.
+
+Seniority voice (match the company's role level):
+- Senior: ownership, solution design, leadership, decisions, stakeholder management, delivery, production responsibility.
+- Mid: hands-on implementation, configuration, development, analysis, testing, troubleshooting, collaboration.
+- Junior: support, testing, documentation, reporting, issue analysis, guided implementation.
+
+JD keywords:
+- Keep important JD skills/tools/keywords, but place them ONLY where they naturally fit.
+- Distribute keywords across the company's bullet set and across companies — do NOT stuff every keyword into every bullet.
+- Present/most recent company may carry more JD keywords; older companies stay relevant without cloning the same keyword list.
+
+Company research usage:
+- Use verified research only as background industry/company context.
+- Do NOT present a public company initiative as the candidate's exact personal project unless the user provided or confirmed it.
+- industryTypical items are generic assumptions — adapt them into believable work, do not copy them as confirmed facts.
+
+Anti-repetition (critical):
+- Do NOT repeat the same opener, sentence structure, tools, or outcomes across companies.
+- Do NOT put AI, automation, dashboards, regression testing, documentation, or the same percentages into every company.
+- AI / automation may appear in at most ONE company when truly natural for that project — never as a forced pattern.
+- Sound like real work experience someone lived, not a template.`
+
+/**
+ * Technical Skills section rules for JD-tailored builds.
+ * Summary / Experience / merge behavior are intentionally NOT covered here.
+ */
+const JD_SKILLS_RULES = `Technical Skills section (strict — ATS-friendly and scannable):
+- Return skillCategories with ONLY categories relevant to the target role. Prefer from this set when they apply:
+  Programming Languages | Databases | Frameworks and Libraries | Cloud and DevOps | Tools and Platforms | Domain Skills
+- Omit empty or irrelevant categories. Typically 3–6 categories. Do NOT invent filler categories.
+- Ban these category names: Core Technologies, Advanced and Modern Skills, Leadership and Communication (and similar soft-skill buckets).
+- Each category: short skill NAMES only, comma-ready list items (e.g. "SQL", "Tableau", "Python") — no descriptions or sentences.
+- Include important JD technical skills that fit the role.
+- Also include technical tools that appear naturally in the generated Experience (or user/reference skills) when they are real tools/platforms/languages.
+- Do NOT add tools only because they appeared in company research.
+- Do NOT list soft or vague entries as skills. Remove / never include: Communication, Leadership, Reports, Security (as a lone vague word), Coding Skills, Business process knowledge, teamwork, problem solving, presentation skills, etc. Those belong in Experience narrative.
+- Do NOT repeat the same skill under multiple categories.
+- Do NOT repeat the job title, industry name, or generic terms only to pad keyword count.
+- Keep the section compact — prefer a lean, recruiter-scannable list over an exhaustive dump.
+- skills + technicalSkills: flat list of the SAME unique skills as in skillCategories (short names only, no duplicates).`
+
+/** Combines format + summary + experience + skills rules for JD builds. */
+const JD_BULLET_RULES = `${JD_BULLET_FORMAT_RULES}
+
+${JD_SUMMARY_BULLET_RULES}
+
+${JD_EXPERIENCE_PROJECT_RULES}
+
+${JD_SKILLS_RULES}`
+
+/**
+ * Infer seniority for a company role from title + overall years.
+ * @param {string} title
+ * @param {number} overallYears
+ * @param {number} companyIndex — 0 = most recent
+ */
+function inferJdCompanySeniority(title, overallYears = 0, companyIndex = 0) {
+  const t = String(title || '').toLowerCase()
+  if (/\b(intern|trainee|graduate|junior|jr\.?|associate|entry)\b/.test(t)) return 'junior'
+  if (/\b(principal|staff|lead|manager|director|architect|senior|sr\.?|head)\b/.test(t)) return 'senior'
+  const years = Number(overallYears) || 0
+  // Older roles on a long career often skew more junior relative to present
+  if (years >= 8 && companyIndex === 0) return 'senior'
+  if (years >= 10 && companyIndex <= 1) return 'senior'
+  if (years <= 2 || companyIndex >= 3) return 'junior'
+  return 'mid'
+}
+
+function estimateYearsInRole(startDate, endDate) {
+  const parse = (raw) => {
+    const s = String(raw || '').trim()
+    if (!s || /^present$/i.test(s)) return null
+    const m = s.match(/(\d{4})/)
+    return m ? Number(m[1]) : null
+  }
+  const startY = parse(startDate)
+  const endY = parse(endDate) || new Date().getFullYear()
+  if (!startY) return null
+  return Math.max(0, endY - startY)
+}
 
 function normalizeRating(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
@@ -702,12 +837,26 @@ export function jdSummaryBulletCount() {
  * Generate a JD-tailored resume from scratch (no existing resume).
  * Resume title/role must match the JD role. Skills must cover JD + related skills.
  * Bullets prefer Claude, then ChatGPT, then Gemini.
+ * @param {object} formData
+ * @param {object} jdData
+ * @param {object[]} [companyContexts] — optional public research rows from researchJdCompanyContexts
  */
-export async function generateResumeFromJd(formData, jdData) {
+export async function generateResumeFromJd(formData, jdData, companyContexts = []) {
   const companies = Array.isArray(formData.companies) ? formData.companies : []
   const years = Number(formData.yearsOfExperience) || 0
   const summaryCount = jdSummaryBulletCount()
   const roleTitle = String(jdData?.roleTitle || formData.role || '').trim()
+  const contexts = Array.isArray(companyContexts) ? companyContexts : []
+  const compactContexts = contexts.map((row) => ({
+    company: row.company,
+    researchStatus: row.researchStatus || 'unknown',
+    verified: row.verified || {},
+    industryTypical: row.industryTypical || {},
+    sources: Array.isArray(row.sources) ? row.sources.slice(0, 8) : [],
+  }))
+  const companyContextBlock = compactContexts.length
+    ? `\nPublic company research (optional grounding — use verified facts with sources when present; treat industryTypical as generic industry assumptions only, not company-confirmed details; do NOT treat any of this as the candidate's personal achievements):\n${JSON.stringify(compactContexts)}\n`
+    : ''
 
   const jdSkills = [
     ...new Set([
@@ -734,7 +883,10 @@ export async function generateResumeFromJd(formData, jdData) {
     const lengthRule = i <= 1
       ? 'First 2-3 bullets = THREE full lines (48-58 words); remaining bullets = TWO lines (32-40 words)'
       : 'ALL bullets = TWO full lines (32-40 words)'
-    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | Location="${loc || '(omit if unknown)'}" | BulletCount=${n} | Length=${lengthRule} | JD-aligned guidance="${guidance || '(none — invent strong advanced JD-matched project bullets)'}"`
+    const seniority = inferJdCompanySeniority(c.role || c.title, years, i)
+    const yearsInRole = estimateYearsInRole(c.startDate, c.endDate)
+    const yearsNote = yearsInRole != null ? ` | YearsInRole≈${yearsInRole}` : ''
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Seniority=${seniority}${yearsNote} | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | Location="${loc || '(omit if unknown)'}" | BulletCount=${n} | Length=${lengthRule} | UserGuidance="${guidance || '(none)'}"`
   }).join('\n')
 
   const ref = formData.referenceMaterial || null
@@ -758,7 +910,7 @@ export async function generateResumeFromJd(formData, jdData) {
     : ''
 
   const aiModeNote = formData.aiMode
-    ? `\nAI MODE is ON (industry hint: ${formData.aiIndustry || 'from JD'}). First match the JD tightly, then elevate with advanced modern skills. Every experience bullet MUST be a FULL two-line, meaningful project bullet. Use each company's JD-aligned guidance. Prefer 10–12 dense bullets per company.`
+    ? `\nAI MODE is ON (industry hint: ${formData.aiIndustry || 'from JD'}). First match the JD tightly, then elevate with advanced modern skills. Experience bullets must still follow project-context rules and must not repeat the same AI/automation pattern across companies. Prefer 10–12 dense bullets per company when BulletCount allows.`
     : ''
 
   return jsonCompletion(
@@ -769,25 +921,25 @@ ${JD_BULLET_RULES}
 
 Strategy order (mandatory):
 1) JD fit first: cover required skills, tools, responsibilities, keywords, and seniority for ~${years} years of experience.
-2) Then elevate: add advanced skills beyond the JD minimum that still fit the role/industry and make the resume stronger than average applicants.
-3) Modernize: reflect current market practices and tools hiring managers expect now.
-4) Add AI intelligently: weave practical AI tool usage into bullets that already fit each company and project story. AI must feel native to the work, not pasted on.
+2) For EACH company: invent one distinct project context (using user guidance + research + seniority), THEN write experience bullets that collectively tell that story.
+3) Technical Skills: follow JD_SKILLS_RULES — clean categorized tool lists from JD + experience-supported tools only.
+4) Modernize vocabulary where natural — never by repeating the same buzzwords in every company.
 
 Hard rules:
 - Resume target role / title MUST be exactly: "${roleTitle}" (the JD role). Do not use a different title.
 - Use the EXACT company names, per-company roles, and dates the user provided. Do not rename companies or invent extra jobs.
 - For EACH company, write EXACTLY the BulletCount listed for that company (no more, no less).
-- EVERY summary bullet MUST be a FULL two lines (about 32–40 words). For experience: follow per-company Length rules (Company #1 and #2 lead with 2–3 three-line bullets).
+- Professional Summary: follow JD_SUMMARY_BULLET_RULES — EXACTLY ${summaryCount} concise bullets covering years/role, technical expertise, domain, delivery, collaboration, and one believable impact. Match career level to generated experience. No JD copy-paste, no clichés, no unsupported metrics.
+- Experience length: follow per-company Length rules (Company #1 and #2 lead with 2–3 three-line bullets).
 - NEVER use the JD hiring company as an experience employer. Company names must be distinct from the employer posting the JD.
-- Align every bullet to JD responsibilities, tools, and keywords with real project ownership and advanced delivery.
-- When JD-aligned guidance is provided for a company, follow it closely for that company's bullets.
-- PRESENT / MOST RECENT company (first in the list): weave in MOST of the JD required skills, tools, and keywords naturally across its bullets, plus stronger adjacent advanced skills.
-- Older companies: still JD-aligned with real project stories; each bullet still needs ≥1 JD skill and advanced depth appropriate to that role level.
-- AI tools: include ONE summary bullet showing AI tools used at work, and include at least ONE experience AI bullet in EACH company when believable, especially the most recent role. Tie AI usage to that company's domain and existing project themes.
-- skillCategories: return 5–7 category headings. Include EVERY JD skill below, PLUS advanced modern related skills that strengthen the profile. Prefer current-market vocabulary.
-- skills + technicalSkills: flat list covering the SAME complete elevated skill set (short names only).
-- When reference material is provided: preserve strong original wording; expand short reference lines into FULL two-line meaningful bullets without inventing unrelated claims.
-- summaryBullets: return EXACTLY ${summaryCount} strong, FULL two-line, JD-aligned summary bullets. Leave "summary" as a short 1–2 sentence overview.
+- Experience: follow JD_EXPERIENCE_PROJECT_RULES — unique project context per company, natural keyword placement, seniority-matched voice, no cross-company repetition of AI/automation/dashboards/regression/documentation/same metrics.
+- When UserGuidance is provided for a company, treat it as primary user-provided experience direction for that company's project context.
+- PRESENT / MOST RECENT company (first in the list): carry a larger share of JD required skills/tools naturally across its bullet SET (not every bullet). Older companies stay JD-aligned with different project stories and fewer overlapping keywords.
+- For experience, include AI in at most ONE company only when it fits that project's context — never in every company. Do not force an AI line into the Professional Summary unless it naturally fits one of the six summary purposes.
+- Technical Skills: follow JD_SKILLS_RULES exactly (relevant categories only, no vague soft skills, no duplicates across categories, no research-only tool stuffing, no banned category names).
+- skills + technicalSkills: flat unique list matching skillCategories.
+- When reference material is provided: preserve strong original wording for experience; include reference technical tools in Skills only if they are real tools and fit the role; for summary, adapt reference themes into the six-purpose structure without inventing unrelated claims.
+- summaryBullets: return EXACTLY ${summaryCount} bullets per JD_SUMMARY_BULLET_RULES. Leave "summary" as a short 1–2 sentence overview.
 - Never put hyphens (-) or parentheses () inside summary or experience bullets; use combining words instead.
 - Never invent placeholder location text like Remote or N/A.
 - email/phone/location: copy from user input; omit blank fields.
@@ -800,7 +952,7 @@ Hard rules:
 - City/State: ${[formData.city, formData.state].filter(Boolean).join(', ') || '(not provided — omit)'}
 - User role hint: ${formData.role || '(use JD role)'}
 - Years of experience: ${years}
-- Required summary bullet count: ${summaryCount} (each FULL two lines)
+- Required Professional Summary bullets: EXACTLY ${summaryCount} (concise; six purposes in order)
 - Education (use as-is if present): ${JSON.stringify(formData.education || [])}
 
 JD analysis (match FIRST, then elevate above this baseline):
@@ -812,17 +964,18 @@ JD analysis (match FIRST, then elevate above this baseline):
 - Must-have keywords: ${(jdData?.mustHaveKeywords || []).join(', ') || ''}
 - Domain keywords: ${(jdData?.domainKeywords || []).join(', ') || ''}
 - Key responsibilities: ${(jdData?.responsibilities || []).slice(0, 12).join(' | ') || ''}
-- JD skills that MUST appear, plus advanced related skills that make the resume stronger: ${jdSkills.join(', ') || '(extract from JD text)'}
+- JD technical skills to place in Skills and/or Experience when they are real tools (not vague soft skills): ${jdSkills.join(', ') || '(extract from JD text)'}
 
-Companies (present→past order already applied by caller — #1 is present/most recent):
+Companies (present→past order already applied by caller — #1 is present/most recent).
+For each company: build one project context, then write bullets for that context only:
 ${companyLines || '(none)'}
-
-${refBlock || '(No reference document — invent strong, advanced, human, JD-matched project bullets with FULL two-line depth.)'}
+${companyContextBlock}
+${refBlock || '(No reference document — create believable, human, JD-matched project stories with FULL two-line depth.)'}
 
 Raw JD excerpt (for extra context):
 ${String(formData.jdText || '').slice(0, 4500)}
 
-Generate the complete resume JSON. Every bullet must be a full two-line meaningful statement.`,
+Generate the complete resume JSON. Follow JD_SUMMARY_BULLET_RULES, JD_EXPERIENCE_PROJECT_RULES, and JD_SKILLS_RULES.`,
     'build_jd_resume',
     BUILD_RESUME_SCHEMA,
     // Prefer Claude, then ChatGPT, then Gemini (continue through remaining configured providers)

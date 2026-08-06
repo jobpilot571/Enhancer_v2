@@ -16,6 +16,8 @@ services:
         value: "openai,groq,claude,gemini"
       - key: CLAUDE_MODEL
         value: "claude-sonnet-5"
+      - key: TAVILY_API_KEY
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
