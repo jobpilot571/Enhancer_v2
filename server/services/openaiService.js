@@ -1,6 +1,7 @@
 import { structuredJSON } from './aiProvider.js'
 import { cleanJobDescription, getCachedJdAnalysis, setCachedJdAnalysis } from './jdCleaner.js'
 import { extractKnownToolsFromText } from './scoringDictionary.js'
+import { formatProjectMemoriesForPrompt } from './jdProjectMemoryService.js'
 
 /**
  * @param {object} [options]
@@ -232,22 +233,29 @@ Banned robotic phrases (never use):
  * Experience-only project storytelling rules for JD-tailored builds.
  * Summary / Skills / merge behavior are intentionally NOT covered here.
  */
-const JD_EXPERIENCE_PROJECT_RULES = `Experience bullets — project context first (strict):
-Before writing bullets for EACH company, silently create ONE clear, realistic project context for that company using:
-1) user-provided experience / JD-aligned guidance for that company,
-2) company research (verified + industryTypical),
-3) target role and JD requirements,
-4) candidate seniority at that company (senior | mid | junior).
-Each company MUST get a DIFFERENT project context, tool mix, responsibilities, sentence structures, and outcomes.
+const JD_EXPERIENCE_PROJECT_RULES = `Experience bullets — from internal project memory (strict):
+BEFORE writing bullets for each company, an INTERNAL project memory is created for that company (or you must invent one silently if missing).
+That memory is for writing only — NEVER print projectName, team size labels, deployment process text blocks, memory field names, or the memory itself in the resume.
 
-Then write the company's bullets so the SET collectively tells that project story. Do NOT force the full story into every individual bullet.
+When a project memory is provided for a company:
+- Generate ALL experience bullets for that company from THAT SINGLE project memory only.
+- Every bullet must naturally come from the same project (objective, systems, users, challenges, tech, deliverables, production issues, outcomes).
+- Do NOT invent a second unrelated project for the same company.
+- Do NOT write independent bullets that ignore the memory.
+- Related workstreams inside the same engagement are fine; disconnected one-off bullets are not.
 
-Across the company's bullets, cover:
-- the project or business problem worked on,
+When no memory is provided for a company, silently create one coherent enterprise project first (with the same internal fields: objective, industry, team, role, responsibilities, systems, users, challenges, tech, deliverables, production issues, deployment, outcomes), then write all bullets from it.
+
+Each company MUST get a DIFFERENT project memory / story (different objective, systems, users, challenges, outcomes, and sentence structures).
+
+Across the company's bullet SET (not every individual bullet), cover:
+- the project or business problem,
 - what the person personally designed, developed, configured, analyzed, supported, or improved,
-- relevant tools and technologies used,
+- relevant tools and technologies,
 - collaboration with users, technical teams, or stakeholders,
 - a practical result or business impact when believable.
+
+The reader should feel the candidate actually worked on one or more real enterprise projects during that company tenure.
 
 Seniority voice (match the company's role level):
 - Senior: ownership, solution design, leadership, decisions, stakeholder management, delivery, production responsibility.
@@ -255,7 +263,7 @@ Seniority voice (match the company's role level):
 - Junior: support, testing, documentation, reporting, issue analysis, guided implementation.
 
 JD keywords:
-- Keep important JD skills/tools/keywords, but place them ONLY where they naturally fit.
+- Keep important JD skills/tools/keywords, but place them ONLY where they naturally fit inside this project's story.
 - Distribute keywords across the company's bullet set and across companies — do NOT stuff every keyword into every bullet.
 - Present/most recent company may carry more JD keywords; older companies stay relevant without cloning the same keyword list.
 
@@ -274,19 +282,20 @@ Anti-repetition (critical):
  * Technical Skills section rules for JD-tailored builds.
  * Summary / Experience / merge behavior are intentionally NOT covered here.
  */
-const JD_SKILLS_RULES = `Technical Skills section (strict — ATS-friendly and scannable):
+const JD_SKILLS_RULES = `Technical Skills section (complete technical index — ATS-friendly and scannable):
+- The Skills section MUST be a complete index of every important technical skill used in the resume (Professional Summary, Experience, Projects) PLUS important technical skills required by the JD.
+- Scan Summary, Experience, and Projects before finalizing Skills. Collect unique technical skills, tools, frameworks, platforms, databases, programming languages, cloud services, ERP modules, libraries, methodologies, and domain technologies that actually appear there or are required by the JD.
 - Return skillCategories with ONLY categories relevant to the target role. Prefer from this set when they apply:
   Programming Languages | Databases | Frameworks and Libraries | Cloud and DevOps | Tools and Platforms | Domain Skills
 - Omit empty or irrelevant categories. Typically 3–6 categories. Do NOT invent filler categories.
-- Ban these category names: Core Technologies, Advanced and Modern Skills, Leadership and Communication (and similar soft-skill buckets).
-- Each category: short skill NAMES only, comma-ready list items (e.g. "SQL", "Tableau", "Python") — no descriptions or sentences.
-- Include important JD technical skills that fit the role.
-- Also include technical tools that appear naturally in the generated Experience (or user/reference skills) when they are real tools/platforms/languages.
-- Do NOT add tools only because they appeared in company research.
-- Do NOT list soft or vague entries as skills. Remove / never include: Communication, Leadership, Reports, Security (as a lone vague word), Coding Skills, Business process knowledge, teamwork, problem solving, presentation skills, etc. Those belong in Experience narrative.
-- Do NOT repeat the same skill under multiple categories.
+- Ban these category names: Core Technologies, Advanced Skills, Advanced and Modern Skills, Leadership and Communication (and any soft-skill or keyword-dump buckets).
+- Place every skill under the most appropriate existing category. Never create dump categories to absorb leftovers.
+- Each category: short skill NAMES only (e.g. "SQL", "Tableau", "Python") — no descriptions or sentences.
+- Remove duplicates using case-insensitive / spacing-normalized matching (SQL and sql are the same; Power BI and PowerBI are the same). List each skill exactly once across the whole Skills section — never in multiple categories.
+- Do NOT add tools only because they appeared in company research unless they are used in generated Experience/Projects or required by the JD.
+- Do NOT list soft skills. Never include: Communication, Leadership, Problem Solving, Teamwork, Documentation, Stakeholder Management, Reports, Coding Skills, Business process knowledge, presentation skills, etc. Those belong in Experience narrative only.
 - Do NOT repeat the job title, industry name, or generic terms only to pad keyword count.
-- Keep the section compact — prefer a lean, recruiter-scannable list over an exhaustive dump.
+- Before finishing: verify every important technical keyword used anywhere in the resume is represented exactly once in the appropriate Skills category.
 - skills + technicalSkills: flat list of the SAME unique skills as in skillCategories (short names only, no duplicates).`
 
 /** Combines format + summary + experience + skills rules for JD builds. */
@@ -840,8 +849,9 @@ export function jdSummaryBulletCount() {
  * @param {object} formData
  * @param {object} jdData
  * @param {object[]} [companyContexts] — optional public research rows from researchJdCompanyContexts
+ * @param {object[]} [projectMemories] — internal per-company project memories (never printed on resume)
  */
-export async function generateResumeFromJd(formData, jdData, companyContexts = []) {
+export async function generateResumeFromJd(formData, jdData, companyContexts = [], projectMemories = []) {
   const companies = Array.isArray(formData.companies) ? formData.companies : []
   const years = Number(formData.yearsOfExperience) || 0
   const summaryCount = jdSummaryBulletCount()
@@ -857,6 +867,9 @@ export async function generateResumeFromJd(formData, jdData, companyContexts = [
   const companyContextBlock = compactContexts.length
     ? `\nPublic company research (optional grounding — use verified facts with sources when present; treat industryTypical as generic industry assumptions only, not company-confirmed details; do NOT treat any of this as the candidate's personal achievements):\n${JSON.stringify(compactContexts)}\n`
     : ''
+
+  const memories = Array.isArray(projectMemories) ? projectMemories.filter((m) => m?.company && m?.projectName) : []
+  const projectMemoryBlock = formatProjectMemoriesForPrompt(memories)
 
   const jdSkills = [
     ...new Set([
@@ -921,8 +934,8 @@ ${JD_BULLET_RULES}
 
 Strategy order (mandatory):
 1) JD fit first: cover required skills, tools, responsibilities, keywords, and seniority for ~${years} years of experience.
-2) For EACH company: invent one distinct project context (using user guidance + research + seniority), THEN write experience bullets that collectively tell that story.
-3) Technical Skills: follow JD_SKILLS_RULES — clean categorized tool lists from JD + experience-supported tools only.
+2) For EACH company: first use the INTERNAL project memory for that company (already generated before this step), THEN write ALL experience bullets from that single memory only.
+3) Technical Skills: follow JD_SKILLS_RULES — complete index of technical skills from Summary/Experience/Projects + JD requirements.
 4) Modernize vocabulary where natural — never by repeating the same buzzwords in every company.
 
 Hard rules:
@@ -932,11 +945,12 @@ Hard rules:
 - Professional Summary: follow JD_SUMMARY_BULLET_RULES — EXACTLY ${summaryCount} concise bullets covering years/role, technical expertise, domain, delivery, collaboration, and one believable impact. Match career level to generated experience. No JD copy-paste, no clichés, no unsupported metrics.
 - Experience length: follow per-company Length rules (Company #1 and #2 lead with 2–3 three-line bullets).
 - NEVER use the JD hiring company as an experience employer. Company names must be distinct from the employer posting the JD.
-- Experience: follow JD_EXPERIENCE_PROJECT_RULES — unique project context per company, natural keyword placement, seniority-matched voice, no cross-company repetition of AI/automation/dashboards/regression/documentation/same metrics.
-- When UserGuidance is provided for a company, treat it as primary user-provided experience direction for that company's project context.
+- Experience: follow JD_EXPERIENCE_PROJECT_RULES — all bullets for a company come from one project memory; never print the memory; keep stories different across companies.
+- NEVER include projectName, "project memory", team-size labels, or raw memory fields in summary, skills, or experience text.
+- When UserGuidance is provided for a company, fold it into that company's project memory / bullets.
 - PRESENT / MOST RECENT company (first in the list): carry a larger share of JD required skills/tools naturally across its bullet SET (not every bullet). Older companies stay JD-aligned with different project stories and fewer overlapping keywords.
 - For experience, include AI in at most ONE company only when it fits that project's context — never in every company. Do not force an AI line into the Professional Summary unless it naturally fits one of the six summary purposes.
-- Technical Skills: follow JD_SKILLS_RULES exactly (relevant categories only, no vague soft skills, no duplicates across categories, no research-only tool stuffing, no banned category names).
+- Technical Skills: follow JD_SKILLS_RULES exactly (complete technical index of resume + JD; relevant categories only; no soft skills; each skill once; no research-only tools; no banned/dump category names).
 - skills + technicalSkills: flat unique list matching skillCategories.
 - When reference material is provided: preserve strong original wording for experience; include reference technical tools in Skills only if they are real tools and fit the role; for summary, adapt reference themes into the six-purpose structure without inventing unrelated claims.
 - summaryBullets: return EXACTLY ${summaryCount} bullets per JD_SUMMARY_BULLET_RULES. Leave "summary" as a short 1–2 sentence overview.
@@ -967,15 +981,15 @@ JD analysis (match FIRST, then elevate above this baseline):
 - JD technical skills to place in Skills and/or Experience when they are real tools (not vague soft skills): ${jdSkills.join(', ') || '(extract from JD text)'}
 
 Companies (present→past order already applied by caller — #1 is present/most recent).
-For each company: build one project context, then write bullets for that context only:
+For each company: write bullets ONLY from that company's INTERNAL project memory:
 ${companyLines || '(none)'}
-${companyContextBlock}
+${projectMemoryBlock}${companyContextBlock}
 ${refBlock || '(No reference document — create believable, human, JD-matched project stories with FULL two-line depth.)'}
 
 Raw JD excerpt (for extra context):
 ${String(formData.jdText || '').slice(0, 4500)}
 
-Generate the complete resume JSON. Follow JD_SUMMARY_BULLET_RULES, JD_EXPERIENCE_PROJECT_RULES, and JD_SKILLS_RULES.`,
+Generate the complete resume JSON only (no project memories in the output). Follow JD_SUMMARY_BULLET_RULES, JD_EXPERIENCE_PROJECT_RULES, and JD_SKILLS_RULES.`,
     'build_jd_resume',
     BUILD_RESUME_SCHEMA,
     // Prefer Claude, then ChatGPT, then Gemini (continue through remaining configured providers)

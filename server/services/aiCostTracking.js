@@ -21,6 +21,7 @@ const FEATURE_NAMES = {
   llm_ats_score: 'ATS Score',
   build_resume: 'Resume Generation',
   build_jd_resume: 'Resume Generation',
+  jd_project_memory: 'JD Project Memory',
   jd_experience_quality_rewrite: 'Experience Quality Check',
   suggest_jd_companies: 'Company Suggestions',
   extra_experience_bullets: 'Extra Experience Bullets',

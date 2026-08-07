@@ -296,7 +296,6 @@ export function extractKnownToolsFromText(text) {
     if (!re.test(hay)) continue
     const key = phrase.toLowerCase()
     if (seen.has(key)) continue
-    seen.add(key)
     const display = ({
       agentforce: 'Agentforce',
       apex: 'Apex',
@@ -320,6 +319,10 @@ export function extractKnownToolsFromText(text) {
       salesforce: 'Salesforce',
       docker: 'Docker',
       kubernetes: 'Kubernetes',
+      'power bi': 'Power BI',
+      sql: 'SQL',
+      aws: 'AWS',
+      gcp: 'GCP',
     })[key] || phrase.replace(/\b\w/g, (c) => c.toUpperCase())
     const displayKey = display.toLowerCase()
     if (seen.has(displayKey)) continue

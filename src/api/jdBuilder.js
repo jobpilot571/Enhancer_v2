@@ -12,6 +12,7 @@ export function getApiRoot() {
 const BUILD_STEP_LABELS = {
   parsing_jd: 'Analyzing job description…',
   researching_companies: 'Researching company and industry context…',
+  project_memory: 'Building internal project context for each company…',
   generating_content: 'Writing JD-tailored resume content…',
   qa_experience: 'Checking Experience bullets for quality…',
   building_docx: 'Building your DOCX…',

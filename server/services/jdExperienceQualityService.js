@@ -483,6 +483,7 @@ function restoreLostKeywordCoverage(beforeResume, afterResume, flags, jdKeywords
 export async function improveJdExperienceBullets(resumeData, {
   jdData = null,
   companyContexts = [],
+  projectMemories = [],
   log = () => {},
 } = {}) {
   try {
@@ -497,6 +498,11 @@ export async function improveJdExperienceBullets(resumeData, {
     const roleTitle = String(jdData?.roleTitle || '').trim()
     const jdKeywords = collectJdKeywords(jdData)
     const coverageBefore = collectResumeJdKeywordCoverage(resumeData, jdKeywords)
+    const memoryByCompany = new Map(
+      (projectMemories || [])
+        .filter((m) => m?.company && m?.projectName)
+        .map((m) => [String(m.company).trim().toLowerCase(), m]),
+    )
 
     const { result } = await structuredJSON(
       `You are fixing ONLY weak Experience bullets on a JD-tailored resume.
@@ -505,6 +511,8 @@ Rewrite each flagged bullet so it stays believable for that company and seniorit
 Rules (strict):
 - Return a replacement for EVERY flagged bullet.
 - Do NOT rewrite unflagged bullets. Do NOT change Summary or Skills.
+- If an INTERNAL project memory is provided for the company, keep the rewrite inside THAT same project story (systems, users, challenges, tech, outcomes). Do not invent a second project. Every rewritten bullet must still feel like it came from the same enterprise engagement.
+- Never print projectName, team size labels, deployment process blocks, or memory fields in the bullet text.
 - Keep each company's project story distinct from the others.
 - Preserve important JD keywords already in the original bullet (see keepKeywords) whenever natural.
 - Core tools such as SQL, Python, Java, AWS, Tableau, or Oracle EBS may appear across companies — that is fine.
@@ -525,6 +533,7 @@ Rules (strict):
           original: f.original,
           keepKeywords: f.keepKeywords,
           industryHints: industryContextOnly(f.company, companyContexts)?.industryHints || [],
+          projectMemory: memoryByCompany.get(String(f.company || '').trim().toLowerCase()) || null,
         })),
         otherCompanyOpeners: (resumeData.experience || []).map((job, ci) => ({
           companyIndex: ci,

@@ -2,10 +2,12 @@ import { getSession, updateSession, setGeneratedDocx } from '../store/sessionSto
 import { updateBuildJob } from '../store/buildJobStore.js'
 import { analyzeJd, generateResumeFromJd, jdSummaryBulletCount } from './openaiService.js'
 import { researchJdCompanyContexts } from './companyContextService.js'
+import { generateJdProjectMemories, stripProjectMemoryLeaks } from './jdProjectMemoryService.js'
 import { improveJdExperienceBullets } from './jdExperienceQualityService.js'
 import { generateResumeDocx } from './resumeDocxGenerator.js'
 import { beginAiUsageTracking, endAiUsageTracking, runWithAiCostContext } from './aiProvider.js'
 import { AI_SERVICES } from './aiCostTracking.js'
+import { extractKnownToolsFromText } from './scoringDictionary.js'
 
 function log(jobId, message) {
   console.log(`[jd-build:${jobId.slice(0, 8)}] ${message}`)
@@ -60,19 +62,11 @@ export function sortCompaniesPresentToPast(companies) {
   })
 }
 
-function collectJdSkills(jdData) {
-  return [...new Set([
-    ...(jdData?.requiredSkills || []),
-    ...(jdData?.preferredSkills || []),
-    ...(jdData?.toolsTechnologies || []),
-    ...(jdData?.mustHaveKeywords || []),
-    ...(jdData?.domainKeywords || []),
-  ].map((s) => String(s || '').trim()).filter(Boolean))]
-}
-
 const BANNED_SKILL_CATEGORY_RE = /^(core\s*technologies|advanced(\s+and)?\s*modern\s*skills|advanced\s*skills|leadership\s*(and|&)?\s*communication|soft\s*skills)$/i
 
-const VAGUE_SKILL_RE = /^(communication|leadership|reports?|reporting|security|coding\s*skills?|business\s*process(es)?(\s*knowledge)?|teamwork|problem[\s-]*solving|presentation(\s*skills?)?|collaboration|management|analytical\s*skills?|interpersonal\s*skills?|time\s*management|critical\s*thinking|adaptability|detail[\s-]*oriented|self[\s-]*motivated)$/i
+const VAGUE_SKILL_RE = /^(communication|leadership|reports?|reporting|security|codingskills?|businessprocess(es)?(knowledge)?|teamwork|problemsolving|presentation(skills?)?|collaboration|management|analyticalskills?|interpersonalskills?|timemanagement|criticalthinking|adaptability|detailoriented|selfmotivated|documentation|stakeholder(management)?|teamplayer|ownership|delivery|excellentcommunication|strongcommunication|writtencommunication|verbalcommunication)$/i
+
+const SOFT_SKILL_PHRASE_RE = /\b(communication|leadership|teamwork|problem[\s-]*solving|documentation|stakeholder|collaboration|presentation|interpersonal|time\s*management|critical\s*thinking|adaptability|ownership|delivery)\b/i
 
 const ALLOWED_SKILL_CATEGORIES = [
   'Programming Languages',
@@ -83,20 +77,62 @@ const ALLOWED_SKILL_CATEGORIES = [
   'Domain Skills',
 ]
 
+/** Known technical terms to harvest from resume narrative (sorted longest-first for matching). */
+const KNOWN_TECH_TERMS = [
+  'oracle ebs', 'power bi', 'sql server', 'github actions', 'gitlab ci', 'google cloud', 'visual studio',
+  'office 365', 'machine learning', 'data warehouse', 'rest api', 'graphql',
+  'python', 'java', 'javascript', 'typescript', 'golang', 'kotlin', 'scala', 'ruby', 'php', 'matlab', 'swift',
+  'sql', 'snowflake', 'redshift', 'bigquery', 'postgres', 'postgresql', 'mysql', 'mongodb', 'dynamodb',
+  'oracle', 'cassandra', 'redis', 'databricks', 'synapse', 'teradata', 'hive', 'dbt',
+  'react', 'angular', 'vue', 'nodejs', 'node.js', 'django', 'flask', 'spring', 'fastapi', 'express',
+  'pandas', 'numpy', 'scikit-learn', 'scikit', 'tensorflow', 'pytorch', 'spark', 'hadoop', 'kafka',
+  'aws', 'azure', 'gcp', 'kubernetes', 'docker', 'terraform', 'jenkins', 'airflow', 'lambda', 's3', 'ec2',
+  'tableau', 'looker', 'excel', 'jira', 'confluence', 'salesforce', 'sap', 'servicenow', 'splunk', 'datadog',
+  'postman', 'figma', 'git', 'linux', 'windows', 'sharepoint', 'apex', 'soql', 'informatica', 'talend',
+  'ssis', 'ssrs', 'powerapps', 'power automate', 'alteryx', 'qlik', 'cognos', 'microstrategy',
+  'ansible', 'puppet', 'chef', 'prometheus', 'grafana', 'elasticsearch', 'kibana', 'rabbitmq',
+  'agile', 'scrum', 'kanban', 'ci/cd', 'etl', 'elt',
+].sort((a, b) => b.length - a.length)
+
+/** Identity key for dedupe: case + spacing insensitive (SQL/sql, Power BI/PowerBI). */
 function normalizeSkillKey(value) {
   return String(value || '')
     .toLowerCase()
-    .replace(/[^a-z0-9+#.\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+    .replace(/node\.js/g, 'nodejs')
+    .replace(/postgresql/g, 'postgres')
+    .replace(/c\+\+/g, 'cplusplus')
+    .replace(/c#/g, 'csharp')
+    .replace(/[^a-z0-9+#.]/g, '')
 }
 
 function isVagueSkill(skill) {
-  const key = normalizeSkillKey(skill)
+  const raw = String(skill || '').trim()
+  const key = normalizeSkillKey(raw)
   if (!key || key.length < 2) return true
   if (VAGUE_SKILL_RE.test(key)) return true
-  // Generic padding — role/industry alone is not a technical skill
-  if (/^(data analyst|software engineer|retail|healthcare|finance|banking)$/i.test(key)) return true
+  if (SOFT_SKILL_PHRASE_RE.test(raw) && !KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)) {
+    return true
+  }
+  if (/^(dataanalyst|softwareengineer|retail|healthcare|finance|banking|consulting)$/i.test(key)) return true
+  return false
+}
+
+function isLikelyTechnicalSkill(skill) {
+  if (isVagueSkill(skill)) return false
+  const key = normalizeSkillKey(skill)
+  if (KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)) return true
+  // Multi-token tools / versions / modules (e.g. "Oracle Inventory", "AWS Glue")
+  if (/[A-Za-z].*\d|\d.*[A-Za-z]/.test(skill) && key.length >= 3) return true
+  if (/(sql|api|sdk|etl|cicd|ci\/cd|cloud|warehouse|analytics|module|framework|library|platform)/i.test(key)) {
+    return true
+  }
+  const wordCount = String(skill || '').trim().split(/\s+/).filter(Boolean).length
+  if (wordCount >= 2 && key.length >= 4) return true
+  // Short known-style tokens
+  if (/^[a-z][a-z0-9+#.]{1,24}$/i.test(key) && !/^(the|and|for|with|from|into|over|under|team|work|role)$/i.test(key)) {
+    if (key.length <= 3) return /^(sql|aws|gcp|etl|api|sap|git|r)$/i.test(key)
+    return /[+#.]/.test(key) || KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)
+  }
   return false
 }
 
@@ -104,72 +140,189 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** True if skill already appears in Skills lists or in Summary/Experience narrative. */
-function skillAlreadyPresent(skill, resumeData, skillCategories) {
-  const key = normalizeSkillKey(skill)
-  if (!key) return true
-
-  for (const cat of skillCategories || []) {
-    for (const s of cat.skills || []) {
-      if (normalizeSkillKey(s) === key) return true
-    }
-  }
-  for (const s of [...(resumeData.skills || []), ...(resumeData.technicalSkills || [])]) {
-    if (normalizeSkillKey(s) === key) return true
-  }
-
-  const narrative = [
+function resumeNarrativeText(resumeData) {
+  return [
     resumeData.summary || '',
     ...((resumeData.summaryBullets || [])),
     ...((resumeData.experience || []).flatMap((job) => [
       job.title || '',
       ...(job.bullets || []),
     ])),
+    ...((resumeData.projects || []).flatMap((p) => [
+      p.name || p.title || '',
+      ...(p.bullets || []),
+      p.description || '',
+    ])),
   ].join(' \n ')
-
-  const pattern = new RegExp(`(?:^|[^a-z0-9+#])${escapeRegExp(key)}(?:[^a-z0-9+#]|$)`, 'i')
-  return pattern.test(narrative)
 }
 
-function experienceSupportScore(skill, resumeData) {
+function skillMentionedInText(skill, text) {
   const key = normalizeSkillKey(skill)
-  if (!key) return 0
-  const text = [
-    ...((resumeData.experience || []).flatMap((job) => job.bullets || [])),
-    ...((resumeData.summaryBullets || [])),
-  ].join(' \n ').toLowerCase()
-  if (!text) return 0
-  const pattern = new RegExp(`(?:^|[^a-z0-9+#])${escapeRegExp(key)}(?:[^a-z0-9+#]|$)`, 'i')
-  if (pattern.test(text)) return 3
-  // Partial token overlap for multi-word tools (e.g. "Power BI" vs "PowerBI")
-  const compact = key.replace(/\s+/g, '')
-  if (compact.length >= 4 && text.replace(/\s+/g, '').includes(compact)) return 2
-  return 0
+  if (!key || !text) return false
+  // Allow optional whitespace between characters so "PowerBI" matches "Power BI"
+  const flexible = escapeRegExp(String(skill || '').trim())
+    .replace(/\\\s+/g, '\\s*')
+    .replace(/\s+/g, '\\s*')
+  if (flexible.length >= 2) {
+    const re = new RegExp(`(?:^|[^a-z0-9+#])${flexible}(?:[^a-z0-9+#]|$)`, 'i')
+    if (re.test(text)) return true
+  }
+  const hay = normalizeSkillKey(text)
+  return key.length >= 3 && hay.includes(key)
+}
+
+function pickDisplayName(candidates) {
+  const list = [...candidates].filter(Boolean)
+  if (!list.length) return ''
+  // Prefer mixed-case / official-looking forms over all-lowercase
+  list.sort((a, b) => {
+    const score = (s) => {
+      let n = 0
+      if (/[A-Z]/.test(s)) n += 2
+      if (s.includes(' ') || s.includes('.') || s.includes('#')) n += 1
+      if (s.length > 2) n += 1
+      return n
+    }
+    return score(b) - score(a) || a.localeCompare(b)
+  })
+  return list[0]
+}
+
+function softMatchCategoryIndex(cats, preferredCategory) {
+  return cats.findIndex((c) => {
+    const name = normalizeSkillKey(c.category)
+    if (preferredCategory === 'Programming Languages') return /program|language|script/.test(name)
+    if (preferredCategory === 'Databases') return /database|datastor|sql|warehouse/.test(name)
+    if (preferredCategory === 'Frameworks and Libraries') return /framework|librar|sdk/.test(name)
+    if (preferredCategory === 'Cloud and DevOps') return /cloud|devops|infra/.test(name)
+    if (preferredCategory === 'Tools and Platforms') return /tool|platform|software|application/.test(name)
+    if (preferredCategory === 'Domain Skills') return /domain|analytics|business|industry|method/.test(name)
+    return false
+  })
+}
+
+function jdTechnicalPool(jdData) {
+  return [
+    ...(jdData?.requiredSkills || []),
+    ...(jdData?.toolsTechnologies || []),
+    ...(jdData?.preferredSkills || []),
+    ...(jdData?.mustHaveKeywords || []),
+  ].map((s) => String(s || '').trim()).filter(Boolean)
+}
+
+function isJdTechnicalSkill(skill, jdData) {
+  const key = normalizeSkillKey(skill)
+  if (!key) return false
+  return jdTechnicalPool(jdData).some((s) => normalizeSkillKey(s) === key)
+}
+
+/** Keep skills that appear in resume narrative or are required by the JD (not research-only). */
+function skillBelongsInIndex(skill, narrative, jdData) {
+  if (isVagueSkill(skill) || !isLikelyTechnicalSkill(skill)) return false
+  if (isJdTechnicalSkill(skill, jdData)) return true
+  if (skillMentionedInText(skill, narrative)) return true
+  return false
+}
+
+function harvestTechFromNarrative(text, knownAliases = []) {
+  const found = new Map() // key -> display
+  const hay = String(text || '')
+  if (!hay.trim()) return found
+
+  const catalog = [
+    ...KNOWN_TECH_TERMS,
+    ...knownAliases.map((s) => String(s || '').trim()).filter(Boolean),
+    ...extractKnownToolsFromText(hay),
+  ]
+  // longest first so multi-word terms win display preference when both match
+  catalog.sort((a, b) => b.length - a.length)
+
+  for (const term of catalog) {
+    const key = normalizeSkillKey(term)
+    if (!key || isVagueSkill(term) || found.has(key)) continue
+    if (!skillMentionedInText(term, hay)) continue
+    found.set(key, pickDisplayName([found.get(key), term]))
+  }
+  return found
+}
+
+function collectImportantTechnicalSkills(resumeData, jdData) {
+  const byKey = new Map() // key -> display name
+  const narrative = resumeNarrativeText(resumeData)
+
+  const add = (skill, { requireEvidence = true, fromJd = false } = {}) => {
+    const raw = String(skill || '').trim()
+    if (!raw) return
+    if (isVagueSkill(raw)) return
+    const looksTechnical = isLikelyTechnicalSkill(raw)
+      || (fromJd && /^[A-Za-z][A-Za-z0-9+.#/\s-]{1,40}$/.test(raw) && normalizeSkillKey(raw).length >= 2)
+    if (!looksTechnical) return
+    if (requireEvidence && !skillBelongsInIndex(raw, narrative, jdData)) return
+    const key = normalizeSkillKey(raw)
+    if (!key) return
+    byKey.set(key, pickDisplayName([byKey.get(key), raw]))
+  }
+
+  // Existing skill lists — keep only if used in resume or required by JD
+  for (const cat of resumeData.skillCategories || []) {
+    for (const s of cat.skills || []) add(s)
+  }
+  for (const s of [...(resumeData.skills || []), ...(resumeData.technicalSkills || [])]) add(s)
+
+  // JD required / tools / preferred / must-have (technical only) — always index
+  for (const s of jdTechnicalPool(jdData)) {
+    add(s, { requireEvidence: false, fromJd: true })
+  }
+
+  // Domain keywords only when technical AND used in the resume narrative
+  for (const s of jdData?.domainKeywords || []) {
+    if (isLikelyTechnicalSkill(s) && skillMentionedInText(s, narrative)) {
+      add(s, { requireEvidence: false })
+    }
+  }
+
+  // Harvest tech terms actually used in Summary / Experience / Projects
+  const knownAliases = [
+    ...byKey.values(),
+    ...jdTechnicalPool(jdData),
+    ...(jdData?.domainKeywords || []),
+  ]
+  const harvested = harvestTechFromNarrative(narrative, knownAliases)
+  for (const [key, display] of harvested) {
+    byKey.set(key, pickDisplayName([byKey.get(key), display]))
+  }
+
+  // Also pull dictionary tools found in narrative (covers terms beyond local list)
+  for (const tool of extractKnownToolsFromText(narrative)) {
+    add(tool, { requireEvidence: false })
+  }
+
+  return [...byKey.values()]
 }
 
 function inferSkillCategoryName(skill) {
   const s = normalizeSkillKey(skill)
   if (!s) return 'Tools and Platforms'
 
-  if (/^(python|java|javascript|typescript|c\+\+|c#|go|golang|ruby|php|scala|kotlin|swift|r|sas|matlab|bash|shell|sql)$/.test(s)
-    || /\b(python|java|javascript|typescript|golang|kotlin)\b/.test(s)) {
+  if (/^(python|java|javascript|typescript|cplusplus|csharp|go|golang|ruby|php|scala|kotlin|swift|r|sas|matlab|bash|shell|apex|soql)$/.test(s)) {
     return 'Programming Languages'
   }
-  if (/sql|snowflake|redshift|bigquery|postgres|mysql|mongodb|dynamodb|oracle|sql\s*server|cassandra|redis|databricks|synapse|teradata|hive/.test(s)
-    || /database|dbt\b/.test(s)) {
+  if (/^(sql|sqlserver|snowflake|redshift|bigquery|postgres|mysql|mongodb|dynamodb|oracle|cassandra|redis|databricks|synapse|teradata|hive|dbt)$/.test(s)
+    || /datawarehouse|database/.test(s)) {
     return 'Databases'
   }
-  if (/react|angular|vue|node\.?js|django|flask|spring|fastapi|express|\.net|rails|laravel|next\.?js|pandas|numpy|scikit|tensorflow|pytorch|spark|hadoop|kafka/.test(s)
-    || /framework|library/.test(s)) {
+  if (/react|angular|vue|nodejs|django|flask|spring|fastapi|express|dotnet|rails|laravel|nextjs|pandas|numpy|scikit|tensorflow|pytorch|spark|hadoop|kafka|framework|library|sdk/.test(s)) {
     return 'Frameworks and Libraries'
   }
-  if (/aws|azure|gcp|google\s*cloud|kubernetes|docker|terraform|jenkins|github\s*actions|gitlab\s*ci|ci\/?cd|devops|airflow|lambda|s3|ec2|cloud\s*formation/.test(s)
-    || /\bcloud\b/.test(s)) {
+  if (/aws|azure|gcp|googlecloud|kubernetes|docker|terraform|jenkins|githubactions|gitlabci|cicd|devops|airflow|lambda|^s3$|^ec2$|ansible|prometheus|grafana/.test(s)
+    || (/cloud/.test(s) && !/microsoft/.test(s))) {
     return 'Cloud and DevOps'
   }
-  if (/tableau|power\s*bi|looker|excel|jira|confluence|salesforce|sap|servicenow|figma|postman|splunk|datadog|cursor|chatgpt|copilot|vscode|git|linux|windows|office\s*365|sharepoint/.test(s)
-    || /tool|platform|ide\b/.test(s)) {
+  if (/tableau|powerbi|looker|excel|jira|confluence|salesforce|sap|oracleebs|servicenow|figma|postman|splunk|datadog|git|linux|windows|office|sharepoint|alteryx|qlik|cognos|informatica|talend|ssis|ssrs|powerapps|powerautomate|etl|elt|module/.test(s)) {
     return 'Tools and Platforms'
+  }
+  if (/agile|scrum|kanban|machinelearning|analytics|forecast|inventory|erp|crm/.test(s)) {
+    return 'Domain Skills'
   }
   return 'Domain Skills'
 }
@@ -183,7 +336,6 @@ function placeSkillInCategories(skillCategories, skill, preferredCategory) {
   const key = normalizeSkillKey(skill)
   if (!key) return skillCategories
 
-  // Already present in any category — skip
   if (skillCategories.some((c) => (c.skills || []).some((s) => normalizeSkillKey(s) === key))) {
     return skillCategories
   }
@@ -194,29 +346,14 @@ function placeSkillInCategories(skillCategories, skill, preferredCategory) {
   }))
 
   let idx = findCategoryIndex(cats, preferredCategory)
-  if (idx < 0) {
-    // Prefer an existing related category over creating a new one
-    const softMatch = cats.findIndex((c) => {
-      const name = normalizeSkillKey(c.category)
-      if (preferredCategory === 'Programming Languages') return /program|language|script/.test(name)
-      if (preferredCategory === 'Databases') return /data\s*base|data\s*stor|sql|warehouse/.test(name)
-      if (preferredCategory === 'Frameworks and Libraries') return /framework|librar|sdk/.test(name)
-      if (preferredCategory === 'Cloud and DevOps') return /cloud|devops|infra|platform/.test(name)
-      if (preferredCategory === 'Tools and Platforms') return /tool|platform|software|application/.test(name)
-      if (preferredCategory === 'Domain Skills') return /domain|analytics|business|industry|method/.test(name)
-      return false
-    })
-    idx = softMatch
-  }
+  if (idx < 0) idx = softMatchCategoryIndex(cats, preferredCategory)
 
   if (idx < 0 && cats.length) {
-    // Last resort: Tools and Platforms-like existing bucket, else first real category
     idx = cats.findIndex((c) => /tool|platform/i.test(c.category))
     if (idx < 0) idx = 0
   }
 
   if (idx < 0) {
-    // No categories at all — create one allowed category (never a dump bucket)
     const allowed = ALLOWED_SKILL_CATEGORIES.includes(preferredCategory)
       ? preferredCategory
       : 'Tools and Platforms'
@@ -245,28 +382,12 @@ function dedupeCategorySkills(skillCategories) {
     .filter((c) => c.category && c.skills.length && !BANNED_SKILL_CATEGORY_RE.test(c.category))
 }
 
-function jdSkillPriority(skill, jdData, resumeData) {
-  const key = normalizeSkillKey(skill)
-  let score = experienceSupportScore(skill, resumeData)
-  const required = (jdData?.requiredSkills || []).some((s) => normalizeSkillKey(s) === key)
-  const tools = (jdData?.toolsTechnologies || []).some((s) => normalizeSkillKey(s) === key)
-  const preferred = (jdData?.preferredSkills || []).some((s) => normalizeSkillKey(s) === key)
-  if (required) score += 4
-  if (tools) score += 3
-  if (preferred) score += 2
-  // Domain keywords are weaker signal for Technical Skills stuffing
-  const domain = (jdData?.domainKeywords || []).some((s) => normalizeSkillKey(s) === key)
-  if (domain) score += 1
-  return score
-}
-
 /**
- * Soft-clean bullets and merge missing JD technical skills into existing categories.
- * Never creates Core Technologies / Advanced Skills dump buckets.
- * Skills already covered in Summary, Experience, or Skills are not re-added.
+ * Finalize Technical Skills as a complete index of technical terms used in the resume
+ * plus important JD technical requirements. Never creates dump categories.
  */
 function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
-  const jdSkills = collectJdSkills(jdData)
+  const narrative = resumeNarrativeText(resumeData)
 
   let skillCategories = Array.isArray(resumeData.skillCategories)
     ? resumeData.skillCategories.map((c) => ({
@@ -275,7 +396,7 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
       }))
     : []
 
-  // Drop banned dump categories; keep their concrete skills for redistribution
+  // Drop banned dump categories; redistribute concrete skills that belong in the index
   const orphanSkills = []
   skillCategories = skillCategories.filter((c) => {
     if (BANNED_SKILL_CATEGORY_RE.test(c.category)) {
@@ -285,37 +406,77 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
     return Boolean(c.category)
   })
 
+  // Prune research-only / soft / unsupported skills from existing categories
+  skillCategories = skillCategories.map((c) => ({
+    ...c,
+    skills: (c.skills || []).filter((s) => skillBelongsInIndex(s, narrative, jdData)),
+  }))
+
   for (const skill of orphanSkills) {
-    if (isVagueSkill(skill)) continue
+    if (!skillBelongsInIndex(skill, narrative, jdData) && !isJdTechnicalSkill(skill, jdData)) continue
+    if (isVagueSkill(skill) || !isLikelyTechnicalSkill(skill)) continue
     skillCategories = placeSkillInCategories(skillCategories, skill, inferSkillCategoryName(skill))
   }
 
   skillCategories = dedupeCategorySkills(skillCategories)
 
-  const candidates = jdSkills
-    .filter((s) => !isVagueSkill(s))
-    .filter((s) => !skillAlreadyPresent(s, resumeData, skillCategories))
-    .map((s) => ({
-      skill: s,
-      score: jdSkillPriority(s, jdData, resumeData),
-      category: inferSkillCategoryName(s),
-    }))
-    .sort((a, b) => b.score - a.score || a.skill.localeCompare(b.skill))
+  const important = collectImportantTechnicalSkills(
+    { ...resumeData, skillCategories },
+    jdData,
+  )
 
-  // Cap additions so long JD tech lists do not keyword-stuff the Skills section.
-  // Require score >= 2 (required/tools/preferred or experience support) — skip weak domain-only padding.
-  const maxAdd = Math.min(8, Math.max(3, 12 - skillCategories.reduce((n, c) => n + c.skills.length, 0)))
-  const toAdd = candidates.filter((c) => c.score >= 2).slice(0, maxAdd)
-
-  for (const item of toAdd) {
-    skillCategories = placeSkillInCategories(skillCategories, item.skill, item.category)
+  for (const skill of important) {
+    skillCategories = placeSkillInCategories(
+      skillCategories,
+      skill,
+      inferSkillCategoryName(skill),
+    )
   }
 
+  skillCategories = dedupeCategorySkills(skillCategories)
+    .filter((c) => !BANNED_SKILL_CATEGORY_RE.test(c.category))
+    .slice(0, 6)
+
+  // Verify: every important technical keyword is represented exactly once
+  const present = new Set(
+    skillCategories.flatMap((c) => c.skills.map((s) => normalizeSkillKey(s))),
+  )
+  for (const skill of important) {
+    const key = normalizeSkillKey(skill)
+    if (!key || present.has(key)) continue
+    skillCategories = placeSkillInCategories(
+      skillCategories,
+      skill,
+      inferSkillCategoryName(skill),
+    )
+    present.add(key)
+  }
   skillCategories = dedupeCategorySkills(skillCategories).slice(0, 6)
 
-  const flatSkills = [...new Set([
-    ...skillCategories.flatMap((c) => c.skills),
-  ].map((s) => String(s || '').trim()).filter(Boolean))]
+  // Final cross-category uniqueness check
+  const globalSeen = new Set()
+  skillCategories = skillCategories
+    .map((c) => {
+      const skills = []
+      for (const skill of c.skills || []) {
+        const key = normalizeSkillKey(skill)
+        if (!key || globalSeen.has(key)) continue
+        globalSeen.add(key)
+        skills.push(skill)
+      }
+      return { ...c, skills }
+    })
+    .filter((c) => c.skills.length)
+
+  const flatSkills = []
+  const seenFlat = new Set()
+  for (const raw of skillCategories.flatMap((c) => c.skills)) {
+    const skill = String(raw || '').trim()
+    const key = normalizeSkillKey(skill)
+    if (!skill || !key || seenFlat.has(key)) continue
+    seenFlat.add(key)
+    flatSkills.push(skill)
+  }
 
   const experience = (resumeData.experience || []).map((job, jobIdx) => {
     const ranges = [
@@ -333,7 +494,6 @@ function enforceJdSkills(resumeData, jdData, orderedCompanies = []) {
     const bullets = [...(job.bullets || [])].slice(0, maxBullets).map((raw) => {
       let text = String(raw || '').trim()
       if (!text) return text
-      // Soft cleanup only — do not append robotic skill pads
       text = text
         .replace(/\s+/g, ' ')
         .replace(/[–—]/g, ' ')
@@ -399,8 +559,7 @@ function mergeJdResumeWithForm(aiResume, formData, jdData, orderedCompanies) {
       .filter((c) => c.category && c.skills.length && !BANNED_SKILL_CATEGORY_RE.test(c.category))
     : []
 
-  // Do not dump leftover JD skills into Core Technologies here —
-  // enforceJdSkills places only genuine gaps into existing/allowed categories.
+  // Final skill index is built in enforceJdSkills (and again after Experience QA).
   skillCategories = skillCategories.slice(0, 6)
 
   const flatFromCats = skillCategories.flatMap((c) => c.skills)
@@ -483,23 +642,50 @@ export async function runJdBuildJob(jobId, sessionId, { userId = null } = {}) {
     )
     updateSession(sessionId, { companyContexts })
 
+    updateBuildJob(jobId, { step: 'project_memory' })
+    log(jobId, 'building internal project memory per company (not shown on resume)')
+    let projectMemories = []
+    try {
+      projectMemories = await generateJdProjectMemories(ordered, jdData, companyContexts, {
+        yearsOfExperience: Number(formData.yearsOfExperience) || 0,
+      })
+    } catch (err) {
+      log(jobId, `project memory failed (continuing): ${err.message}`)
+      projectMemories = []
+    }
+    log(
+      jobId,
+      projectMemories.length
+        ? `project memory ready: ${projectMemories.map((m) => `${m.company}→${m.projectName}`).join(' | ')}`
+        : 'project memory: none (generation will invent silently)',
+    )
+    updateSession(sessionId, { projectMemories })
+
     updateBuildJob(jobId, { step: 'generating_content' })
-    log(jobId, `generating JD-tailored content (Claude → ChatGPT → Gemini) for ${formData.name} / ${roleTitle}`)
+    log(jobId, `generating JD-tailored content from project memories (Claude → ChatGPT → Gemini) for ${formData.name} / ${roleTitle}`)
 
     const aiResume = await generateResumeFromJd(
       { ...formData, companies: ordered, role: roleTitle },
       jdData,
       companyContexts,
+      projectMemories,
     )
     let resumeData = mergeJdResumeWithForm(aiResume, formData, jdData, ordered)
+    resumeData = stripProjectMemoryLeaks(resumeData, projectMemories)
 
     updateBuildJob(jobId, { step: 'qa_experience' })
     log(jobId, 'running Experience bullet quality check (selective rewrite)')
     resumeData = await improveJdExperienceBullets(resumeData, {
       jdData,
       companyContexts,
+      projectMemories,
       log: (msg) => log(jobId, msg),
     })
+
+    // Re-index Technical Skills after Experience QA so rewritten bullets are covered.
+    resumeData = enforceJdSkills(resumeData, jdData, ordered)
+    resumeData = stripProjectMemoryLeaks(resumeData, projectMemories)
+    log(jobId, `skills finalized — ${resumeData.skillCategories?.length || 0} categories, ${(resumeData.skills || []).length} unique skills`)
 
     updateSession(sessionId, { resumeData })
     const shortBullets = (resumeData.experience || []).flatMap((job) =>
