@@ -283,15 +283,15 @@ Anti-repetition (critical):
  * Summary / Experience / merge behavior are intentionally NOT covered here.
  */
 const JD_SKILLS_RULES = `Technical Skills section (complete technical index — ATS-friendly and scannable):
-- The Skills section MUST be a complete index of every important technical skill used in the resume (Professional Summary, Experience, Projects) PLUS important technical skills required by the JD.
+- The Skills section MUST list every technical skill used in Professional Summary, Experience, and Projects, PLUS important technical skills required by the JD. Do not stop at "missing only" gaps — index all of them.
 - Scan Summary, Experience, and Projects before finalizing Skills. Collect unique technical skills, tools, frameworks, platforms, databases, programming languages, cloud services, ERP modules, libraries, methodologies, and domain technologies that actually appear there or are required by the JD.
 - Return skillCategories with ONLY categories relevant to the target role. Prefer from this set when they apply:
   Programming Languages | Databases | Frameworks and Libraries | Cloud and DevOps | Tools and Platforms | Domain Skills
 - Omit empty or irrelevant categories. Typically 3–6 categories. Do NOT invent filler categories.
 - Ban these category names: Core Technologies, Advanced Skills, Advanced and Modern Skills, Leadership and Communication (and any soft-skill or keyword-dump buckets).
 - Place every skill under the most appropriate existing category. Never create dump categories to absorb leftovers.
-- Each category: short skill NAMES only (e.g. "SQL", "Tableau", "Python") — no descriptions or sentences.
-- Remove duplicates using case-insensitive / spacing-normalized matching (SQL and sql are the same; Power BI and PowerBI are the same). List each skill exactly once across the whole Skills section — never in multiple categories.
+- Each category: short skill NAMES only (e.g. "SQL", "Tableau", "Python", "Oracle Forms") — no descriptions or sentences.
+- Remove duplicates using case-insensitive / spacing-normalized matching (SQL and sql are the same; Power BI and PowerBI are the same; PL/SQL and PLSQL are the same). List each skill exactly once across the whole Skills section — never in multiple categories.
 - Do NOT add tools only because they appeared in company research unless they are used in generated Experience/Projects or required by the JD.
 - Do NOT list soft skills. Never include: Communication, Leadership, Problem Solving, Teamwork, Documentation, Stakeholder Management, Reports, Coding Skills, Business process knowledge, presentation skills, etc. Those belong in Experience narrative only.
 - Do NOT repeat the job title, industry name, or generic terms only to pad keyword count.

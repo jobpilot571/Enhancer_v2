@@ -79,8 +79,12 @@ const ALLOWED_SKILL_CATEGORIES = [
 
 /** Known technical terms to harvest from resume narrative (sorted longest-first for matching). */
 const KNOWN_TECH_TERMS = [
-  'oracle ebs', 'power bi', 'sql server', 'github actions', 'gitlab ci', 'google cloud', 'visual studio',
-  'office 365', 'machine learning', 'data warehouse', 'rest api', 'graphql',
+  'oracle ebs', 'oracle forms', 'oracle reports', 'oracle workflow', 'oracle applications',
+  'oracle financials', 'oa framework', 'bi publisher', 'xml publisher', 'form personalization',
+  'general ledger', 'accounts payable', 'accounts receivable', 'fixed assets', 'cash management',
+  'order management', 'power bi', 'sql server', 'github actions', 'gitlab ci', 'google cloud',
+  'visual studio', 'office 365', 'machine learning', 'data warehouse', 'rest api', 'graphql',
+  'pl/sql', 'plsql', 'oaf', 'workflow',
   'python', 'java', 'javascript', 'typescript', 'golang', 'kotlin', 'scala', 'ruby', 'php', 'matlab', 'swift',
   'sql', 'snowflake', 'redshift', 'bigquery', 'postgres', 'postgresql', 'mysql', 'mongodb', 'dynamodb',
   'oracle', 'cassandra', 'redis', 'databricks', 'synapse', 'teradata', 'hive', 'dbt',
@@ -91,15 +95,26 @@ const KNOWN_TECH_TERMS = [
   'postman', 'figma', 'git', 'linux', 'windows', 'sharepoint', 'apex', 'soql', 'informatica', 'talend',
   'ssis', 'ssrs', 'powerapps', 'power automate', 'alteryx', 'qlik', 'cognos', 'microstrategy',
   'ansible', 'puppet', 'chef', 'prometheus', 'grafana', 'elasticsearch', 'kibana', 'rabbitmq',
-  'agile', 'scrum', 'kanban', 'ci/cd', 'etl', 'elt',
+  'agile', 'scrum', 'kanban', 'ci/cd', 'etl', 'elt', 'toad', 'sql developer', 'unix',
 ].sort((a, b) => b.length - a.length)
 
-/** Identity key for dedupe: case + spacing insensitive (SQL/sql, Power BI/PowerBI). */
+const ACRONYM_BLOCKLIST = new Set([
+  'the', 'and', 'for', 'with', 'from', 'into', 'that', 'this', 'were', 'been', 'have', 'will',
+  'your', 'our', 'all', 'any', 'not', 'but', 'are', 'was', 'can', 'may', 'per', 'via', 'etc',
+  'usa', 'inc', 'llc', 'ltd', 'job', 'jd', 'ba', 'qa', 'hr', 'it', 'pm', 'kpi', 'sla',
+])
+
+const NARRATIVE_VENDOR_RE = /\b((?:Oracle|Microsoft|Google|Amazon|AWS|Azure|SAP|IBM|Salesforce|Power|Visual|SQL|BI|XML|OA|GitHub|GitLab|ServiceNow|Snowflake)\s+[A-Za-z][A-Za-z0-9+#./]*(?:\s+[A-Za-z][A-Za-z0-9+#./]*){0,2})\b/gi
+const NARRATIVE_SLASH_TECH_RE = /\b(?:PL\s*\/\s*SQL|CI\s*\/\s*CD|C\s*\/\s*C\+\+)\b/gi
+const NARRATIVE_ACRONYM_RE = /\b[A-Z]{2,6}\b/g
+
+/** Identity key for dedupe: case + spacing insensitive (SQL/sql, Power BI/PowerBI, PL/SQL/PLSQL). */
 function normalizeSkillKey(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/node\.js/g, 'nodejs')
     .replace(/postgresql/g, 'postgres')
+    .replace(/pl\s*\/\s*sql/g, 'plsql')
     .replace(/c\+\+/g, 'cplusplus')
     .replace(/c#/g, 'csharp')
     .replace(/[^a-z0-9+#.]/g, '')
@@ -123,14 +138,16 @@ function isLikelyTechnicalSkill(skill) {
   if (KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)) return true
   // Multi-token tools / versions / modules (e.g. "Oracle Inventory", "AWS Glue")
   if (/[A-Za-z].*\d|\d.*[A-Za-z]/.test(skill) && key.length >= 3) return true
-  if (/(sql|api|sdk|etl|cicd|ci\/cd|cloud|warehouse|analytics|module|framework|library|platform)/i.test(key)) {
+  if (/(sql|api|sdk|etl|cicd|cloud|warehouse|analytics|module|framework|library|platform|oracle|publisher|workflow|forms|reports)/i.test(key)) {
     return true
   }
   const wordCount = String(skill || '').trim().split(/\s+/).filter(Boolean).length
   if (wordCount >= 2 && key.length >= 4) return true
-  // Short known-style tokens
+  // Short known-style tokens / tech acronyms
   if (/^[a-z][a-z0-9+#.]{1,24}$/i.test(key) && !/^(the|and|for|with|from|into|over|under|team|work|role)$/i.test(key)) {
-    if (key.length <= 3) return /^(sql|aws|gcp|etl|api|sap|git|r)$/i.test(key)
+    if (key.length <= 3) {
+      return /^(sql|aws|gcp|etl|api|sap|git|r|oaf|bip|xml|erp|crm|gl|ap|ar|fa|po|om)$/i.test(key)
+    }
     return /[+#.]/.test(key) || KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)
   }
   return false
@@ -224,6 +241,51 @@ function skillBelongsInIndex(skill, narrative, jdData) {
   return false
 }
 
+/**
+ * Pull tech candidates from Summary / Experience / Projects text.
+ * Indexes every technical tool used there — not only Skills gaps.
+ */
+function extractTechCandidatesFromNarrative(text) {
+  const hay = String(text || '')
+  if (!hay.trim()) return []
+  const out = []
+
+  for (const term of KNOWN_TECH_TERMS) {
+    if (skillMentionedInText(term, hay)) out.push(term)
+  }
+  for (const tool of extractKnownToolsFromText(hay)) {
+    out.push(tool)
+  }
+
+  let m
+  const vendorRe = new RegExp(NARRATIVE_VENDOR_RE.source, 'gi')
+  while ((m = vendorRe.exec(hay)) !== null) {
+    const phrase = String(m[1] || '').trim()
+    if (phrase && !isVagueSkill(phrase)) out.push(phrase)
+  }
+
+  const slashRe = new RegExp(NARRATIVE_SLASH_TECH_RE.source, 'gi')
+  while ((m = slashRe.exec(hay)) !== null) {
+    const raw = String(m[0] || '')
+    if (/pl\s*\/\s*sql/i.test(raw)) out.push('PL/SQL')
+    else if (/ci\s*\/\s*cd/i.test(raw)) out.push('CI/CD')
+    else out.push(raw.replace(/\s+/g, ''))
+  }
+
+  const acronymRe = new RegExp(NARRATIVE_ACRONYM_RE.source, 'g')
+  while ((m = acronymRe.exec(hay)) !== null) {
+    const ac = String(m[0] || '').trim()
+    const key = normalizeSkillKey(ac)
+    if (!key || ACRONYM_BLOCKLIST.has(key)) continue
+    if (key.length <= 3 && !/^(sql|aws|gcp|etl|api|sap|git|oaf|bip|xml|erp|crm|gl|ap|ar|fa|po|om)$/i.test(key)) {
+      if (!KNOWN_TECH_TERMS.some((t) => normalizeSkillKey(t) === key)) continue
+    }
+    out.push(ac)
+  }
+
+  return out
+}
+
 function harvestTechFromNarrative(text, knownAliases = []) {
   const found = new Map() // key -> display
   const hay = String(text || '')
@@ -233,6 +295,7 @@ function harvestTechFromNarrative(text, knownAliases = []) {
     ...KNOWN_TECH_TERMS,
     ...knownAliases.map((s) => String(s || '').trim()).filter(Boolean),
     ...extractKnownToolsFromText(hay),
+    ...extractTechCandidatesFromNarrative(hay),
   ]
   // longest first so multi-word terms win display preference when both match
   catalog.sort((a, b) => b.length - a.length)
@@ -250,14 +313,15 @@ function collectImportantTechnicalSkills(resumeData, jdData) {
   const byKey = new Map() // key -> display name
   const narrative = resumeNarrativeText(resumeData)
 
-  const add = (skill, { requireEvidence = true, fromJd = false } = {}) => {
+  const add = (skill, { requireEvidence = true, fromJd = false, fromNarrative = false } = {}) => {
     const raw = String(skill || '').trim()
     if (!raw) return
     if (isVagueSkill(raw)) return
     const looksTechnical = isLikelyTechnicalSkill(raw)
+      || fromNarrative
       || (fromJd && /^[A-Za-z][A-Za-z0-9+.#/\s-]{1,40}$/.test(raw) && normalizeSkillKey(raw).length >= 2)
     if (!looksTechnical) return
-    if (requireEvidence && !skillBelongsInIndex(raw, narrative, jdData)) return
+    if (requireEvidence && !fromNarrative && !skillBelongsInIndex(raw, narrative, jdData)) return
     const key = normalizeSkillKey(raw)
     if (!key) return
     byKey.set(key, pickDisplayName([byKey.get(key), raw]))
@@ -281,20 +345,22 @@ function collectImportantTechnicalSkills(resumeData, jdData) {
     }
   }
 
-  // Harvest tech terms actually used in Summary / Experience / Projects
+  // Index ALL technical tools used in Summary / Experience / Projects (deduped)
   const knownAliases = [
     ...byKey.values(),
     ...jdTechnicalPool(jdData),
     ...(jdData?.domainKeywords || []),
   ]
   const harvested = harvestTechFromNarrative(narrative, knownAliases)
-  for (const [key, display] of harvested) {
-    byKey.set(key, pickDisplayName([byKey.get(key), display]))
+  for (const [, display] of harvested) {
+    add(display, { requireEvidence: false, fromNarrative: true })
   }
 
-  // Also pull dictionary tools found in narrative (covers terms beyond local list)
-  for (const tool of extractKnownToolsFromText(narrative)) {
-    add(tool, { requireEvidence: false })
+  for (const tool of [
+    ...extractKnownToolsFromText(narrative),
+    ...extractTechCandidatesFromNarrative(narrative),
+  ]) {
+    add(tool, { requireEvidence: false, fromNarrative: true })
   }
 
   return [...byKey.values()]
@@ -304,21 +370,21 @@ function inferSkillCategoryName(skill) {
   const s = normalizeSkillKey(skill)
   if (!s) return 'Tools and Platforms'
 
-  if (/^(python|java|javascript|typescript|cplusplus|csharp|go|golang|ruby|php|scala|kotlin|swift|r|sas|matlab|bash|shell|apex|soql)$/.test(s)) {
+  if (/^(python|java|javascript|typescript|cplusplus|csharp|go|golang|ruby|php|scala|kotlin|swift|r|sas|matlab|bash|shell|apex|soql|plsql)$/.test(s)) {
     return 'Programming Languages'
   }
   if (/^(sql|sqlserver|snowflake|redshift|bigquery|postgres|mysql|mongodb|dynamodb|oracle|cassandra|redis|databricks|synapse|teradata|hive|dbt)$/.test(s)
     || /datawarehouse|database/.test(s)) {
     return 'Databases'
   }
-  if (/react|angular|vue|nodejs|django|flask|spring|fastapi|express|dotnet|rails|laravel|nextjs|pandas|numpy|scikit|tensorflow|pytorch|spark|hadoop|kafka|framework|library|sdk/.test(s)) {
+  if (/react|angular|vue|nodejs|django|flask|spring|fastapi|express|dotnet|rails|laravel|nextjs|pandas|numpy|scikit|tensorflow|pytorch|spark|hadoop|kafka|framework|library|sdk|oaf|oaframework/.test(s)) {
     return 'Frameworks and Libraries'
   }
   if (/aws|azure|gcp|googlecloud|kubernetes|docker|terraform|jenkins|githubactions|gitlabci|cicd|devops|airflow|lambda|^s3$|^ec2$|ansible|prometheus|grafana/.test(s)
     || (/cloud/.test(s) && !/microsoft/.test(s))) {
     return 'Cloud and DevOps'
   }
-  if (/tableau|powerbi|looker|excel|jira|confluence|salesforce|sap|oracleebs|servicenow|figma|postman|splunk|datadog|git|linux|windows|office|sharepoint|alteryx|qlik|cognos|informatica|talend|ssis|ssrs|powerapps|powerautomate|etl|elt|module/.test(s)) {
+  if (/tableau|powerbi|looker|excel|jira|confluence|salesforce|sap|oracleebs|oracleforms|oraclereports|oracleworkflow|bipublisher|xmlpublisher|servicenow|figma|postman|splunk|datadog|git|linux|windows|office|sharepoint|alteryx|qlik|cognos|informatica|talend|ssis|ssrs|powerapps|powerautomate|etl|elt|module|toad|sqldeveloper|unix|workflow/.test(s)) {
     return 'Tools and Platforms'
   }
   if (/agile|scrum|kanban|machinelearning|analytics|forecast|inventory|erp|crm/.test(s)) {
