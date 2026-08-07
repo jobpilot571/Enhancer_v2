@@ -35,43 +35,106 @@ export default function PreviewDownloadStep({
     }
   }
 
+  const ready = Boolean(previewBlob) && !building
+  const showPending = building && !previewBlob
+
   return (
-    <div className="jd-step">
+    <div className="jd-step jd-step--preview">
       <header className="jd-step__header">
         <h4 className="jd-step__title">Preview</h4>
         <p className="jd-step__desc">
           {building
             ? (buildStepLabel || 'Building your resume…')
             : previewBlob
-              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Use the sticky AI Assistant (bottom-right) if you need changes.`
-              : 'Build a resume, then use the sticky AI Assistant anytime if you get stuck.'}
+              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Preview it below, then download your DOCX.`
+              : 'Build a resume, then preview and download it here.'}
         </p>
       </header>
 
-      {building && !previewBlob && (
-        <p className="enhancer-progress">{buildStepLabel || 'Building resume…'}</p>
-      )}
-
-      {previewBlob ? (
-        <div className="builder-preview-panel">
+      <section
+        className="enhance-preview-block enhance-preview-block--section jd-preview-block"
+        aria-label="Resume preview"
+      >
+        <div className="resume-enhancer-workspace resume-enhancer-workspace--previews jd-preview-workspace">
           <div className="upload-box">
+            <div className="upload-box__header">
+              <div className="upload-box__label-group">
+                <div>
+                  <h4 className="upload-box__label">Your Resume</h4>
+                  <p className="upload-box__sublabel">
+                    {builtRole
+                      ? `JD-tailored · ${builtRole}`
+                      : 'Optimized content, DOCX preview'}
+                  </p>
+                </div>
+              </div>
+            </div>
             <div className="upload-box__content upload-box__content--docx">
-              <DocumentPreview blob={previewBlob} fileType="docx" emptyLabel="Preview will appear here" />
+              <DocumentPreview
+                blob={previewBlob}
+                fileType="docx"
+                emptyLabel={
+                  building
+                    ? (buildStepLabel || 'Building your resume…')
+                    : 'Your resume will appear here after you click Build Resume'
+                }
+              />
             </div>
           </div>
         </div>
-      ) : (
-        !building && (
-          <p className="builder-hint">
-            No resume yet. Choose a template and click Build Resume.
+
+        {(ready || showPending) && (
+          <div className={`enhancer-ready ${ready ? 'enhancer-ready--ok' : 'enhancer-ready--pending'}`}>
+            <div className="enhancer-ready__copy">
+              <strong>
+                {ready ? 'Your resume is ready' : 'Building your resume'}
+              </strong>
+              <span>
+                {ready
+                  ? 'Preview it above, then download your DOCX.'
+                  : (buildStepLabel || 'Working on your resume…')}
+              </span>
+            </div>
+
+            {ready ? (
+              <button
+                type="button"
+                className="btn btn--primary btn--xl enhancer-download-btn"
+                onClick={handleDownload}
+                disabled={saving}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                {saving ? 'Saving…' : 'Download DOCX'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
+                disabled
+                aria-busy="true"
+              >
+                <span className="btn-spinner" />
+                {buildStepLabel || 'Loading…'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {ready && (
+          <p className="enhancer-assistant-hint">
+            Need changes? Use the sticky <strong>AI Assistant</strong> (bottom-right) — attach a screenshot if helpful.
           </p>
-        )
-      )}
+        )}
+      </section>
 
       {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
       {saveError && <p className="builder-error" role="alert">{saveError}</p>}
 
-      <div className="form-cta form-cta--nav" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+      <div className="form-cta form-cta--nav jd-preview-secondary-cta">
         <button
           type="button"
           className="btn btn--outline btn--xl"
@@ -80,16 +143,6 @@ export default function PreviewDownloadStep({
         >
           Build new resume
         </button>
-        {previewBlob && (
-          <button
-            type="button"
-            className="btn btn--primary btn--xl"
-            onClick={handleDownload}
-            disabled={building || saving}
-          >
-            {saving ? 'Saving…' : 'Download DOCX'}
-          </button>
-        )}
       </div>
     </div>
   )

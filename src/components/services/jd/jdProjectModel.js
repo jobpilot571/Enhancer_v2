@@ -254,6 +254,41 @@ export function createEmptyProject() {
   }
 }
 
+/**
+ * After a successful build, wipe JD / Target / References / Templates
+ * so the next build starts clean — but keep Basics + session/preview linkage.
+ */
+export function resetProjectKeepingBasics(project = {}) {
+  const empty = createEmptyProject()
+  const basics = project?.basicInformation || {}
+  const education = Array.isArray(basics.education) && basics.education.length
+    ? basics.education
+    : empty.basicInformation.education
+  const previewIndex = JD_STEPS.findIndex((s) => s.id === 'preview')
+
+  return {
+    ...empty,
+    id: project?.id || empty.id,
+    basicInformation: {
+      ...empty.basicInformation,
+      fullName: basics.fullName || '',
+      email: basics.email || '',
+      phone: basics.phone || '',
+      linkedin: basics.linkedin || '',
+      city: basics.city || '',
+      state: basics.state || '',
+      education,
+      basicResumeFileName: basics.basicResumeFileName || '',
+      basicResumeExtracted: Boolean(basics.basicResumeExtracted),
+    },
+    sessionId: project?.sessionId || null,
+    previewReady: Boolean(project?.previewReady),
+    status: project?.status === 'completed' ? 'completed' : (project?.status || 'draft'),
+    currentStep: previewIndex >= 0 ? previewIndex : 0,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 /** Soft warnings for build review — do not block unless required fields missing. */
 export function collectWarnings(project) {
   const w = []

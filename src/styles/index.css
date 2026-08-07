@@ -5004,6 +5004,53 @@ body:has(.service-block--enhancer) .footer__col h4 {
 .builder-preview-panel .upload-box__content--docx {
   min-height: 420px;
 }
+
+/* JD Preview — match Resume Enhancer document pane (single column, 72vh) */
+.service-block--jd-wizard .jd-preview-block {
+  margin-top: 4px;
+}
+.service-block--jd-wizard .jd-preview-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0;
+  width: 100%;
+}
+.service-block--jd-wizard .jd-preview-workspace .upload-box {
+  border-radius: 12px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  height: auto;
+}
+.service-block--jd-wizard .jd-preview-workspace .upload-box__header {
+  padding: 8px 12px;
+}
+.service-block--jd-wizard .jd-preview-workspace .upload-box__content--docx {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1 1 auto;
+  height: 72vh;
+  max-height: 72vh;
+  min-height: 72vh;
+}
+.service-block--jd-wizard .jd-preview-workspace .upload-box__content--docx .docx-viewer {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.service-block--jd-wizard .jd-preview-secondary-cta {
+  justify-content: flex-start;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: none;
+}
 .builder-error {
   margin: 20px 0 0;
   padding: 12px 14px;
@@ -6225,6 +6272,11 @@ body:has(.service-block--enhancer) .footer__col h4 {
   }
   .service-block--workspace .upload-box__content--docx,
   .service-block--workspace .upload-box__content--jd {
+    height: clamp(220px, 42vh, 420px);
+    max-height: clamp(220px, 42vh, 420px);
+    min-height: 220px;
+  }
+  .service-block--jd-wizard .jd-preview-workspace .upload-box__content--docx {
     height: clamp(220px, 42vh, 420px);
     max-height: clamp(220px, 42vh, 420px);
     min-height: 220px;
@@ -8296,6 +8348,11 @@ canvas {
 
   .service-block--workspace .upload-box__content--docx,
   .service-block--workspace .upload-box__content--jd {
+    height: min(52vh, 380px);
+    max-height: min(52vh, 380px);
+    min-height: 200px;
+  }
+  .service-block--jd-wizard .jd-preview-workspace .upload-box__content--docx {
     height: min(52vh, 380px);
     max-height: min(52vh, 380px);
     min-height: 200px;

@@ -15,6 +15,7 @@ import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../../api/admin
 import {
   JD_STEPS,
   createEmptyProject,
+  resetProjectKeepingBasics,
   validateStep,
   toLegacyBuildPayload,
   emptyEducation,
@@ -72,6 +73,7 @@ export default function JdBuilderWizard() {
   const [buildStep, setBuildStep] = useState('')
   const [previewBlob, setPreviewBlob] = useState(null)
   const [builtRole, setBuiltRole] = useState('')
+  const [lastBuildMeta, setLastBuildMeta] = useState(null)
   const [basicUploading, setBasicUploading] = useState(false)
   const [templateSamples, setTemplateSamples] = useState({})
   const [sampleBlobs, setSampleBlobs] = useState({})
@@ -247,6 +249,7 @@ export default function JdBuilderWizard() {
     clearJdDraft(userId)
     setPreviewBlob(null)
     setBuiltRole('')
+    setLastBuildMeta(null)
     setBuildStep('')
     setError('')
     const fresh = createEmptyProject()
@@ -263,9 +266,12 @@ export default function JdBuilderWizard() {
     const blob = previewBlob
     if (!blob) throw new Error('No resume ready to download.')
 
-    const role = builtRole || current.targetRole?.jobTitle || 'Resume'
-    const years = computeYearsOfExperience(current.experiences || [])
-    const yearsRequired = current.targetRole?.yearsRequired
+    const role = builtRole || lastBuildMeta?.role || current.targetRole?.jobTitle || 'Resume'
+    const years = lastBuildMeta?.yearsOfExperience
+      ?? computeYearsOfExperience(current.experiences || [])
+    const yearsRequired = lastBuildMeta?.yearsRequired ?? current.targetRole?.yearsRequired
+    const jdText = lastBuildMeta?.jdText || current.targetRole?.jobDescription || ''
+    const templateId = lastBuildMeta?.templateId || current.selectedTemplateId || ''
     const fileName = `${String(role).replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'resume'}-jd-tailored.docx`
 
     const href = URL.createObjectURL(blob)
@@ -282,8 +288,8 @@ export default function JdBuilderWizard() {
       role,
       yearsOfExperience: years || null,
       yearsRequired: yearsRequired || null,
-      jdText: current.targetRole?.jobDescription || '',
-      templateId: current.selectedTemplateId || '',
+      jdText,
+      templateId,
       fileName,
     })
     setSavedRefreshKey((n) => n + 1)
@@ -350,14 +356,22 @@ export default function JdBuilderWizard() {
       const blob = await fetchFileBlob(result.sessionId || sid)
       setPreviewBlob(blob)
       setBuiltRole(result.roleTitle || payload.role)
+      setLastBuildMeta({
+        role: result.roleTitle || payload.role || '',
+        jdText: current.targetRole?.jobDescription || '',
+        yearsOfExperience: computeYearsOfExperience(current.experiences || []),
+        yearsRequired: current.targetRole?.yearsRequired || null,
+        templateId: current.selectedTemplateId || '',
+      })
+      // Keep Basics only — clear JD, Target, References, Templates for the next build.
+      // Preserve sessionId so Preview download still works.
       setProject((prev) => {
-        const next = {
+        const next = resetProjectKeepingBasics({
           ...prev,
           sessionId: result.sessionId || sid,
           status: 'completed',
           previewReady: true,
-          currentStep: previewIndex,
-        }
+        })
         persist(next, previewIndex)
         return next
       })
