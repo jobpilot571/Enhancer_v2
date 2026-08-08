@@ -28,7 +28,7 @@ const CARD_RENDER_OPTIONS = {
   useBase64URL: true,
 }
 
-function fitDocxToWidth(container, scalerEl, bodyEl, { cover = false } = {}) {
+function fitDocxToWidth(container, scalerEl, bodyEl, { cover = false, maxScale = 1 } = {}) {
   const wrapper = bodyEl.querySelector('.docx-wrapper')
   if (!wrapper || !container || !scalerEl) return
 
@@ -44,8 +44,10 @@ function fitDocxToWidth(container, scalerEl, bodyEl, { cover = false } = {}) {
   const naturalH = wrapper.scrollHeight
   if (naturalW <= 0 || naturalH <= 0) return
 
-  // Always fit full page width so sides aren't cropped; height scrolls in the card.
-  const scale = availW / naturalW
+  // Fit page width, but never enlarge past maxScale (default 1 = 100%).
+  // Wide containers used to scale UP and look full-screen / unreadable.
+  const rawScale = availW / naturalW
+  const scale = Math.min(rawScale, Number.isFinite(maxScale) ? maxScale : 1)
 
   bodyEl.style.width = `${naturalW}px`
   bodyEl.style.height = `${naturalH}px`
@@ -60,20 +62,23 @@ export default function DocxViewer({
   className = '',
   emptyLabel = 'Upload a DOCX or PDF resume to preview',
   previewMode = 'default',
+  /** Cap fit-to-width scale (e.g. 0.72 for compact JD preview). Default 1 = never enlarge. */
+  maxScale = 1,
 }) {
   const containerRef = useRef(null)
   const scalerRef = useRef(null)
   const bodyRef = useRef(null)
   const styleRef = useRef(null)
   const isCard = previewMode === 'card'
+  const scaleCap = isCard ? Infinity : maxScale
 
   const fitToWidth = useCallback(() => {
     const container = containerRef.current
     const scalerEl = scalerRef.current
     const bodyEl = bodyRef.current
     if (!container || !scalerEl || !bodyEl?.querySelector('.docx-wrapper')) return
-    fitDocxToWidth(container, scalerEl, bodyEl, { cover: false })
-  }, [isCard])
+    fitDocxToWidth(container, scalerEl, bodyEl, { cover: false, maxScale: scaleCap })
+  }, [isCard, scaleCap])
 
   useEffect(() => {
     const bodyEl = bodyRef.current

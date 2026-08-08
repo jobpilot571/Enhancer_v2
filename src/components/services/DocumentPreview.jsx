@@ -18,11 +18,19 @@ export default function DocumentPreview({
   fileType,
   className = '',
   emptyLabel = 'Upload a DOCX or PDF resume to preview',
+  maxScale,
 }) {
   const type = detectPreviewType(blob, fileType)
 
   if (type === 'pdf') {
     return <PdfViewer blob={blob} className={className} emptyLabel={emptyLabel} />
   }
-  return <DocxViewer blob={blob} className={className} emptyLabel={emptyLabel} />
+  return (
+    <DocxViewer
+      blob={blob}
+      className={className}
+      emptyLabel={emptyLabel}
+      maxScale={maxScale}
+    />
+  )
 }

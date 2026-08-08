@@ -5005,24 +5005,28 @@ body:has(.service-block--enhancer) .footer__col h4 {
   min-height: 420px;
 }
 
-/* JD Preview — single pane sized like ONE Enhancer column (not full-bleed) */
+/* JD Preview — single compact pane like ONE Enhancer column (not full-bleed) */
+.service-block--jd-wizard .jd-step--preview .form-card,
 .service-block--jd-wizard .jd-preview-block {
   margin-top: 4px;
 }
-.service-block--jd-wizard .jd-preview-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) !important;
-  gap: 0;
-  /* Match approximate width of one enhancer dual-pane column so fit-to-width
-     scales the page down and more of the resume is visible at once. */
+.service-block--jd-wizard .jd-preview-block.enhance-preview-block {
   width: 100%;
-  max-width: min(560px, 100%);
-  margin-inline: auto;
+  max-width: 100%;
+}
+.service-block--jd-wizard .jd-preview-workspace.resume-enhancer-workspace {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  width: min(520px, 100%) !important;
+  max-width: min(520px, 100%) !important;
+  margin-inline: auto !important;
 }
 .service-block--jd-wizard .jd-preview-workspace .upload-box {
   border-radius: 12px;
   min-width: 0;
-  max-width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
   overflow: hidden;
   height: auto;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -6291,8 +6295,9 @@ body:has(.service-block--enhancer) .footer__col h4 {
     max-height: clamp(220px, 42vh, 420px);
     min-height: 220px;
   }
-  .service-block--jd-wizard .jd-preview-workspace {
-    max-width: min(520px, 100%);
+  .service-block--jd-wizard .jd-preview-workspace.resume-enhancer-workspace {
+    width: min(480px, 100%) !important;
+    max-width: min(480px, 100%) !important;
   }
   .enhancer-topbar {
     flex-wrap: wrap;
@@ -8370,8 +8375,9 @@ canvas {
     max-height: min(52vh, 380px);
     min-height: 200px;
   }
-  .service-block--jd-wizard .jd-preview-workspace {
-    max-width: 100%;
+  .service-block--jd-wizard .jd-preview-workspace.resume-enhancer-workspace {
+    width: 100% !important;
+    max-width: 100% !important;
   }
 
   .docx-viewer {

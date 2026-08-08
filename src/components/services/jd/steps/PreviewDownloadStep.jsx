@@ -73,6 +73,7 @@ export default function PreviewDownloadStep({
               <DocumentPreview
                 blob={previewBlob}
                 fileType="docx"
+                maxScale={0.72}
                 emptyLabel={
                   building
                     ? (buildStepLabel || 'Building your resume…')
