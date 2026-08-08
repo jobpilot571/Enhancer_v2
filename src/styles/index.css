@@ -5065,6 +5065,48 @@ body:has(.service-block--enhancer) .footer__col h4 {
 .service-block--jd-wizard .jd-preview-block .enhancer-ready {
   margin-top: 16px;
 }
+.jd-preview-preparing {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  box-sizing: border-box;
+  background: #f3f4f6;
+}
+.jd-preview-preparing__spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+  border-color: rgba(4, 120, 87, 0.2);
+  border-top-color: #047857;
+  margin-bottom: 4px;
+}
+.jd-preview-preparing__title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  color: var(--gray-900);
+  letter-spacing: -0.01em;
+}
+.jd-preview-preparing__step {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--green-700, #047857);
+  line-height: 1.4;
+  max-width: 320px;
+}
+.jd-preview-preparing__hint {
+  font-size: 0.8125rem;
+  color: var(--gray-500);
+  line-height: 1.45;
+  max-width: 300px;
+}
 .builder-error {
   margin: 20px 0 0;
   padding: 12px 14px;

@@ -16,6 +16,7 @@ import {
   JD_STEPS,
   createEmptyProject,
   resetProjectKeepingBasics,
+  shouldOpenOnBasics,
   validateStep,
   toLegacyBuildPayload,
   emptyEducation,
@@ -59,10 +60,19 @@ export default function JdBuilderWizard() {
     if (Number(merged.currentStep) >= JD_STEPS.length) {
       merged.currentStep = JD_STEPS.findIndex((s) => s.id === 'templates')
     }
+    // After a finished build, return visitors should land on Basics — not empty Preview
+    if (shouldOpenOnBasics(merged)) {
+      merged.currentStep = 0
+      merged.status = 'draft'
+      merged.previewReady = false
+      merged.sessionId = null
+    }
     return merged
   })
   const [step, setStep] = useState(() => {
     const saved = readJdDraft(userId)
+    if (!saved?.project) return 0
+    if (shouldOpenOnBasics(saved.project)) return 0
     const s = Number(saved?.project?.currentStep)
     if (!Number.isFinite(s)) return 0
     return Math.min(JD_STEPS.length - 1, Math.max(0, s))
@@ -111,8 +121,33 @@ export default function JdBuilderWizard() {
     return () => { cancelled = true }
   }, [])
 
+  // Rewrite stale post-build drafts so return visits stay on Basics
+  useEffect(() => {
+    const saved = readJdDraft(userId)
+    if (!saved?.project || !shouldOpenOnBasics(saved.project)) return
+    writeJdDraft(userId, {
+      ...project,
+      currentStep: 0,
+      status: 'draft',
+      previewReady: false,
+      sessionId: null,
+    })
+    // only on mount / user change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId])
+
   const persist = useCallback((nextProject, nextStep = step) => {
-    const withStep = { ...nextProject, currentStep: nextStep }
+    let withStep = { ...nextProject, currentStep: nextStep }
+    // Don't leave return visitors stuck on empty Preview after a finished build
+    if (shouldOpenOnBasics(withStep) && nextProject.status !== 'generating') {
+      withStep = {
+        ...withStep,
+        currentStep: 0,
+        status: 'draft',
+        previewReady: false,
+        sessionId: null,
+      }
+    }
     writeJdDraft(userId, withStep)
   }, [userId, step])
 
@@ -323,10 +358,10 @@ export default function JdBuilderWizard() {
     setError('')
     setPreviewBlob(null)
     setBuiltRole('')
-    setBuildStep('parsing_jd')
+    setBuildStep('preparing_preview')
 
     const previewIndex = JD_STEPS.findIndex((s) => s.id === 'preview')
-    // Jump to Preview immediately so progress is visible
+    // Jump to Preview immediately so the preparing state is visible
     setStep(previewIndex)
     setProject((prev) => {
       const next = { ...prev, status: 'generating', currentStep: previewIndex }
@@ -364,16 +399,18 @@ export default function JdBuilderWizard() {
         templateId: current.selectedTemplateId || '',
       })
       // Keep Basics only — clear JD, Target, References, Templates for the next build.
-      // Preserve sessionId so Preview download still works.
+      // Stay on Preview in this session so they can download; draft is saved on Basics
+      // so a later return visit does not open an empty Preview.
       setProject((prev) => {
-        const next = resetProjectKeepingBasics({
-          ...prev,
+        const cleared = resetProjectKeepingBasics(prev)
+        persist(cleared, 0)
+        return {
+          ...cleared,
+          currentStep: previewIndex,
           sessionId: result.sessionId || sid,
-          status: 'completed',
           previewReady: true,
-        })
-        persist(next, previewIndex)
-        return next
+          status: 'completed',
+        }
       })
       setStep(previewIndex)
     } catch (err) {

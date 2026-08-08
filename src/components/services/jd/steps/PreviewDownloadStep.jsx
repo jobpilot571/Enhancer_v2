@@ -36,15 +36,16 @@ export default function PreviewDownloadStep({
   }
 
   const ready = Boolean(previewBlob) && !building
-  const showPending = building && !previewBlob
+  const preparing = building && !previewBlob
+  const stepText = buildStepLabel || 'Preparing your resume…'
 
   return (
     <div className="jd-step jd-step--preview">
       <header className="jd-step__header">
         <h4 className="jd-step__title">Preview</h4>
         <p className="jd-step__desc">
-          {building
-            ? (buildStepLabel || 'Building your resume…')
+          {preparing
+            ? stepText
             : previewBlob
               ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Preview it below, then download your DOCX.`
               : 'Build a resume, then preview and download it here.'}
@@ -62,38 +63,45 @@ export default function PreviewDownloadStep({
                 <div>
                   <h4 className="upload-box__label">Your Resume</h4>
                   <p className="upload-box__sublabel">
-                    {builtRole
-                      ? `JD-tailored · ${builtRole}`
-                      : 'Optimized content, DOCX preview'}
+                    {preparing
+                      ? 'Preparing preview…'
+                      : builtRole
+                        ? `JD-tailored · ${builtRole}`
+                        : 'Optimized content, DOCX preview'}
                   </p>
                 </div>
               </div>
             </div>
             <div className="upload-box__content upload-box__content--docx">
-              <DocumentPreview
-                blob={previewBlob}
-                fileType="docx"
-                maxScale={0.87}
-                emptyLabel={
-                  building
-                    ? (buildStepLabel || 'Building your resume…')
-                    : 'Your resume will appear here after you click Build Resume'
-                }
-              />
+              {preparing ? (
+                <div className="jd-preview-preparing" role="status" aria-live="polite" aria-busy="true">
+                  <span className="btn-spinner jd-preview-preparing__spinner" aria-hidden="true" />
+                  <strong className="jd-preview-preparing__title">Your resume is preparing</strong>
+                  <span className="jd-preview-preparing__step">{stepText}</span>
+                  <span className="jd-preview-preparing__hint">This usually takes about a minute. Please keep this tab open.</span>
+                </div>
+              ) : (
+                <DocumentPreview
+                  blob={previewBlob}
+                  fileType="docx"
+                  maxScale={0.87}
+                  emptyLabel="Your resume will appear here after you click Build Resume"
+                />
+              )}
             </div>
           </div>
         </div>
 
-        {(ready || showPending) && (
+        {(ready || preparing) && (
           <div className={`enhancer-ready ${ready ? 'enhancer-ready--ok' : 'enhancer-ready--pending'}`}>
             <div className="enhancer-ready__copy">
               <strong>
-                {ready ? 'Your resume is ready' : 'Building your resume'}
+                {ready ? 'Your resume is ready' : 'Preparing your resume'}
               </strong>
               <span>
                 {ready
                   ? 'Preview it above, then download your DOCX.'
-                  : (buildStepLabel || 'Working on your resume…')}
+                  : stepText}
               </span>
             </div>
 
@@ -119,7 +127,7 @@ export default function PreviewDownloadStep({
                 aria-busy="true"
               >
                 <span className="btn-spinner" />
-                {buildStepLabel || 'Loading…'}
+                {stepText}
               </button>
             )}
           </div>

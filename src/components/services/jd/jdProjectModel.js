@@ -256,7 +256,8 @@ export function createEmptyProject() {
 
 /**
  * After a successful build, wipe JD / Target / References / Templates
- * so the next build starts clean — but keep Basics + session/preview linkage.
+ * so the next build starts clean — but keep Basics.
+ * currentStep is Basics so a return visit does not land on an empty Preview.
  */
 export function resetProjectKeepingBasics(project = {}) {
   const empty = createEmptyProject()
@@ -264,7 +265,6 @@ export function resetProjectKeepingBasics(project = {}) {
   const education = Array.isArray(basics.education) && basics.education.length
     ? basics.education
     : empty.basicInformation.education
-  const previewIndex = JD_STEPS.findIndex((s) => s.id === 'preview')
 
   return {
     ...empty,
@@ -281,12 +281,24 @@ export function resetProjectKeepingBasics(project = {}) {
       basicResumeFileName: basics.basicResumeFileName || '',
       basicResumeExtracted: Boolean(basics.basicResumeExtracted),
     },
-    sessionId: project?.sessionId || null,
-    previewReady: Boolean(project?.previewReady),
-    status: project?.status === 'completed' ? 'completed' : (project?.status || 'draft'),
-    currentStep: previewIndex >= 0 ? previewIndex : 0,
+    sessionId: null,
+    previewReady: false,
+    status: 'draft',
+    currentStep: 0,
     updatedAt: new Date().toISOString(),
   }
+}
+
+/** True when a saved draft is post-build (Basics kept, other sections cleared) and should open on Basics. */
+export function shouldOpenOnBasics(project = {}) {
+  if (!project || typeof project !== 'object') return true
+  if (project.status === 'completed') return true
+  const stepId = JD_STEPS[Number(project.currentStep)]?.id
+  if (stepId !== 'preview' && stepId !== 'saved') return false
+  const jd = String(project.targetRole?.jobDescription || '').trim()
+  const hasCompany = (project.experiences || []).some((e) => String(e?.companyName || '').trim())
+  // Preview/Saved with no JD and no companies = leftover after a finished build
+  return !jd && !hasCompany
 }
 
 /** Soft warnings for build review — do not block unless required fields missing. */
