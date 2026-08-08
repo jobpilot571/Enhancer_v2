@@ -5018,8 +5018,8 @@ body:has(.service-block--enhancer) .footer__col h4 {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) !important;
   gap: 0 !important;
-  width: min(520px, 100%) !important;
-  max-width: min(520px, 100%) !important;
+  width: min(572px, 100%) !important;
+  max-width: min(572px, 100%) !important;
   margin-inline: auto !important;
 }
 .service-block--jd-wizard .jd-preview-workspace .upload-box {
@@ -6296,8 +6296,8 @@ body:has(.service-block--enhancer) .footer__col h4 {
     min-height: 220px;
   }
   .service-block--jd-wizard .jd-preview-workspace.resume-enhancer-workspace {
-    width: min(480px, 100%) !important;
-    max-width: min(480px, 100%) !important;
+    width: min(528px, 100%) !important;
+    max-width: min(528px, 100%) !important;
   }
   .enhancer-topbar {
     flex-wrap: wrap;
