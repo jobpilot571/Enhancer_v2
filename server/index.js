@@ -134,6 +134,10 @@ app.listen(PORT, () => {
   if (claude) {
     console.log(`[AI] Claude model: ${claude.model} (env CLAUDE_MODEL=${process.env.CLAUDE_MODEL || '(unset)'})`)
   }
+  const gemini = getConfiguredProviders().find((p) => /gemini/i.test(p.label))
+  if (gemini) {
+    console.log(`[AI] Gemini model: ${gemini.model} (env GEMINI_MODEL=${process.env.GEMINI_MODEL || '(unset)'})`)
+  }
   // Seed fictional DOCX samples for JD gallery templates (never overwrites admin uploads)
   import('./store/adminStore.js')
     .then(({ ensureDemoSamples, JD_DEMO_TEMPLATE_IDS }) =>

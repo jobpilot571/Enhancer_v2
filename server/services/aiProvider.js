@@ -168,15 +168,19 @@ const CLAUDE_MODEL_FALLBACKS = [
   'claude-sonnet-4-5',
 ]
 
-function resolveClaudeModel(raw) {
-  let requested = String(raw || 'claude-sonnet-5').trim() || 'claude-sonnet-5'
-  // Env UIs sometimes wrap values in quotes
+function stripWrappedQuotes(raw) {
+  let value = String(raw || '').trim()
   if (
-    (requested.startsWith('"') && requested.endsWith('"'))
-    || (requested.startsWith("'") && requested.endsWith("'"))
+    (value.startsWith('"') && value.endsWith('"'))
+    || (value.startsWith("'") && value.endsWith("'"))
   ) {
-    requested = requested.slice(1, -1).trim()
+    value = value.slice(1, -1).trim()
   }
+  return value
+}
+
+function resolveClaudeModel(raw) {
+  const requested = stripWrappedQuotes(raw || 'claude-sonnet-5') || 'claude-sonnet-5'
   let mapped = CLAUDE_MODEL_REMAP[requested] || requested
   // Catch any remaining Claude 3.x Sonnet IDs that are no longer on the API
   if (/claude-3(?:\.\d)?-?5?-?sonnet/i.test(mapped) || /claude-3-7-sonnet/i.test(mapped)) {
@@ -202,10 +206,10 @@ function makeClaude({ apiKey, model }) {
     let lastErr = null
     for (const candidate of candidates) {
       try {
+        // Newer Claude models (Sonnet 5 / Opus 4.7+) reject temperature/top_p/top_k.
         const res = await client.messages.create({
           model: candidate,
           max_tokens: options.maxTokens || 4096,
-          temperature: 0.2,
           system: system + schemaInstruction(schema),
           messages: [{ role: 'user', content: user }],
         })
@@ -231,31 +235,90 @@ function makeClaude({ apiKey, model }) {
 }
 
 /* ---------- Google Gemini ---------- */
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+
+/** Retired / shut-down IDs still set in some Render envs → current Flash. */
+const GEMINI_MODEL_REMAP = {
+  'gemini-1.5-flash': DEFAULT_GEMINI_MODEL,
+  'gemini-1.5-flash-latest': DEFAULT_GEMINI_MODEL,
+  'gemini-1.5-flash-001': DEFAULT_GEMINI_MODEL,
+  'gemini-1.5-pro': DEFAULT_GEMINI_MODEL,
+  'gemini-1.5-pro-latest': DEFAULT_GEMINI_MODEL,
+  'gemini-pro': DEFAULT_GEMINI_MODEL,
+  'gemini-2.0-flash': DEFAULT_GEMINI_MODEL,
+  'gemini-2.0-flash-001': DEFAULT_GEMINI_MODEL,
+  'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
+}
+
+const GEMINI_MODEL_FALLBACKS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+]
+
+function resolveGeminiModel(raw) {
+  const requested = stripWrappedQuotes(raw || DEFAULT_GEMINI_MODEL) || DEFAULT_GEMINI_MODEL
+  let mapped = GEMINI_MODEL_REMAP[requested] || requested
+  if (/^gemini-1\./i.test(mapped)) {
+    mapped = DEFAULT_GEMINI_MODEL
+  }
+  if (mapped !== requested) {
+    console.warn(`[AI] GEMINI_MODEL "${requested}" is retired; using "${mapped}"`)
+  }
+  return mapped
+}
+
+function geminiCandidates(raw) {
+  const primary = resolveGeminiModel(raw)
+  return [primary, ...GEMINI_MODEL_FALLBACKS.filter((m) => m !== primary)]
+}
+
+function isGeminiModelNotFound(err) {
+  const msg = String(err?.message || err || '')
+  return /404|not[_ ]found|is not found for API version|not supported for generateContent/i.test(msg)
+}
+
 function makeGemini({ apiKey, model }) {
   const genAI = new GoogleGenerativeAI(apiKey)
+  const candidates = geminiCandidates(model)
+
   return async (system, user, _schemaName, schema, options = {}) => {
-    const gModel = genAI.getGenerativeModel({
-      model,
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-        maxOutputTokens: options.maxTokens || 4096,
-      },
-    })
+    let lastErr = null
     const prompt = `${system}${schemaInstruction(schema)}\n\n${user}`
-    const res = await gModel.generateContent(prompt)
-    const text = res.response.text()
-    if (!text) throw new Error('Empty response')
-    const meta = res.response.usageMetadata || {}
-    const usage = normalizeUsage({
-      prompt_tokens: meta.promptTokenCount,
-      completion_tokens: meta.candidatesTokenCount,
-    }, system, user, text)
-    try {
-      return { result: extractJson(text), usage }
-    } catch (err) {
-      throw attachUsageToError(err, usage)
+    for (const candidate of candidates) {
+      try {
+        const gModel = genAI.getGenerativeModel({
+          model: candidate,
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+            maxOutputTokens: options.maxTokens || 4096,
+          },
+        })
+        const res = await gModel.generateContent(prompt)
+        const text = res.response.text()
+        if (!text) throw new Error('Empty response')
+        const meta = res.response.usageMetadata || {}
+        const usage = normalizeUsage({
+          prompt_tokens: meta.promptTokenCount,
+          completion_tokens: meta.candidatesTokenCount,
+        }, system, user, text)
+        try {
+          return { result: extractJson(text), usage, modelUsed: candidate }
+        } catch (err) {
+          throw attachUsageToError(err, usage)
+        }
+      } catch (err) {
+        lastErr = err
+        if (isGeminiModelNotFound(err)) {
+          console.warn(`[AI] Gemini model "${candidate}" not found; trying next`)
+          continue
+        }
+        throw err
+      }
     }
+    throw lastErr || new Error('All Gemini model IDs failed')
   }
 }
 
@@ -303,7 +366,7 @@ function buildProviders() {
   }
 
   if (process.env.GEMINI_API_KEY) {
-    const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+    const model = resolveGeminiModel(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL)
     providers.gemini = {
       label: 'Google Gemini',
       model,
@@ -466,10 +529,11 @@ export async function structuredJSON(system, user, schemaName, schema, options =
       const raw = await providers[name].run(system, user, schemaName, schema, options)
       const durationMs = Date.now() - callStarted
       const usage = raw.usage || normalizeUsage(null, system, user, '')
+      const modelUsed = raw.modelUsed || providers[name].model
       const tracked = trackProviderAttempt({
         providerKey: name,
         providerLabel: providers[name].label,
-        model: providers[name].model,
+        model: modelUsed,
         task: schemaName,
         featureName,
         usage,
@@ -479,7 +543,7 @@ export async function structuredJSON(system, user, schemaName, schema, options =
       return {
         result: raw.result,
         provider: providers[name].label,
-        model: providers[name].model,
+        model: modelUsed,
         task: schemaName,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
@@ -610,26 +674,46 @@ export async function visionStructuredJSON(system, userText, imageBuffer, mimeTy
 
   if (process.env.GEMINI_API_KEY) {
     const callStarted = Date.now()
-    const model = process.env.GEMINI_VISION_MODEL || 'gemini-2.0-flash'
+    const visionCandidates = geminiCandidates(process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL)
+    const model = visionCandidates[0]
     try {
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-      const gModel = genAI.getGenerativeModel({
-        model,
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          maxOutputTokens: 800,
-        },
-      })
       const prompt = `${system}${schemaText}\n\n${userText}`
-      const res = await gModel.generateContent([
-        { text: prompt },
-        { inlineData: { mimeType: mimeType || 'image/png', data: base64 } },
-      ])
-      const text = res.response.text()
-      if (!text) throw new Error('Empty Gemini vision response')
+      let text = ''
+      let meta = {}
+      let modelUsed = model
+      let lastVisionErr = null
+      for (const candidate of visionCandidates) {
+        try {
+          const gModel = genAI.getGenerativeModel({
+            model: candidate,
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              maxOutputTokens: 800,
+            },
+          })
+          const res = await gModel.generateContent([
+            { text: prompt },
+            { inlineData: { mimeType: mimeType || 'image/png', data: base64 } },
+          ])
+          text = res.response.text()
+          if (!text) throw new Error('Empty Gemini vision response')
+          meta = res.response.usageMetadata || {}
+          modelUsed = candidate
+          lastVisionErr = null
+          break
+        } catch (err) {
+          lastVisionErr = err
+          if (isGeminiModelNotFound(err)) {
+            console.warn(`[AI] Gemini vision model "${candidate}" not found; trying next`)
+            continue
+          }
+          throw err
+        }
+      }
+      if (lastVisionErr) throw lastVisionErr
       const durationMs = Date.now() - callStarted
-      const meta = res.response.usageMetadata || {}
       const usage = normalizeUsage({
         prompt_tokens: meta.promptTokenCount,
         completion_tokens: meta.candidatesTokenCount,
@@ -643,7 +727,7 @@ export async function visionStructuredJSON(system, userText, imageBuffer, mimeTy
       const tracked = trackProviderAttempt({
         providerKey: 'gemini',
         providerLabel: 'Gemini',
-        model,
+        model: modelUsed,
         task: schemaName,
         featureName,
         usage,
@@ -653,7 +737,7 @@ export async function visionStructuredJSON(system, userText, imageBuffer, mimeTy
       return {
         result: parsed,
         provider: 'Gemini',
-        model,
+        model: modelUsed,
         task: schemaName,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
