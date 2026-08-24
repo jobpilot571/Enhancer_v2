@@ -46,6 +46,105 @@ const JD_LOAD_STEPS = [
   { key: 'preparing_preview', label: 'Preparing preview…' },
 ]
 
+const JD_STEP_COPY = {
+  basic: {
+    title: 'Enter contact & education',
+    lede: 'Welcome back to your career toolkit. Upload a resume or type contact details, then continue.',
+  },
+  jd: {
+    title: 'Paste the job description',
+    lede: 'The JD drives keywords, bullets, and the match for this tailored resume.',
+  },
+  target: {
+    title: 'Set target role & experience',
+    lede: 'Confirm the role, years, and companies you want on this resume.',
+  },
+  references: {
+    title: 'Optional references',
+    lede: 'Upload old resumes or notes so we can reuse real project language.',
+  },
+  templates: {
+    title: 'Choose a template',
+    lede: 'Pick a layout, then build a JD-aligned DOCX.',
+  },
+  preview: {
+    title: 'Preview and download',
+    lede: 'Review the tailored resume beside this report, then download DOCX.',
+  },
+  saved: {
+    title: 'Saved resumes',
+    lede: 'Reopen a resume you already built for this account.',
+  },
+}
+
+function greetingLine(user) {
+  const hour = new Date().getHours()
+  const part = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const raw = user?.name?.split(/\s+/)[0] || ''
+  const name = !raw || raw === 'Local' ? '' : raw
+  return name ? `${part}, ${name}.` : `${part}.`
+}
+
+function JdDraftPreview({ project }) {
+  const b = project.basicInformation || {}
+  const t = project.targetRole || {}
+  const jobs = (project.experiences || []).filter((e) => e.companyName || e.jobTitle)
+  const edu = (b.education || []).find((e) => e.school || e.degree)
+  const hasDraft = Boolean(b.fullName || t.jobTitle || jobs.length || edu)
+
+  return (
+    <section className="pro-split__preview" aria-label="Resume preview">
+      <div className="pro-preview__toolbar">
+        <span className="pro-app__kicker">Resume preview</span>
+      </div>
+      {hasDraft ? (
+        <div className="pro-preview__frame">
+          <article className="builder-draft">
+            <header className="builder-draft__head">
+              <h2>{b.fullName || 'Your name'}</h2>
+              {t.jobTitle ? <p className="builder-draft__role">{t.jobTitle}</p> : null}
+              <p className="builder-draft__meta">
+                {[b.email, b.phone, b.linkedin, [b.city, b.state].filter(Boolean).join(', ')]
+                  .filter(Boolean)
+                  .join(' · ') || 'Contact details appear here'}
+              </p>
+            </header>
+            {jobs.length > 0 ? (
+              <section>
+                <h3>Experience</h3>
+                {jobs.map((job) => (
+                  <div key={job.id || `${job.companyName}-${job.jobTitle}`} className="builder-draft__job">
+                    <strong>{job.jobTitle || 'Role'}</strong>
+                    <span>{job.companyName}</span>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+            {edu ? (
+              <section>
+                <h3>Education</h3>
+                <p>
+                  <strong>{[edu.degree, edu.major].filter(Boolean).join(' · ') || 'Degree'}</strong>
+                  {edu.school ? ` · ${edu.school}` : ''}
+                </p>
+              </section>
+            ) : null}
+          </article>
+        </div>
+      ) : (
+        <div className="pro-preview__empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <strong>Your resume will appear here</strong>
+          <span>Fill in the form on the left to preview a live outline beside your details.</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function JdBuilderWizard() {
   const user = getStoredUser?.() || null
   const userId = user?.id || null
@@ -486,37 +585,62 @@ export default function JdBuilderWizard() {
     }
   }, [])
 
+  const stepCopy = JD_STEP_COPY[stepId] || JD_STEP_COPY.basic
+
   return (
-    <div className={`service-block service-block--jd-wizard ${isPreview ? 'pro-app pro-app--split' : ''}`}>
-      {isPreview ? (
-        <header className="pro-app__bar">
-          <div className="pro-app__identity">
-            <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-            </Link>
-            <div>
-              <span className="pro-app__kicker">JD-Tailored Resume</span>
-              <h3 className="pro-app__title">Preview and download</h3>
-            </div>
-          </div>
-        </header>
-      ) : (
-        <div className="service-block__header">
+    <div className="service-block service-block--jd-wizard pro-app pro-app--split">
+      <header className="pro-app__bar">
+        <div className="pro-app__identity">
           <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
           </Link>
           <div>
-            <h3 className="service-block__title">JD-Tailored Resume Builder</h3>
-            <p className="service-block__desc">
-              Guided steps to build a JD-aligned resume. Use the sticky AI Assistant anytime if you get stuck.
-            </p>
+            <span className="pro-app__kicker">JD-Tailored Resume</span>
+            <h3 className="pro-app__title">{stepCopy.title}</h3>
           </div>
         </div>
-      )}
+        <div className="pro-app__actions">
+          <p className="pro-app__usage">
+            {signedIn ? (
+              `${user?.planLabel || 'Member'} · JD-Tailored`
+            ) : (
+              <>
+                <Link to="/login">Sign in</Link> required to build
+              </>
+            )}
+          </p>
+          {isTemplates ? (
+            <button
+              type="button"
+              className="btn btn--primary enhancer-topbar__cta"
+              onClick={handleBuild}
+              disabled={building || !signedIn}
+            >
+              {building ? getJdBuildStepLabel(buildStep) : 'Build Resume'}
+            </button>
+          ) : isPreview ? (
+            <button
+              type="button"
+              className="btn btn--primary enhancer-topbar__cta"
+              onClick={handleBuild}
+              disabled={building || !signedIn}
+            >
+              {building ? getJdBuildStepLabel(buildStep) : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+            </button>
+          ) : stepId !== 'saved' ? (
+            <button
+              type="button"
+              className="btn btn--primary enhancer-topbar__cta"
+              onClick={goNext}
+              disabled={building}
+            >
+              Continue
+            </button>
+          ) : null}
+        </div>
+      </header>
 
       {building && (
         <ProLoadingScreen
@@ -528,18 +652,12 @@ export default function JdBuilderWizard() {
       )}
 
       {apiOk === false && (
-        <div className="enhancer-notice">
+        <div className="pro-notice">
           Backend API is unreachable. Start the server locally or set VITE_API_BASE.
         </div>
       )}
 
-      {!signedIn && (
-        <div className="enhancer-notice enhancer-notice--warn">
-          Sign in required to build. <Link to="/login">Sign in</Link> or <Link to="/signup">Sign up</Link>, then click Build Resume.
-        </div>
-      )}
-
-      <nav className="builder-steps" aria-label="JD-tailored resume builder steps">
+      <nav className="builder-steps builder-steps--pro" aria-label="JD-tailored resume builder steps">
         {JD_STEPS.map((s, i) => (
           <button
             key={s.id}
@@ -553,67 +671,76 @@ export default function JdBuilderWizard() {
         ))}
       </nav>
 
-      <div className={`form-card form-card--jd-step ${isPreview ? 'form-card--pro-split' : ''}`}>
-        {stepId === 'basic' && (
-          <BasicResumeStep
-            project={project}
-            onChange={updateProject}
-            onUploadBasicResume={handleBasicResumeUpload}
-            uploading={basicUploading}
-          />
-        )}
-        {stepId === 'jd' && (
-          <JobDescriptionStep
-            project={project}
-            onChange={updateProject}
-          />
-        )}
-        {stepId === 'target' && (
-          <TargetRoleStep project={project} onChange={updateProject} />
-        )}
-        {stepId === 'references' && (
-          <ReferenceDocsStep project={project} onChange={updateProject} />
-        )}
-        {stepId === 'templates' && (
-          <TemplateStep
-            project={project}
-            onChange={updateProject}
-            templateSamples={templateSamples}
-            sampleBlobs={sampleBlobs}
-            getSampleFileUrl={getSampleFileUrl}
-            onBuild={handleBuild}
-            building={building}
-            buildStepLabel={getJdBuildStepLabel(buildStep)}
-            signedIn={signedIn}
-          />
-        )}
-        {stepId === 'preview' && (
-          <PreviewDownloadStep
-            previewBlob={previewBlob}
-            builtRole={builtRole}
-            downloadUrl={project.sessionId ? getDownloadUrl(project.sessionId) : null}
-            building={building}
-            buildStepLabel={getJdBuildStepLabel(buildStep)}
-            onStartNew={handleStartNewResume}
-            onDownloadAndSave={handleDownloadAndSave}
-            onRebuild={handleBuild}
-            onOpenSaved={() => goToStep(JD_STEPS.findIndex((s) => s.id === 'saved'))}
-          />
-        )}
-        {stepId === 'saved' && (
-          <SavedResumesStep refreshKey={savedRefreshKey} />
-        )}
-
+      {isPreview ? (
+      <div className="form-card form-card--jd-step form-card--pro-split">
+        <PreviewDownloadStep
+          previewBlob={previewBlob}
+          builtRole={builtRole}
+          downloadUrl={project.sessionId ? getDownloadUrl(project.sessionId) : null}
+          building={building}
+          buildStepLabel={getJdBuildStepLabel(buildStep)}
+          onStartNew={handleStartNewResume}
+          onDownloadAndSave={handleDownloadAndSave}
+          onRebuild={handleBuild}
+          onOpenSaved={() => goToStep(JD_STEPS.findIndex((s) => s.id === 'saved'))}
+        />
         {error && <p className="builder-error" role="alert">{error}</p>}
-
-        {!isTemplates && !isPreview && stepId !== 'saved' && (
-          <div className="form-cta form-cta--nav">
-            <button type="button" className="btn btn--primary btn--xl" onClick={goNext} disabled={building}>
-              Next
-            </button>
-          </div>
-        )}
       </div>
+      ) : (
+      <div className="pro-split">
+        <aside className="pro-split__report pro-split__report--setup pro-setup">
+          <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
+          <p className="pro-setup__lede">{stepCopy.lede}</p>
+          <div className="builder-pro-card">
+            {stepId === 'basic' && (
+              <BasicResumeStep
+                project={project}
+                onChange={updateProject}
+                onUploadBasicResume={handleBasicResumeUpload}
+                uploading={basicUploading}
+              />
+            )}
+            {stepId === 'jd' && (
+              <JobDescriptionStep
+                project={project}
+                onChange={updateProject}
+              />
+            )}
+            {stepId === 'target' && (
+              <TargetRoleStep project={project} onChange={updateProject} />
+            )}
+            {stepId === 'references' && (
+              <ReferenceDocsStep project={project} onChange={updateProject} />
+            )}
+            {stepId === 'templates' && (
+              <TemplateStep
+                project={project}
+                onChange={updateProject}
+                templateSamples={templateSamples}
+                sampleBlobs={sampleBlobs}
+                getSampleFileUrl={getSampleFileUrl}
+                onBuild={handleBuild}
+                building={building}
+                buildStepLabel={getJdBuildStepLabel(buildStep)}
+                signedIn={signedIn}
+              />
+            )}
+            {stepId === 'saved' && (
+              <SavedResumesStep refreshKey={savedRefreshKey} />
+            )}
+          </div>
+          {error && <p className="builder-error" role="alert">{error}</p>}
+          {!isTemplates && stepId !== 'saved' && (
+            <div className="form-cta form-cta--nav">
+              <button type="button" className="btn btn--primary btn--xl" onClick={goNext} disabled={building}>
+                Continue
+              </button>
+            </div>
+          )}
+        </aside>
+        <JdDraftPreview project={project} />
+      </div>
+      )}
     </div>
   )
 }

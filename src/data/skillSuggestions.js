@@ -61,6 +61,20 @@ const KEYWORD_EXPANSIONS = {
   api: ['REST APIs', 'Postman', 'OpenAPI', 'GraphQL', 'Swagger'],
   etl: ['ETL', 'ELT', 'Airflow', 'Informatica', 'Talend', 'dbt'],
   cloud: ['AWS', 'Azure', 'GCP', 'CloudFormation', 'Terraform'],
+  grafana: ['Grafana', 'Prometheus', 'Loki', 'Tempo', 'Alertmanager', 'Dashboards'],
+  prometheus: ['Prometheus', 'Grafana', 'Alertmanager', 'PromQL', 'Node Exporter'],
+  terraform: ['Terraform', 'HCL', 'Terragrunt', 'AWS', 'Azure', 'GCP', 'IaC'],
+  ansible: ['Ansible', 'Playbooks', 'YAML', 'Configuration Management'],
+  linux: ['Linux', 'Bash', 'Shell Scripting', 'Ubuntu', 'RHEL'],
+  helm: ['Helm', 'Kubernetes', 'Helm Charts', 'kubectl'],
+  lambda: ['Lambda', 'AWS', 'Serverless', 'API Gateway', 'CloudWatch'],
+  s3: ['S3', 'AWS', 'CloudFront', 'IAM'],
+  ec2: ['EC2', 'AWS', 'VPC', 'Auto Scaling', 'IAM'],
+  react: ['React', 'JavaScript', 'TypeScript', 'Redux', 'Next.js'],
+  node: ['Node.js', 'Express', 'JavaScript', 'REST APIs', 'npm'],
+  java: ['Java', 'Spring Boot', 'Maven', 'JUnit', 'SQL'],
+  excel: ['Excel', 'Pivot Tables', 'VLOOKUP', 'Power Query', 'Dashboards'],
+  selenium: ['Selenium', 'Cypress', 'TestNG', 'WebDriver', 'CI/CD'],
   ml: ['Machine Learning', 'Scikit-learn', 'TensorFlow', 'PyTorch', 'Feature Engineering'],
   genai: ['GenAI', 'LLMs', 'RAG', 'Prompt Engineering', 'LangChain', 'OpenAI'],
   ai: ['AI', 'GenAI', 'LLMs', 'Machine Learning', 'NLP'],
@@ -122,6 +136,27 @@ export function getSkillSuggestions(role, query, selected = []) {
   return [...new Set(pool)]
     .filter((s) => !selectedSet.has(s.toLowerCase()))
     .slice(0, 16)
+}
+
+/** Related tools to offer after the user picks a skill (AWS → S3, Lambda, …). */
+export function getRelatedSkills(skill, selected = []) {
+  const q = String(skill || '').toLowerCase().trim()
+  if (!q) return []
+  const selectedSet = new Set(selected.map((s) => s.toLowerCase()))
+  const related = []
+  for (const [key, tools] of Object.entries(KEYWORD_EXPANSIONS)) {
+    const inGroup = key === q
+      || q.includes(key)
+      || key.includes(q)
+      || tools.some((t) => {
+        const n = t.toLowerCase()
+        return n === q || n.includes(q) || q.includes(n)
+      })
+    if (inGroup) related.push(...tools)
+  }
+  return [...new Set(related)]
+    .filter((s) => s.toLowerCase() !== q && !selectedSet.has(s.toLowerCase()))
+    .slice(0, 12)
 }
 
 export function getDefaultSelectedSkills(role) {

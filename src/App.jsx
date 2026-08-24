@@ -21,6 +21,7 @@ export default function App() {
   const isAdmin = location.pathname.startsWith('/admin')
   const isAuthPage = ['/login', '/signup', '/verify'].includes(location.pathname)
   const isServiceWorkspace = location.pathname.startsWith('/services/')
+  const isHome = location.pathname === '/'
 
   if (isAdmin) {
     return (
@@ -41,7 +42,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app${isServiceWorkspace ? ' app--pro-workspace' : ''}`}>
+    <div className={`app${isServiceWorkspace ? ' app--pro-workspace' : ''}${isHome ? ' app--pro-home' : ''}`}>
       <div className="app-shell">
         <Navbar />
         <Routes>

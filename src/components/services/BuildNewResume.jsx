@@ -5,7 +5,15 @@ import FormField from './FormField'
 import DocumentPreview from './DocumentPreview'
 import DocxViewer from './DocxViewer'
 import SkillsPicker from './SkillsPicker'
+import { MonthYearPicker } from './jd/MonthYearPicker'
+import UsCityStateFields from './jd/UsCityStateFields'
+import SelectWithOther from './jd/SelectWithOther'
 import { RESUME_TEMPLATES } from '../../data/resumeTemplates'
+import {
+  DEGREE_OPTIONS,
+  MAJOR_OPTIONS,
+  US_UNIVERSITY_OPTIONS,
+} from '../../data/usEducationOptions'
 import TemplatePreview from './TemplatePreview'
 import {
   checkApiHealth,
@@ -62,6 +70,8 @@ function stickyMemoryFromForm(form) {
       degree: form.education?.degree || '',
       startDate: form.education?.startDate || '',
       endDate: form.education?.endDate || '',
+      city: form.education?.city || '',
+      state: form.education?.state || '',
     },
   }
 }
@@ -115,6 +125,125 @@ const SECTIONS = [
   { id: 'review', label: 'Build' },
 ]
 
+const STEP_COPY = [
+  {
+    title: 'Enter your details',
+    lede: 'Welcome back to your career toolkit. Start with name, role, and contact — then we will generate a polished DOCX.',
+  },
+  {
+    title: 'Add your experience',
+    lede: 'List each company. We will write professional, ATS-friendly bullets when you build.',
+  },
+  {
+    title: 'Guide your summary',
+    lede: 'Optional notes we use to write a tight professional summary for your target role.',
+  },
+  {
+    title: 'Add education',
+    lede: 'US university, course, degree, city, and dates — pick from the lists or choose Other.',
+  },
+  {
+    title: 'Optional references',
+    lede: 'Upload old resumes or notes so we can reuse real project language.',
+  },
+  {
+    title: 'Choose a template',
+    lede: 'Pick a layout. Preview it on the right before you build.',
+  },
+  {
+    title: 'Preview and download',
+    lede: 'Generate your resume, review it beside this report, then download DOCX.',
+  },
+]
+
+function greetingLine(user) {
+  const hour = new Date().getHours()
+  const part = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const raw = user?.name?.split(/\s+/)[0] || ''
+  const name = !raw || raw === 'Local' ? '' : raw
+  return name ? `${part}, ${name}.` : `${part}.`
+}
+
+function BuilderDraftPreview({ form, companyCount, step, selectedTemplate }) {
+  const companies = (form.companies || []).slice(0, companyCount).filter((c) => c.name || c.role)
+  const edu = form.education || {}
+  const hasDraft = Boolean(
+    form.name || form.role || form.email || companies.length || edu.school || form.summaryNotes,
+  )
+
+  return (
+    <section className="pro-split__preview" aria-label="Resume preview">
+      <div className="pro-preview__toolbar">
+        <span className="pro-app__kicker">
+          {step === 5 && selectedTemplate ? selectedTemplate.name : 'Resume preview'}
+        </span>
+      </div>
+      {step === 5 && selectedTemplate ? (
+        <div className="pro-preview__frame builder-draft builder-draft--template">
+          <TemplatePreview template={selectedTemplate} mode="card" fit="width" />
+        </div>
+      ) : hasDraft ? (
+        <div className="pro-preview__frame">
+          <article className="builder-draft">
+            <header className="builder-draft__head">
+              <h2>{form.name || 'Your name'}</h2>
+              {form.role ? <p className="builder-draft__role">{form.role}</p> : null}
+              <p className="builder-draft__meta">
+                {[form.email, form.phone, form.linkedin].filter(Boolean).join(' · ')
+                  || 'Contact details appear here'}
+              </p>
+            </header>
+            {form.summaryNotes ? (
+              <section>
+                <h3>Summary</h3>
+                <p>{form.summaryNotes}</p>
+              </section>
+            ) : null}
+            {companies.length > 0 ? (
+              <section>
+                <h3>Experience</h3>
+                {companies.map((c, i) => (
+                  <div key={i} className="builder-draft__job">
+                    <strong>{c.role || 'Role'}</strong>
+                    <span>
+                      {[c.name, [c.city, c.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}
+                    </span>
+                    <em>{[c.startDate, c.endDate].filter(Boolean).join(' – ')}</em>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+            {edu.school || edu.degree || edu.course ? (
+              <section>
+                <h3>Education</h3>
+                <p>
+                  <strong>{[edu.degree, edu.course].filter(Boolean).join(' · ') || 'Degree'}</strong>
+                  {edu.school ? ` · ${edu.school}` : ''}
+                  {[edu.city, edu.state].filter(Boolean).length
+                    ? ` · ${[edu.city, edu.state].filter(Boolean).join(', ')}`
+                    : ''}
+                  {[edu.startDate, edu.endDate].filter(Boolean).length
+                    ? ` · ${[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}`
+                    : ''}
+                </p>
+              </section>
+            ) : null}
+          </article>
+        </div>
+      ) : (
+        <div className="pro-preview__empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <strong>Your resume will appear here</strong>
+          <span>Fill in the form on the left to preview a live outline beside your details.</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
 const BULLET_OPTIONS = Array.from({ length: 11 }, (_, i) => ({
   value: String(i + 5),
   label: `${i + 5} bullets`,
@@ -155,6 +284,8 @@ const initialForm = {
     degree: '',
     startDate: '',
     endDate: '',
+    city: '',
+    state: '',
   },
   referenceMaterial: null,
   uploadedReferences: [],
@@ -310,7 +441,8 @@ export default function BuildNewResume() {
   const refInputRef = useRef(null)
   const buildingRef = useRef(false)
   const cacheTimerRef = useRef(null)
-  const signedIn = Boolean(getAuthToken() && getStoredUser())
+  const user = getStoredUser()
+  const signedIn = Boolean(getAuthToken() && user)
 
   useEffect(() => {
     setWorkspace({
@@ -512,13 +644,29 @@ export default function BuildNewResume() {
     updateCompany(index, 'skills', skills)
   }
 
-  function updateEducation(e) {
-    const { name, value } = e.target
+  function patchEducation(field, value) {
     setForm((f) => ({
       ...f,
-      education: { ...f.education, [name]: value },
+      education: { ...f.education, [field]: value },
     }))
     setError('')
+  }
+
+  function handleStartAgain() {
+    const ok = window.confirm(
+      'Start a new resume? Experience, summary, references, and the built preview will be cleared. Basics and education stay saved.',
+    )
+    if (!ok) return
+    const sticky = stickyMemoryFromForm(form)
+    writeLocalMemory(user?.id, sticky)
+    setForm(hydrateFormFromMemory(sticky))
+    setPreviewBlob(null)
+    setSessionId(null)
+    setError('')
+    setRefSuggestions(null)
+    setUploadAuthPrompt(false)
+    setStep(0)
+    window.scrollTo(0, 0)
   }
 
   async function handleReferenceUpload(e) {
@@ -748,43 +896,62 @@ export default function BuildNewResume() {
   const companyCount = Number(form.companyCount) || form.companies.length
   const isLastStep = step === SECTIONS.length - 1
 
+  const selectedTemplate = RESUME_TEMPLATES.find((t) => t.id === form.templateId)
+  const stepCopy = STEP_COPY[step] || STEP_COPY[0]
+
   return (
-    <div className={`service-block service-block--builder-pro ${isLastStep ? 'pro-app pro-app--split' : ''}`}>
-      {isLastStep ? (
-        <header className="pro-app__bar">
-          <div className="pro-app__identity">
-            <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-            </Link>
-            <div>
-              <span className="pro-app__kicker">Resume Builder</span>
-              <h3 className="pro-app__title">Preview and download</h3>
-            </div>
-          </div>
-        </header>
-      ) : (
-        <div className="service-block__header">
+    <div className="service-block service-block--builder-pro pro-app pro-app--split">
+      <header className="pro-app__bar">
+        <div className="pro-app__identity">
           <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
           </Link>
           <div>
-            <h3 className="service-block__title">Professional Resume Builder</h3>
-            <p className="service-block__desc">
-              Enter your details step by step — optionally add reference docs for experience — and we&apos;ll generate a polished DOCX.
-            </p>
-            {!signedIn && (
-              <p className="enhancer-usage-chip">
-                <Link to="/login">Sign in</Link> required to build — free plan includes 5 resume builds / month.
-                You can fill the form first; Build needs an account.
-              </p>
-            )}
+            <span className="pro-app__kicker">Resume Builder</span>
+            <h3 className="pro-app__title">{stepCopy.title}</h3>
           </div>
         </div>
-      )}
+        <div className="pro-app__actions">
+          <p className="pro-app__usage">
+            {signedIn ? (
+              `${user?.planLabel || 'Member'} · Resume Builder`
+            ) : (
+              <>
+                <Link to="/login">Sign in</Link> to build — 5 resumes / month on free
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            className="btn btn--ghost-navy"
+            disabled={building}
+            onClick={handleStartAgain}
+          >
+            Start again
+          </button>
+          {isLastStep ? (
+            <button
+              type="button"
+              className="btn btn--primary enhancer-topbar__cta"
+              onClick={handleBuild}
+              disabled={building}
+            >
+              {building ? getBuildStepLabel(buildStep) : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--primary enhancer-topbar__cta"
+              onClick={goNext}
+              disabled={building}
+            >
+              Continue
+            </button>
+          )}
+        </div>
+      </header>
 
       {building && (
         <ProLoadingScreen
@@ -796,12 +963,12 @@ export default function BuildNewResume() {
       )}
 
       {apiOk === false && (
-        <div className="enhancer-notice">
+        <div className="pro-notice">
           Backend API is unreachable. Start the server locally or set VITE_API_BASE.
         </div>
       )}
 
-      <nav className="builder-steps" aria-label="Resume builder steps">
+      <nav className="builder-steps builder-steps--pro" aria-label="Resume builder steps">
         {SECTIONS.map((s, i) => (
           <button
             key={s.id}
@@ -815,7 +982,12 @@ export default function BuildNewResume() {
         ))}
       </nav>
 
-      <div className={`form-card ${isLastStep ? 'form-card--pro-split' : ''}`}>
+      {!isLastStep && (
+      <div className="pro-split">
+        <aside className="pro-split__report pro-split__report--setup pro-setup">
+          <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
+          <p className="pro-setup__lede">{stepCopy.lede}</p>
+          <div className="builder-pro-card">
         {step === 0 && (
         <section id="builder-basics" className="builder-section">
           <h4 className="builder-section__title">
@@ -935,33 +1107,34 @@ export default function BuildNewResume() {
                     onChange={(e) => updateCompany(index, 'role', e.target.value)}
                     required
                   />
-                  <FormField
-                    label="Start date"
-                    placeholder="e.g. Jan 2020"
-                    value={company.startDate}
-                    onChange={(e) => updateCompany(index, 'startDate', e.target.value)}
+                  <UsCityStateFields
+                    city={company.city}
+                    state={company.state}
                     required
+                    onChange={({ city, state }) => {
+                      setForm((f) => {
+                        const companies = f.companies.map((c, i) =>
+                          i === index ? { ...c, city, state } : c,
+                        )
+                        return { ...f, companies }
+                      })
+                      setError('')
+                    }}
                   />
-                  <FormField
-                    label="End date"
-                    placeholder="e.g. Present"
-                    value={company.endDate}
-                    onChange={(e) => updateCompany(index, 'endDate', e.target.value)}
-                  />
-                  <FormField
-                    label="City"
-                    placeholder="City"
-                    value={company.city}
-                    onChange={(e) => updateCompany(index, 'city', e.target.value)}
-                    required
-                  />
-                  <FormField
-                    label="State"
-                    placeholder="State"
-                    value={company.state}
-                    onChange={(e) => updateCompany(index, 'state', e.target.value)}
-                    required
-                  />
+                  <div className="builder-dates-row">
+                    <MonthYearPicker
+                      label="Start date"
+                      value={company.startDate}
+                      onChange={(v) => updateCompany(index, 'startDate', v)}
+                      required
+                    />
+                    <MonthYearPicker
+                      label="End date"
+                      value={company.endDate}
+                      onChange={(v) => updateCompany(index, 'endDate', v)}
+                      allowPresent
+                    />
+                  </div>
                 </div>
 
                 <SkillsPicker
@@ -1013,46 +1186,59 @@ export default function BuildNewResume() {
             Education
           </h4>
           <div className="form-grid">
-            <FormField
-              label="University or college name"
-              name="school"
-              placeholder="e.g. State University"
+            <SelectWithOther
+              label="University or college"
               value={form.education.school}
-              onChange={updateEducation}
+              options={US_UNIVERSITY_OPTIONS}
+              placeholder="Select university"
+              otherPlaceholder="Enter university or college name"
+              onChange={(v) => patchEducation('school', v)}
               required
               className="form-field--full"
             />
-            <FormField
-              label="Course"
-              name="course"
-              placeholder="e.g. Computer Science"
+            <SelectWithOther
+              label="Course / major"
               value={form.education.course}
-              onChange={updateEducation}
+              options={MAJOR_OPTIONS}
+              placeholder="Select course"
+              otherPlaceholder="Enter course or major"
+              onChange={(v) => patchEducation('course', v)}
               required
             />
-            <FormField
+            <SelectWithOther
               label="Degree"
-              name="degree"
-              placeholder="e.g. Bachelor of Science"
               value={form.education.degree}
-              onChange={updateEducation}
+              options={DEGREE_OPTIONS}
+              placeholder="Select degree"
+              otherPlaceholder="Enter degree"
+              onChange={(v) => patchEducation('degree', v)}
               required
             />
-            <FormField
-              label="Start date"
-              name="startDate"
-              placeholder="e.g. Aug 2016"
-              value={form.education.startDate}
-              onChange={updateEducation}
+            <UsCityStateFields
+              city={form.education.city}
+              state={form.education.state}
               required
+              onChange={({ city, state }) => {
+                setForm((f) => ({
+                  ...f,
+                  education: { ...f.education, city, state },
+                }))
+                setError('')
+              }}
             />
-            <FormField
-              label="End date"
-              name="endDate"
-              placeholder="e.g. May 2020"
-              value={form.education.endDate}
-              onChange={updateEducation}
-            />
+            <div className="builder-dates-row">
+              <MonthYearPicker
+                label="Start date"
+                value={form.education.startDate}
+                onChange={(v) => patchEducation('startDate', v)}
+                required
+              />
+              <MonthYearPicker
+                label="End date / graduation"
+                value={form.education.endDate}
+                onChange={(v) => patchEducation('endDate', v)}
+              />
+            </div>
           </div>
         </section>
         )}
@@ -1206,7 +1392,7 @@ export default function BuildNewResume() {
                   }}
                 >
                   <div className="template-card__preview">
-                    <TemplatePreview template={tpl} mode="card" />
+                    <TemplatePreview template={tpl} mode="card" fit="width" />
                     {sample && (
                       <span className="template-card__sample-badge">
                         {sample.demoGenerated ? 'Demo sample' : 'Sample ready'}
@@ -1239,8 +1425,40 @@ export default function BuildNewResume() {
           </div>
         </section>
         )}
+          </div>
+          {error && <p className="builder-error" role="alert">{error}</p>}
+          <div className="form-cta form-cta--nav">
+            {step > 0 && (
+              <button
+                type="button"
+                className="btn btn--outline btn--xl"
+                onClick={goBack}
+                disabled={building}
+              >
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn--primary btn--xl"
+              onClick={goNext}
+              disabled={building}
+            >
+              Continue
+            </button>
+          </div>
+        </aside>
+        <BuilderDraftPreview
+          form={form}
+          companyCount={companyCount}
+          step={step}
+          selectedTemplate={selectedTemplate}
+        />
+      </div>
+      )}
 
-        {step === 6 && (
+      {isLastStep && (
+      <div className="form-card form-card--pro-split">
         <section id="builder-review" className="builder-section pro-split">
           <aside className="pro-split__report">
             <div className="pro-recap">
@@ -1250,7 +1468,7 @@ export default function BuildNewResume() {
               <p className="pro-recap__lede">
                 Ready for <strong>{form.name || '—'}</strong> as <strong>{form.role || '—'}</strong>
                 {' '}with {companyCount} compan{companyCount === 1 ? 'y' : 'ies'}, {form.bulletsPerCompany} bullets each,
-                using the <strong>{RESUME_TEMPLATES.find((t) => t.id === form.templateId)?.name || 'selected'}</strong> template.
+                using the <strong>{selectedTemplate?.name || 'selected'}</strong> template.
               </p>
               <ul className="pro-recap__list">
                 <li>
@@ -1283,6 +1501,9 @@ export default function BuildNewResume() {
               <button type="button" className="pro-report__link" onClick={goBack} disabled={building}>
                 Back to templates
               </button>
+              <button type="button" className="pro-report__link" onClick={handleStartAgain} disabled={building}>
+                Start again
+              </button>
             </div>
           </aside>
           <section className="pro-split__preview" aria-label="Resume preview">
@@ -1309,33 +1530,8 @@ export default function BuildNewResume() {
             )}
           </section>
         </section>
-        )}
-
-        {error && !isLastStep && <p className="builder-error" role="alert">{error}</p>}
-
-        {!isLastStep && (
-        <div className="form-cta form-cta--nav">
-          {step > 0 && (
-            <button
-              type="button"
-              className="btn btn--outline btn--xl"
-              onClick={goBack}
-              disabled={building}
-            >
-              Back
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn--primary btn--xl"
-            onClick={goNext}
-            disabled={building}
-          >
-            Next
-          </button>
-        </div>
-        )}
       </div>
+      )}
 
       {samplePreview && (
         <div

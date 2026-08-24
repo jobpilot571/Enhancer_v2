@@ -372,7 +372,7 @@ function BuilderPreview() {
         <div className={`bld-field ${activeField === 'name' ? 'enh-box--active' : ''} ${nameFilled ? 'bld-field--filled' : ''}`}>
           <span className="bld-field__lbl">Name</span>
           <span className={`bld-field__val ${nameTyping ? 'bld-field__val--type' : ''}`}>
-            {nameFilled ? 'Sarah Chen' : ''}
+            {nameFilled ? 'Maya Chen' : ''}
             {nameTyping && <span className="enh-caret" />}
           </span>
         </div>

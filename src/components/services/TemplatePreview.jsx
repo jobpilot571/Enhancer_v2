@@ -154,28 +154,34 @@ function JobBlock({ job, layout, accent, showResponsibilities }) {
   )
 }
 
-function fitPageToBox(boxEl, pageEl, spacerEl) {
+function fitPageToBox(boxEl, pageEl, spacerEl, { contain = false } = {}) {
   if (!boxEl || !pageEl) return
   pageEl.style.transform = 'none'
   pageEl.style.left = '0'
-  const availW = boxEl.clientWidth
+  const host = boxEl.parentElement
+  const availW = Math.max(boxEl.clientWidth || 0, host?.clientWidth || 0)
   if (availW <= 0) return
 
   const naturalW = pageEl.offsetWidth || PAGE_WIDTH
   const naturalH = pageEl.scrollHeight
   if (naturalW <= 0 || naturalH <= 0) return
 
-  // Fit full page width (no side crop); height scrolls inside the card.
-  const scale = availW / naturalW
+  const scaleW = availW / naturalW
+  const availH = boxEl.clientHeight || host?.clientHeight || 0
+  const scaleH = availH > 0 ? availH / naturalH : scaleW
+  // Width-fill by default so the sheet uses the whole preview box.
+  // Contain is only for tight thumbnails that must show the full page.
+  const scale = contain && availH > 0 ? Math.min(scaleW, scaleH) : scaleW
   pageEl.style.left = '0'
+  pageEl.style.width = `${PAGE_WIDTH}px`
   pageEl.style.transform = `scale(${scale})`
   pageEl.style.transformOrigin = 'top left'
   if (spacerEl) {
-    spacerEl.style.height = `${Math.ceil(naturalH * scale)}px`
+    spacerEl.style.height = contain ? '100%' : `${Math.ceil(naturalH * scale)}px`
   }
 }
 
-function MockupPreview({ template }) {
+function MockupPreview({ template, contain = false }) {
   const boxRef = useRef(null)
   const pageRef = useRef(null)
   const spacerRef = useRef(null)
@@ -196,12 +202,13 @@ function MockupPreview({ template }) {
     const spacer = spacerRef.current
     if (!box || !page) return undefined
 
-    const run = () => fitPageToBox(box, page, spacer)
+    const run = () => fitPageToBox(box, page, spacer, { contain })
     run()
     const ro = new ResizeObserver(run)
     ro.observe(box)
+    if (box.parentElement) ro.observe(box.parentElement)
     return () => ro.disconnect()
-  }, [template.id])
+  }, [template.id, contain])
 
   let contactLine = DUMMY.contact
   if (template.contactStyle === 'phone-email') contactLine = DUMMY.contactPhoneEmail
@@ -210,7 +217,7 @@ function MockupPreview({ template }) {
   }
 
   return (
-    <div ref={boxRef} className="tpl-preview tpl-preview--flow" aria-hidden="true" spellCheck={false}>
+    <div ref={boxRef} className={`tpl-preview tpl-preview--flow ${contain ? 'is-contain' : ''}`} aria-hidden="true" spellCheck={false}>
       <div ref={spacerRef} className="tpl-preview__spacer" aria-hidden="true" />
       <div
         ref={pageRef}
@@ -298,6 +305,7 @@ export default function TemplatePreview({
   sampleFileType = null,
   sampleUrl = null,
   mode = 'card',
+  fit = 'width',
 }) {
   const wantLive = mode === 'live'
 
@@ -326,5 +334,5 @@ export default function TemplatePreview({
     )
   }
 
-  return <MockupPreview template={template} />
+  return <MockupPreview template={template} contain={fit === 'contain'} />
 }

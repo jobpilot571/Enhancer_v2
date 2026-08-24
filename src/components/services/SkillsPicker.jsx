@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getSkillSuggestions, getDefaultSelectedSkills } from '../../data/skillSuggestions'
+import { getRelatedSkills, getSkillSuggestions, getDefaultSelectedSkills } from '../../data/skillSuggestions'
 
 export default function SkillsPicker({ role, selected = [], onChange }) {
   const [query, setQuery] = useState('')
+  const [lastPicked, setLastPicked] = useState('')
   const seededForRole = useRef('')
 
   const suggestions = useMemo(
     () => getSkillSuggestions(role, query, selected),
     [role, query, selected],
+  )
+
+  const related = useMemo(
+    () => (query.trim() ? [] : getRelatedSkills(lastPicked, selected)),
+    [lastPicked, selected, query],
   )
 
   useEffect(() => {
@@ -24,8 +30,11 @@ export default function SkillsPicker({ role, selected = [], onChange }) {
     const exists = selected.some((s) => s.toLowerCase() === skill.toLowerCase())
     if (exists) {
       onChange(selected.filter((s) => s.toLowerCase() !== skill.toLowerCase()))
+      if (lastPicked.toLowerCase() === skill.toLowerCase()) setLastPicked('')
     } else {
       onChange([...selected, skill])
+      setLastPicked(skill)
+      setQuery('')
     }
   }
 
@@ -35,12 +44,14 @@ export default function SkillsPicker({ role, selected = [], onChange }) {
     if (!value) return
     if (!selected.some((s) => s.toLowerCase() === value.toLowerCase())) {
       onChange([...selected, value])
+      setLastPicked(value)
     }
     setQuery('')
   }
 
   function remove(skill) {
     onChange(selected.filter((s) => s !== skill))
+    if (lastPicked === skill) setLastPicked('')
   }
 
   if (!role?.trim()) {
@@ -51,12 +62,16 @@ export default function SkillsPicker({ role, selected = [], onChange }) {
     )
   }
 
+  const extraSuggestions = suggestions.filter(
+    (s) => !related.some((r) => r.toLowerCase() === s.toLowerCase()),
+  )
+
   return (
     <div className="skills-picker">
       <div className="skills-picker__header">
         <h5 className="skills-picker__title">Skills</h5>
         <p className="skills-picker__hint">
-          Suggested for <strong>{role}</strong>. Click to add, or type a keyword (e.g. CI/CD).
+          Suggested for <strong>{role}</strong>. Click a skill to add related tools (e.g. AWS or Grafana).
         </p>
       </div>
 
@@ -66,7 +81,7 @@ export default function SkillsPicker({ role, selected = [], onChange }) {
             <button
               key={skill}
               type="button"
-              className="skill-chip skill-chip--selected"
+              className={`skill-chip skill-chip--selected ${lastPicked === skill ? 'is-focus' : ''}`}
               onClick={() => remove(skill)}
               title="Remove"
             >
@@ -90,9 +105,27 @@ export default function SkillsPicker({ role, selected = [], onChange }) {
         </button>
       </form>
 
-      {suggestions.length > 0 && (
+      {related.length > 0 && (
+        <div className="skills-picker__related">
+          <p className="skills-picker__related-label">Related to {lastPicked}</p>
+          <div className="skills-picker__suggestions">
+            {related.map((skill) => (
+              <button
+                key={skill}
+                type="button"
+                className="skill-chip skill-chip--related"
+                onClick={() => toggle(skill)}
+              >
+                + {skill}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {extraSuggestions.length > 0 && (
         <div className="skills-picker__suggestions">
-          {suggestions.map((skill) => (
+          {extraSuggestions.map((skill) => (
             <button
               key={skill}
               type="button"

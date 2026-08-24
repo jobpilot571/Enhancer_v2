@@ -3,9 +3,7 @@ import BuildJDBasedResume from '../components/services/BuildJDBasedResume'
 export default function JDTailoredResumePage() {
   return (
     <main className="service-page service-page--pro">
-      <div className="container">
-        <BuildJDBasedResume />
-      </div>
+      <BuildJDBasedResume />
     </main>
   )
 }
