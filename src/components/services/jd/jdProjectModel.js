@@ -2,12 +2,12 @@
 /** @typedef {'high'|'medium'|'low'|'unrelated'} RelevanceLevel */
 
 export const JD_STEPS = [
-  { id: 'basic', label: 'Basic Information', short: 'Basics' },
+  { id: 'basic', label: 'Contact & Education', short: 'Basics' },
   { id: 'jd', label: 'Job Description', short: 'JD' },
-  { id: 'target', label: 'Target Role', short: 'Target' },
+  { id: 'target', label: 'Target & Experience', short: 'Target' },
   { id: 'references', label: 'Reference Documents', short: 'References' },
-  { id: 'templates', label: 'Templates', short: 'Templates' },
-  { id: 'preview', label: 'Preview', short: 'Preview' },
+  { id: 'templates', label: 'Resume Templates', short: 'Templates' },
+  { id: 'preview', label: 'Resume Preview', short: 'Preview' },
   { id: 'saved', label: 'Saved Resumes', short: 'Saved' },
 ]
 

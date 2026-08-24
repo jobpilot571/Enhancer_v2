@@ -34,7 +34,7 @@ export default function ReferenceReviewStep({ project, onChange }) {
   return (
     <div className="jd-step">
       <header className="jd-step__header">
-        <h4 className="jd-step__title">Reference Review</h4>
+        <h4 className="jd-step__title">Reference Material</h4>
         <p className="jd-step__desc">
           Approve material that may inform summary, experience, projects, and skills.
           Personal data from reference files is never shown here.

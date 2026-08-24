@@ -20,6 +20,7 @@ export default function App() {
   const location = useLocation()
   const isAdmin = location.pathname.startsWith('/admin')
   const isAuthPage = ['/login', '/signup', '/verify'].includes(location.pathname)
+  const isServiceWorkspace = location.pathname.startsWith('/services/')
 
   if (isAdmin) {
     return (
@@ -40,7 +41,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${isServiceWorkspace ? ' app--pro-workspace' : ''}`}>
       <div className="app-shell">
         <Navbar />
         <Routes>
@@ -51,7 +52,7 @@ export default function App() {
           <Route path="/billing/checkout" element={<BillingCheckoutPage />} />
           <Route path="/billing/success" element={<BillingSuccessPage />} />
         </Routes>
-        <Footer />
+        {!isServiceWorkspace && <Footer />}
       </div>
       <GlobalAiAssistant />
     </div>

@@ -12,6 +12,10 @@ import {
 } from '../jdProjectModel'
 import { suggestCompaniesFromJd } from '../../../../api/jdBuilder'
 
+function emptyWorkedDate(index = 0) {
+  return { startDate: '', endDate: index === 0 ? 'Present' : '' }
+}
+
 function AiCompanyModeModal({
   open,
   onClose,
@@ -24,6 +28,8 @@ function AiCompanyModeModal({
   const [companyCount, setCompanyCount] = useState(String(defaults.companyCount || '3'))
   const [usaCount, setUsaCount] = useState(String(defaults.usaCount || '2'))
   const [indiaCount, setIndiaCount] = useState(String(defaults.indiaCount || '1'))
+  const [includeWorkedDates, setIncludeWorkedDates] = useState(false)
+  const [workedDates, setWorkedDates] = useState([emptyWorkedDate(0)])
   const [localError, setLocalError] = useState('')
 
   useEffect(() => {
@@ -32,14 +38,27 @@ function AiCompanyModeModal({
     setCompanyCount(String(defaults.companyCount || '3'))
     setUsaCount(String(defaults.usaCount || '2'))
     setIndiaCount(String(defaults.indiaCount || '1'))
+    setIncludeWorkedDates(false)
+    setWorkedDates(
+      Array.from({ length: Math.max(1, Number(defaults.companyCount) || 3) }, (_, i) => emptyWorkedDate(i)),
+    )
     setLocalError('')
   }, [open, defaults.years, defaults.companyCount, defaults.usaCount, defaults.indiaCount])
+
+  useEffect(() => {
+    const n = Math.min(6, Math.max(1, Number(companyCount) || 1))
+    setWorkedDates((prev) => Array.from({ length: n }, (_, i) => prev[i] || emptyWorkedDate(i)))
+  }, [companyCount])
 
   if (!open) return null
 
   const total = Number(companyCount) || 0
   const usa = Number(usaCount) || 0
   const india = Number(indiaCount) || 0
+
+  function patchWorkedDate(index, field, value) {
+    setWorkedDates((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
+  }
 
   function handleSubmit(e) {
     e.preventDefault()
@@ -57,11 +76,26 @@ function AiCompanyModeModal({
       setLocalError('Enter years of experience between 1 and 40.')
       return
     }
+    if (includeWorkedDates) {
+      for (let i = 0; i < total; i++) {
+        const row = workedDates[i] || emptyWorkedDate(i)
+        if (!String(row.startDate || '').trim() || !String(row.endDate || '').trim()) {
+          setLocalError(`Add start and end dates for company ${i + 1}, or turn off Worked Dates.`)
+          return
+        }
+      }
+    }
     onSubmit({
       yearsOfExperience: y,
       companyCount: total,
       usaCount: usa,
       indiaCount: india,
+      workedDates: includeWorkedDates
+        ? workedDates.slice(0, total).map((row) => ({
+          startDate: String(row.startDate || '').trim(),
+          endDate: String(row.endDate || '').trim(),
+        }))
+        : null,
     })
   }
 
@@ -71,7 +105,7 @@ function AiCompanyModeModal({
       <div className="jd-modal__panel jd-modal__panel--ai">
         <div className="jd-modal__head">
           <div>
-            <h3 className="jd-modal__title">AI / Auto company mode</h3>
+            <h3 className="jd-modal__title">AI / Auto Fill</h3>
             <p className="jd-modal__sub">
               We&apos;ll read the JD, pick an industry-fit company history (USA + India), and set dates from present → past.
               Each company gets 10–12 JD-matched bullets at build time.
@@ -84,7 +118,7 @@ function AiCompanyModeModal({
         <form className="jd-modal__body jd-modal__body--padded" onSubmit={handleSubmit}>
           <div className="form-grid form-grid--2">
             <FormField
-              label="Years of experience needed"
+              label="Years of Experience"
               type="number"
               min={1}
               max={40}
@@ -127,6 +161,44 @@ function AiCompanyModeModal({
               required
             />
           </div>
+
+          <div className="jd-ai-optional">
+            <button
+              type="button"
+              className={`jd-ai-optional__toggle ${includeWorkedDates ? 'is-open' : ''}`}
+              aria-expanded={includeWorkedDates}
+              onClick={() => setIncludeWorkedDates((v) => !v)}
+            >
+              <span>Do you want to add Worked Dates to each company?</span>
+              <span className="jd-ai-optional__hint">{includeWorkedDates ? 'Hide' : 'Optional'}</span>
+            </button>
+            {includeWorkedDates && (
+              <div className="jd-ai-optional__body">
+                <p className="builder-hint">
+                  Enter start and end dates for each of the {total || 0} companies. Leave this closed to let AI choose dates.
+                </p>
+                {workedDates.slice(0, Math.max(1, total)).map((row, index) => (
+                  <div key={index} className="jd-ai-worked-row">
+                    <h6 className="jd-ai-worked-row__title">Company {index + 1}</h6>
+                    <div className="form-grid form-grid--2">
+                      <MonthYearPicker
+                        label="Start date"
+                        value={row.startDate}
+                        onChange={(v) => patchWorkedDate(index, 'startDate', v)}
+                      />
+                      <MonthYearPicker
+                        label="End date"
+                        value={row.endDate}
+                        allowPresent
+                        onChange={(v) => patchWorkedDate(index, 'endDate', v)}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {(localError || error) && (
             <p className="builder-error" role="alert">{localError || error}</p>
           )}
@@ -224,10 +296,12 @@ export default function TargetRoleStep({ project, onChange }) {
       if (!companies.length) {
         throw new Error('AI did not return companies. Try again.')
       }
+      const customDates = Array.isArray(answers.workedDates) ? answers.workedDates : null
       const next = companies.slice(0, 6).map((c, i) => {
         const range = bulletRangeForCompanyIndex(i)
         const raw = Number(c.bulletCount) || Number(range.default)
         const bulletCount = String(Math.min(range.max, Math.max(range.min, raw)))
+        const override = customDates?.[i]
         return {
           ...emptyExperience(i),
           id: newId('exp'),
@@ -235,8 +309,8 @@ export default function TargetRoleStep({ project, onChange }) {
           jobTitle: String(c.jobTitle || c.role || t.jobTitle || '').trim(),
           city: String(c.city || '').trim(),
           state: String(c.state || '').trim(),
-          startDate: String(c.startDate || '').trim(),
-          endDate: String(c.endDate || '').trim() || 'Present',
+          startDate: String(override?.startDate || c.startDate || '').trim(),
+          endDate: String(override?.endDate || c.endDate || '').trim() || 'Present',
           bulletCount,
           summary: String(c.bulletGuidance || c.summary || '').trim(),
           country: String(c.country || '').trim(),
@@ -263,24 +337,24 @@ export default function TargetRoleStep({ project, onChange }) {
   return (
     <div className="jd-step">
       <header className="jd-step__header">
-        <h4 className="jd-step__title">Target Role</h4>
+        <h4 className="jd-step__title">Target & Experience</h4>
         <p className="jd-step__desc">
-          Confirm the role from the JD, then fill companies manually — or use AI mode to auto-build a JD-fit history.
+          Confirm the target role and required experience from the JD, then add work history — or use AI / Auto Fill.
         </p>
       </header>
 
       <section className="jd-panel-card" aria-label="Target role">
-        <h5 className="jd-panel-card__title">Target information</h5>
+        <h5 className="jd-panel-card__title">Target Details</h5>
         <div className="form-grid form-grid--2">
           <FormField
-            label="Target role"
+            label="Target"
             value={t.jobTitle}
             onChange={(e) => patchTarget({ jobTitle: e.target.value })}
             placeholder="e.g. Data Analyst"
             required
           />
           <FormField
-            label="Required experience (from JD)"
+            label="Required Experience"
             type="number"
             min={0}
             max={50}
@@ -289,7 +363,7 @@ export default function TargetRoleStep({ project, onChange }) {
             placeholder="e.g. 5"
           />
           <div className="form-field form-field--full">
-            <span className="form-field__label">Total years (from company dates)</span>
+            <span className="form-field__label">Total Years (from company dates)</span>
             <p className="builder-hint" style={{ margin: '8px 0 0' }}>
               {computedYears > 0
                 ? `≈ ${computedYears} year${computedYears === 1 ? '' : 's'}`
@@ -299,9 +373,9 @@ export default function TargetRoleStep({ project, onChange }) {
         </div>
       </section>
 
-      <section className="jd-panel-card jd-panel-card--companies" aria-label="Companies">
+      <section className="jd-panel-card jd-panel-card--companies" aria-label="Work experience">
         <div className="jd-step__row-head">
-          <h5 className="jd-panel-card__title">Companies</h5>
+          <h5 className="jd-panel-card__title">Work Experience Details</h5>
           <div className="jd-step__row-actions">
             <button
               type="button"
@@ -325,7 +399,7 @@ export default function TargetRoleStep({ project, onChange }) {
             <div key={exp.id || index} className="jd-company-card">
               <div className="jd-step__row-head">
                 <h4 className="builder-company__title">
-                  Company {index + 1}
+                  {experiences.length > 1 ? `Work Experience ${index + 1}` : 'Work Experience Details'}
                   {exp.country ? ` · ${exp.country}` : ''}
                 </h4>
                 {experiences.length > 1 && (

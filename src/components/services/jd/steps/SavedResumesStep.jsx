@@ -150,7 +150,7 @@ export default function SavedResumesStep({ refreshKey = 0 }) {
       <header className="jd-step__header">
         <h4 className="jd-step__title">Saved Resumes</h4>
         <p className="jd-step__desc">
-          Resumes you download are kept here so you can search and re-download without digging through email or your laptop.
+          Downloads are kept here for 60 days. Search and re-download without digging through email or your laptop.
         </p>
       </header>
 
@@ -174,7 +174,7 @@ export default function SavedResumesStep({ refreshKey = 0 }) {
         <p className="builder-hint">
           {items.length
             ? 'No saved resumes match your search.'
-            : 'No saved resumes yet. Build a resume and click Download DOCX on Preview — it will appear here.'}
+            : 'No saved resumes yet. Build a resume and download it on Preview — it is saved here automatically for 60 days.'}
         </p>
       )}
 

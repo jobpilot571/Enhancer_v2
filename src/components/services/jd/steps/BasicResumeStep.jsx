@@ -42,21 +42,22 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
     patch({ education: education.length ? education : [emptyEducation()] })
   }
 
+  const educationList = b.education || []
+
   return (
     <div className="jd-step">
       <header className="jd-step__header">
-        <h4 className="jd-step__title">Basic Information</h4>
+        <h4 className="jd-step__title">Contact & Education</h4>
         <p className="jd-step__desc">
-          Upload an existing resume (any role) to auto-fill contact and education only.
-          Work history, skills, and summary from that file are ignored.
+          Upload an existing resume to auto-fill contact and education, or enter the details below.
         </p>
       </header>
 
       <div className="jd-upload-panel">
         <div className="jd-upload-panel__row">
           <div>
-            <strong>Basic resume upload</strong>
-            <p className="builder-hint">DOCX or PDF. Extraction is contact + education only.</p>
+            <strong>Resume upload</strong>
+            <p className="builder-hint">DOCX or PDF. Only contact and education are imported.</p>
             {b.basicResumeFileName && (
               <p className="jd-upload-panel__file">
                 Loaded: {b.basicResumeFileName}
@@ -81,7 +82,8 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
         </div>
       </div>
 
-      <div className="form-grid">
+      <h5 className="jd-step__subtitle">Contact Information</h5>
+      <div className="form-grid form-grid--3">
         <FormField
           label="Full name"
           value={b.fullName}
@@ -118,18 +120,20 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
         />
       </div>
 
-      <h5 className="jd-step__subtitle">Education</h5>
-      {(b.education || []).map((edu, index) => (
+      <h5 className="jd-step__subtitle">Education Details</h5>
+      {educationList.map((edu, index) => (
         <div key={edu.id || index} className="builder-company">
           <div className="jd-step__row-head">
-            <h4 className="builder-company__title">Education {index + 1}</h4>
-            {(b.education || []).length > 1 && (
+            <h4 className="builder-company__title">
+              {index === 0 ? 'Education Details' : `Additional Education`}
+            </h4>
+            {educationList.length > 1 && (
               <button type="button" className="btn btn--ghost btn--sm" onClick={() => removeEducation(index)}>
                 Remove
               </button>
             )}
           </div>
-          <div className="form-grid">
+          <div className="form-grid form-grid--3">
             <SelectWithOther
               label="Degree"
               value={edu.degree}
@@ -152,7 +156,6 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               options={US_UNIVERSITY_OPTIONS}
               placeholder="Select university"
               otherPlaceholder="Enter university or college name"
-              className="form-field--full"
               onChange={(v) => patchEdu(index, 'school', v)}
             />
             <FormField
@@ -161,20 +164,16 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               onChange={(e) => patchEdu(index, 'location', e.target.value)}
               placeholder="City, State"
             />
-            <div className="form-field--full">
-              <MonthYearPicker
-                label="Start date"
-                value={edu.startDate}
-                onChange={(v) => patchEdu(index, 'startDate', v)}
-              />
-            </div>
-            <div className="form-field--full">
-              <MonthYearPicker
-                label="End date / graduation"
-                value={edu.endDate || ''}
-                onChange={(v) => patchEdu(index, 'endDate', v)}
-              />
-            </div>
+            <MonthYearPicker
+              label="Start date"
+              value={edu.startDate}
+              onChange={(v) => patchEdu(index, 'startDate', v)}
+            />
+            <MonthYearPicker
+              label="End date / graduation"
+              value={edu.endDate || ''}
+              onChange={(v) => patchEdu(index, 'endDate', v)}
+            />
             <FormField
               label="GPA (optional)"
               value={edu.gpa}

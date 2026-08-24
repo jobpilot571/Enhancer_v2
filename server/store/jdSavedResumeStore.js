@@ -6,9 +6,37 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '../uploads/jd-saved')
 const META_FILE = path.join(ROOT, 'index.json')
+const RETENTION_DAYS = 60
+const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000
 
 function ensureRoot() {
   if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true })
+}
+
+function unlinkQuiet(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  } catch {
+    /* ignore */
+  }
+}
+
+function pruneExpiredRows(rows) {
+  const cutoff = Date.now() - RETENTION_MS
+  const keep = []
+  let removed = false
+  for (const row of rows) {
+    const created = new Date(row?.createdAt).getTime()
+    if (Number.isFinite(created) && created < cutoff) {
+      unlinkQuiet(row.docxPath)
+      unlinkQuiet(row.jdPath)
+      removed = true
+      continue
+    }
+    keep.push(row)
+  }
+  if (removed) writeAll(keep)
+  return keep
 }
 
 function readAll() {
@@ -16,7 +44,8 @@ function readAll() {
   if (!fs.existsSync(META_FILE)) return []
   try {
     const raw = JSON.parse(fs.readFileSync(META_FILE, 'utf8'))
-    return Array.isArray(raw) ? raw : []
+    const rows = Array.isArray(raw) ? raw : []
+    return pruneExpiredRows(rows)
   } catch {
     return []
   }

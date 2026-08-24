@@ -34,6 +34,17 @@ import PreviewDownloadStep from './steps/PreviewDownloadStep'
 import SavedResumesStep from './steps/SavedResumesStep'
 import { applyJdChatProjectUpdates } from './jdChatApply'
 import { useAssistantWorkspace } from '../../../context/AssistantContext'
+import ProLoadingScreen from '../pro/ProLoadingScreen'
+
+const JD_LOAD_STEPS = [
+  { key: 'parsing_jd', label: 'Analyzing the job description…' },
+  { key: 'researching_companies', label: 'Researching company context…' },
+  { key: 'project_memory', label: 'Building project context…' },
+  { key: 'generating_content', label: 'Writing tailored resume content…' },
+  { key: 'qa_experience', label: 'Checking experience bullets…' },
+  { key: 'building_docx', label: 'Building your DOCX…' },
+  { key: 'preparing_preview', label: 'Preparing preview…' },
+]
 
 export default function JdBuilderWizard() {
   const user = getStoredUser?.() || null
@@ -328,6 +339,8 @@ export default function JdBuilderWizard() {
       fileName,
     })
     setSavedRefreshKey((n) => n + 1)
+    const savedIdx = JD_STEPS.findIndex((s) => s.id === 'saved')
+    if (savedIdx >= 0) goToStep(savedIdx)
   }
 
   async function handleBuild() {
@@ -474,16 +487,45 @@ export default function JdBuilderWizard() {
   }, [])
 
   return (
-    <div className="service-block service-block--jd-wizard">
-      <div className="service-block__header">
-        <span className="service-block__num">03</span>
-        <div>
-          <h3 className="service-block__title">JD-Tailored Resume Builder</h3>
-          <p className="service-block__desc">
-            Guided steps to build a JD-aligned resume. Use the sticky AI Assistant anytime if you get stuck.
-          </p>
+    <div className={`service-block service-block--jd-wizard ${isPreview ? 'pro-app pro-app--split' : ''}`}>
+      {isPreview ? (
+        <header className="pro-app__bar">
+          <div className="pro-app__identity">
+            <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M19 12H5M12 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div>
+              <span className="pro-app__kicker">JD-Tailored Resume</span>
+              <h3 className="pro-app__title">Preview and download</h3>
+            </div>
+          </div>
+        </header>
+      ) : (
+        <div className="service-block__header">
+          <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+          </Link>
+          <div>
+            <h3 className="service-block__title">JD-Tailored Resume Builder</h3>
+            <p className="service-block__desc">
+              Guided steps to build a JD-aligned resume. Use the sticky AI Assistant anytime if you get stuck.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
+
+      {building && (
+        <ProLoadingScreen
+          title="Please wait…"
+          subtitle="We’re writing a resume that matches this job description."
+          steps={JD_LOAD_STEPS}
+          currentStep={buildStep}
+        />
+      )}
 
       {apiOk === false && (
         <div className="enhancer-notice">
@@ -511,7 +553,7 @@ export default function JdBuilderWizard() {
         ))}
       </nav>
 
-      <div className="form-card form-card--jd-step">
+      <div className={`form-card form-card--jd-step ${isPreview ? 'form-card--pro-split' : ''}`}>
         {stepId === 'basic' && (
           <BasicResumeStep
             project={project}
@@ -554,6 +596,8 @@ export default function JdBuilderWizard() {
             buildStepLabel={getJdBuildStepLabel(buildStep)}
             onStartNew={handleStartNewResume}
             onDownloadAndSave={handleDownloadAndSave}
+            onRebuild={handleBuild}
+            onOpenSaved={() => goToStep(JD_STEPS.findIndex((s) => s.id === 'saved'))}
           />
         )}
         {stepId === 'saved' && (
@@ -562,33 +606,11 @@ export default function JdBuilderWizard() {
 
         {error && <p className="builder-error" role="alert">{error}</p>}
 
-        {(!isTemplates || isPreview) && stepId !== 'saved' && (
+        {!isTemplates && !isPreview && stepId !== 'saved' && (
           <div className="form-cta form-cta--nav">
-            {!isTemplates && !isPreview && (
-              <button type="button" className="btn btn--primary btn--xl" onClick={goNext} disabled={building}>
-                Next
-              </button>
-            )}
-            {isPreview && (
-              <button
-                type="button"
-                className="btn btn--outline btn--xl"
-                onClick={handleBuild}
-                disabled={building}
-              >
-                {building ? getJdBuildStepLabel(buildStep) : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
-              </button>
-            )}
-            {isPreview && (
-              <button
-                type="button"
-                className="btn btn--primary btn--xl"
-                onClick={() => goToStep(JD_STEPS.findIndex((s) => s.id === 'saved'))}
-                disabled={building}
-              >
-                Saved Resumes
-              </button>
-            )}
+            <button type="button" className="btn btn--primary btn--xl" onClick={goNext} disabled={building}>
+              Next
+            </button>
           </div>
         )}
       </div>
