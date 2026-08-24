@@ -9,6 +9,8 @@ export default function PreviewDownloadStep({
   buildStepLabel,
   onStartNew,
   onDownloadAndSave,
+  onRebuild,
+  onOpenSaved,
 }) {
   const [saving, setSaving] = useState(false)
   const [saveNotice, setSaveNotice] = useState('')
@@ -36,123 +38,86 @@ export default function PreviewDownloadStep({
   }
 
   const ready = Boolean(previewBlob) && !building
-  const preparing = building && !previewBlob
   const stepText = buildStepLabel || 'Preparing your resume…'
 
   return (
-    <div className="jd-step jd-step--preview">
-      <header className="jd-step__header">
-        <h4 className="jd-step__title">Preview</h4>
-        <p className="jd-step__desc">
-          {preparing
-            ? stepText
-            : previewBlob
-              ? `Generated resume${builtRole ? ` · ${builtRole}` : ''}. Preview it below, then download your DOCX.`
-              : 'Build a resume, then preview and download it here.'}
-        </p>
-      </header>
-
-      <section
-        className="enhance-preview-block enhance-preview-block--section jd-preview-block"
-        aria-label="Resume preview"
-      >
-        <div className="resume-enhancer-workspace resume-enhancer-workspace--previews jd-preview-workspace">
-          <div className="upload-box">
-            <div className="upload-box__header">
-              <div className="upload-box__label-group">
-                <div>
-                  <h4 className="upload-box__label">Your Resume</h4>
-                  <p className="upload-box__sublabel">
-                    {preparing
-                      ? 'Preparing preview…'
-                      : builtRole
-                        ? `JD-tailored · ${builtRole}`
-                        : 'Optimized content, DOCX preview'}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="upload-box__content upload-box__content--docx">
-              {preparing ? (
-                <div className="jd-preview-preparing" role="status" aria-live="polite" aria-busy="true">
-                  <span className="btn-spinner jd-preview-preparing__spinner" aria-hidden="true" />
-                  <strong className="jd-preview-preparing__title">Your resume is preparing</strong>
-                  <span className="jd-preview-preparing__step">{stepText}</span>
-                  <span className="jd-preview-preparing__hint">This usually takes about a minute. Please keep this tab open.</span>
-                </div>
-              ) : (
-                <DocumentPreview
-                  blob={previewBlob}
-                  fileType="docx"
-                  maxScale={0.87}
-                  emptyLabel="Your resume will appear here after you click Build Resume"
-                />
-              )}
-            </div>
-          </div>
-        </div>
-
-        {(ready || preparing) && (
-          <div className={`enhancer-ready ${ready ? 'enhancer-ready--ok' : 'enhancer-ready--pending'}`}>
-            <div className="enhancer-ready__copy">
-              <strong>
-                {ready ? 'Your resume is ready' : 'Preparing your resume'}
-              </strong>
-              <span>
-                {ready
-                  ? 'Preview it above, then download your DOCX.'
-                  : stepText}
-              </span>
-            </div>
-
-            {ready ? (
-              <button
-                type="button"
-                className="btn btn--primary btn--xl enhancer-download-btn"
-                onClick={handleDownload}
-                disabled={saving}
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                {saving ? 'Saving…' : 'Download DOCX'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
-                disabled
-                aria-busy="true"
-              >
-                <span className="btn-spinner" />
-                {stepText}
-              </button>
-            )}
-          </div>
-        )}
-
-        {ready && (
-          <p className="enhancer-assistant-hint">
-            Need changes? Use the sticky <strong>AI Assistant</strong> (bottom-right) — attach a screenshot if helpful.
+    <div className="jd-step jd-step--preview pro-split">
+      <aside className="pro-split__report">
+        <div className="pro-recap">
+          <h2 className="pro-recap__title">
+            {ready ? 'Your resume is ready.' : building ? 'Building your resume…' : 'Preview your JD-tailored resume'}
+          </h2>
+          <p className="pro-recap__lede">
+            {ready
+              ? `Generated${builtRole ? ` for ${builtRole}` : ''}. Review it on the right, then download your DOCX.`
+              : building
+                ? stepText
+                : 'Build from the Templates step, then your resume appears beside this report.'}
           </p>
+          <ul className="pro-recap__list">
+            <li>
+              <span className="pro-recap__dot" aria-hidden="true">1</span>
+              Tailored to the job description you pasted
+            </li>
+            <li>
+              <span className="pro-recap__dot" aria-hidden="true">2</span>
+              ATS-friendly template and section order
+            </li>
+            <li>
+              <span className="pro-recap__dot" aria-hidden="true">3</span>
+              Download DOCX, or ask the AI Assistant for layout tweaks
+            </li>
+          </ul>
+          {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
+          {saveError && <p className="builder-error" role="alert">{saveError}</p>}
+          <button
+            type="button"
+            className="btn btn--navy pro-report__cta"
+            onClick={handleDownload}
+            disabled={!ready || saving}
+          >
+            {saving ? 'Saving…' : 'Download DOCX'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost-navy pro-report__cta"
+            onClick={onRebuild}
+            disabled={building || saving}
+          >
+            {building ? stepText : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+          </button>
+          <button type="button" className="pro-report__link" onClick={onOpenSaved} disabled={building}>
+            Saved Resumes
+          </button>
+          <button type="button" className="pro-report__link" onClick={onStartNew} disabled={building || saving}>
+            Build a new resume
+          </button>
+        </div>
+      </aside>
+      <section className="pro-split__preview" aria-label="Resume preview">
+        <div className="pro-preview__toolbar">
+          <span className="pro-app__kicker">{builtRole ? `JD-tailored · ${builtRole}` : 'Resume preview'}</span>
+        </div>
+        {previewBlob ? (
+          <div className="pro-preview__frame">
+            <DocumentPreview
+              blob={previewBlob}
+              fileType="docx"
+              maxScale={0.87}
+              emptyLabel="Your resume will appear here after you click Build Resume"
+            />
+          </div>
+        ) : (
+          <div className="pro-preview__empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            <strong>{building ? 'Preparing your resume' : 'Your resume will appear here'}</strong>
+            <span>{building ? stepText : 'Click Build Resume to generate a JD-tailored DOCX preview.'}</span>
+          </div>
         )}
       </section>
-
-      {saveNotice && <p className="builder-hint" role="status">{saveNotice}</p>}
-      {saveError && <p className="builder-error" role="alert">{saveError}</p>}
-
-      <div className="form-cta form-cta--nav jd-preview-secondary-cta">
-        <button
-          type="button"
-          className="btn btn--outline btn--xl"
-          onClick={onStartNew}
-          disabled={building || saving}
-        >
-          Build new resume
-        </button>
-      </div>
     </div>
   )
 }

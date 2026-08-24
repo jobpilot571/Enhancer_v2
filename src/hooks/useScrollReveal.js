@@ -25,7 +25,11 @@ export default function useScrollReveal() {
     // Mobile / coarse pointer: skip reveal motion — transforms feel like the page is scrolling itself
     const isCoarse = window.matchMedia('(hover: none), (pointer: coarse), (max-width: 900px)').matches
     const els = Array.from(document.querySelectorAll(REVEAL_SELECTOR)).filter(
-      (el) => !el.closest('.jd-wizard') && !el.classList.contains('form-card--jd-step'),
+      (el) =>
+        !el.closest('.jd-wizard')
+        && !el.closest('.pro-app')
+        && !el.closest('.service-page--pro')
+        && !el.classList.contains('form-card--jd-step'),
     )
 
     if (prefersReduced || isCoarse || !('IntersectionObserver' in window)) {

@@ -1,9 +1,13 @@
-import { useRef, useState } from 'react'
-import FormField from '../../FormField'
+import { useEffect, useRef, useState } from 'react'
 import { analyzeJdText, analyzeJdFile } from '../../../../api/jdBuilder'
+
+const AUTO_ANALYZE_MIN_CHARS = 80
+const AUTO_ANALYZE_DEBOUNCE_MS = 1200
 
 export default function JobDescriptionStep({ project, onChange }) {
   const fileRef = useRef(null)
+  const analyzeTimer = useRef(null)
+  const lastAnalyzedText = useRef('')
   const t = project.targetRole || {}
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeNotice, setAnalyzeNotice] = useState('')
@@ -21,14 +25,17 @@ export default function JobDescriptionStep({ project, onChange }) {
     const yearsRequired = result?.yearsRequired != null && result.yearsRequired !== ''
       ? String(result.yearsRequired)
       : ''
+    const jdText = result?.jdText
+      ? String(result.jdText).slice(0, 50000)
+      : String(t.jobDescription || '')
     const next = {
       ...(fileName ? { jdFileName: fileName } : {}),
-      ...(result?.jdText ? { jobDescription: String(result.jdText).slice(0, 50000) } : {}),
+      ...(jdText ? { jobDescription: jdText } : {}),
     }
     if (roleTitle) next.jobTitle = roleTitle
     if (yearsRequired !== '') next.yearsRequired = yearsRequired
 
-    // Prefill company role with target role when blank
+    // Prefill first company role with target role when blank
     let experiences = project.experiences || []
     if (roleTitle && experiences.length) {
       experiences = experiences.map((e, i) => (
@@ -44,22 +51,27 @@ export default function JobDescriptionStep({ project, onChange }) {
       targetRole: { ...t, ...next },
     })
 
+    lastAnalyzedText.current = String(next.jobDescription || jdText || '').trim()
+
     const bits = []
     if (roleTitle) bits.push(`role “${roleTitle}”`)
     if (yearsRequired !== '') bits.push(`${yearsRequired}+ years required`)
     setAnalyzeNotice(
       bits.length
-        ? `Extracted ${bits.join(' · ')}. You can edit these below.`
-        : 'JD saved. Enter the target role manually if it was not detected.',
+        ? `Detected ${bits.join(' · ')} — saved to Target Role for review.`
+        : 'Job description saved. You can set the target role on the next step if needed.',
     )
   }
 
   async function analyzeText(text, fileName = '') {
     const cleaned = String(text || '').trim()
-    if (cleaned.length < 40) {
+    if (cleaned.length < AUTO_ANALYZE_MIN_CHARS) {
       setAnalyzeError('Paste a fuller job description first (at least a few sentences).')
       return
     }
+    if (analyzing) return
+    if (cleaned === lastAnalyzedText.current && !fileName) return
+
     setAnalyzing(true)
     setAnalyzeError('')
     setAnalyzeNotice('')
@@ -73,6 +85,19 @@ export default function JobDescriptionStep({ project, onChange }) {
       setAnalyzing(false)
     }
   }
+
+  // Auto-extract role + years after the user finishes pasting/typing a JD
+  useEffect(() => {
+    const text = String(t.jobDescription || '').trim()
+    clearTimeout(analyzeTimer.current)
+    if (text.length < AUTO_ANALYZE_MIN_CHARS) return undefined
+    if (text === lastAnalyzedText.current) return undefined
+    analyzeTimer.current = setTimeout(() => {
+      analyzeText(text)
+    }, AUTO_ANALYZE_DEBOUNCE_MS)
+    return () => clearTimeout(analyzeTimer.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.jobDescription])
 
   async function handleUpload(file) {
     if (!file) return
@@ -105,21 +130,22 @@ export default function JobDescriptionStep({ project, onChange }) {
       <header className="jd-step__header">
         <h4 className="jd-step__title">Job Description</h4>
         <p className="jd-step__desc">
-          Paste or upload the JD. We extract the target role and required years of experience — both stay editable.
+          Paste or upload the job description. Target role and required experience are detected automatically and filled on the Target step.
         </p>
       </header>
 
       <div className="form-field form-field--full">
-        <label className="form-field__label">Job description</label>
+        <label className="form-field__label">Paste job description</label>
         <div className="jd-input-area">
           <textarea
             className="form-field__input form-field__textarea jd-input-area__text"
-            rows={12}
+            rows={14}
             placeholder="Paste the full job description here…"
             value={t.jobDescription || ''}
             disabled={analyzing}
             onChange={(e) => {
               setAnalyzeNotice('')
+              setAnalyzeError('')
               patch({ jobDescription: e.target.value })
             }}
           />
@@ -143,39 +169,14 @@ export default function JobDescriptionStep({ project, onChange }) {
             >
               {analyzing ? 'Analyzing…' : 'Upload JD (PDF / DOCX / TXT)'}
             </button>
-            <button
-              type="button"
-              className="btn btn--outline btn--sm"
-              disabled={analyzing || String(t.jobDescription || '').trim().length < 40}
-              onClick={() => analyzeText(t.jobDescription)}
-            >
-              {analyzing ? 'Extracting…' : 'Extract role & experience'}
-            </button>
+            {analyzing && (
+              <span className="builder-hint" role="status">Detecting role and experience…</span>
+            )}
           </div>
         </div>
         {t.jdFileName && <p className="builder-hint">Last file: {t.jdFileName}</p>}
         {analyzeNotice && <p className="builder-hint" role="status">{analyzeNotice}</p>}
         {analyzeError && <p className="builder-error" role="alert">{analyzeError}</p>}
-      </div>
-
-      <h5 className="jd-step__subtitle">From the JD (editable)</h5>
-      <div className="form-grid form-grid--2">
-        <FormField
-          label="Target role"
-          value={t.jobTitle || ''}
-          onChange={(e) => patch({ jobTitle: e.target.value })}
-          placeholder="e.g. Senior Data Analyst"
-          required
-        />
-        <FormField
-          label="Required years of experience"
-          type="number"
-          min={0}
-          max={50}
-          value={t.yearsRequired ?? ''}
-          onChange={(e) => patch({ yearsRequired: e.target.value })}
-          placeholder="e.g. 5"
-        />
       </div>
     </div>
   )

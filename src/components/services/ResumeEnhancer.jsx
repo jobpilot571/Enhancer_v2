@@ -1,6 +1,7 @@
 ﻿import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import DocumentPreview from './DocumentPreview'
+import ProLoadingScreen from './pro/ProLoadingScreen'
 import {
   uploadResume,
   startEnhance,
@@ -305,7 +306,7 @@ function JdPanel({ jdText, jdPrepStatus, onOpen, boxRef }) {
           <div>
             <h4 className="upload-box__label">Paste Job Description</h4>
             <p className="upload-box__sublabel">
-              {hasJd ? (jdPrepStatus || 'Job description ready') : 'Click Upload to paste JD'}
+              {hasJd ? (jdPrepStatus || 'Job description ready') : 'Paste or type the job posting'}
             </p>
           </div>
         </div>
@@ -313,11 +314,10 @@ function JdPanel({ jdText, jdPrepStatus, onOpen, boxRef }) {
       <div className="upload-box__content upload-box__content--compact">
         <button type="button" className="upload-box__center-btn" onClick={onOpen}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
           </svg>
-          Upload
+          {hasJd ? 'Edit JD' : 'Paste JD'}
         </button>
         <p className={`upload-box__center-status ${hasJd ? 'is-ready' : ''}`}>
           {hasJd ? (jdPrepStatus || 'Job description ready.') : 'No job description yet'}
@@ -434,6 +434,127 @@ function JdModal({ jdText, setJdText, onDone, onCancel, anchorRef }) {
   )
 }
 
+const ENHANCE_LOAD_STEPS = [
+  { key: 'analyzing_resume', label: 'Loading your resume…' },
+  { key: 'parsing_jd', label: 'Parsing the job description…' },
+  { key: 'comparing', label: 'Comparing skills and keywords…' },
+  { key: 'writing_plan', label: 'Writing the enhancement plan…' },
+  { key: 'updating_resume', label: 'Updating your resume…' },
+  { key: 'preparing_preview', label: 'Verifying layout and pages…' },
+]
+
+function greetingLine(user) {
+  const hour = new Date().getHours()
+  const part = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const raw = user?.name?.split(/\s+/)[0] || ''
+  const name = !raw || raw === 'Local' ? '' : raw
+  return name ? `${part}, ${name}.` : `${part}.`
+}
+
+function asTextList(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item
+      return item?.item || item?.skill || item?.keyword || item?.text || ''
+    })
+    .filter(Boolean)
+}
+
+function scoreTone(score) {
+  const n = Number(score) || 0
+  if (n >= 80) return 'ok'
+  if (n >= 55) return 'mid'
+  return 'low'
+}
+
+function deriveWorkingItems(results, afterBreakdown, atsMarks) {
+  const items = []
+  const strong = asTextList(results?.keywordsStrong)
+  const matched = asTextList(results?.keywordsMatched)
+  if (strong.length) {
+    items.push({
+      title: 'Strong keyword matches',
+      body: `Your resume now hits ${strong.length} high-value JD keywords${strong.length ? `, including ${strong.slice(0, 3).join(', ')}` : ''}.`,
+    })
+  } else if (matched.length) {
+    items.push({
+      title: 'JD keywords present',
+      body: `${matched.length} job-description keywords appear in your enhanced resume.`,
+    })
+  }
+  const format = afterBreakdown?.format
+  if (format?.max && format.score / format.max >= 0.7) {
+    items.push({
+      title: 'ATS-friendly format',
+      body: `Layout and structure scored ${format.score}/${format.max}. Parsers and recruiters can read this cleanly.`,
+    })
+  }
+  const bullets = afterBreakdown?.bullets
+  if (bullets && (bullets.pct >= 60 || (bullets.total && bullets.matched / bullets.total >= 0.55))) {
+    items.push({
+      title: 'Experience coverage',
+      body: `${bullets.matched}/${bullets.total} JD experience themes are covered in your bullets.`,
+    })
+  }
+  if ((atsMarks?.readability ?? 0) >= 70) {
+    items.push({
+      title: 'Readable for hiring managers',
+      body: `Readability scored ${atsMarks.readability}/100 — scannable, not dense.`,
+    })
+  }
+  if ((atsMarks?.atsFriendly ?? 0) >= 70) {
+    items.push({
+      title: 'ATS-friendly writing',
+      body: `ATS friendliness scored ${atsMarks.atsFriendly}/100.`,
+    })
+  }
+  return items.slice(0, 5)
+}
+
+function deriveFixItems(results, afterBreakdown, afterScore) {
+  const items = []
+  const missing = asTextList(results?.keywordsStillMissing)
+  const weak = asTextList(results?.keywordsWeak)
+  const unmatchedSkills = (afterBreakdown?.details?.skills || []).filter((row) => !row.matched)
+  const remaining = Math.max(0, 100 - (Number(afterScore) || 0))
+
+  if (missing.length) {
+    items.push({
+      title: 'Missing JD keywords',
+      body: `${missing.length} important terms are still missing: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}.`,
+      impact: remaining ? `+${Math.min(remaining, Math.max(3, missing.length))} pts` : null,
+      scoreLabel: `${Math.max(1, 10 - Math.min(9, missing.length))}/10`,
+    })
+  }
+  if (weak.length) {
+    items.push({
+      title: 'Weak keyword placement',
+      body: `These appear, but not strongly enough: ${weak.slice(0, 6).join(', ')}.`,
+      impact: remaining ? `+${Math.min(6, weak.length)} pts` : null,
+      scoreLabel: '6/10',
+    })
+  }
+  if (unmatchedSkills.length) {
+    items.push({
+      title: 'Skills still missing',
+      body: unmatchedSkills.slice(0, 8).map((row) => row.item).filter(Boolean).join(', '),
+      impact: remaining ? `+${Math.min(8, unmatchedSkills.length)} pts` : null,
+      scoreLabel: `${Math.max(1, 10 - Math.min(9, unmatchedSkills.length))}/10`,
+    })
+  }
+  const format = afterBreakdown?.format
+  if (format?.max && format.score / format.max < 0.7) {
+    items.push({
+      title: 'Format & layout',
+      body: `Format scored ${format.score}/${format.max}. Tighten spacing, headers, and page breaks.`,
+      impact: `+${Math.max(1, format.max - (format.score || 0))} pts`,
+      scoreLabel: `${Math.max(1, Math.round((format.score / format.max) * 10))}/10`,
+    })
+  }
+  return items
+}
+
 export default function ResumeEnhancer() {
   const { user, isAuthenticated, refreshUser } = useAuth()
   const { setWorkspace, clearWorkspace } = useAssistantWorkspace()
@@ -470,8 +591,10 @@ export default function ResumeEnhancer() {
   const [jdPrepStatus, setJdPrepStatus] = useState('')
   const [beforeTab, setBeforeTab] = useState(null)
   const [afterTab, setAfterTab] = useState(null)
+  const [previewMode, setPreviewMode] = useState('original')
   const enhancingRef = useRef(false)
   const jdBoxRef = useRef(null)
+  const resumeInputRef = useRef(null)
 
   const openBeforeTab = useCallback((key) => {
     setAfterTab(null)
@@ -607,6 +730,7 @@ export default function ResumeEnhancer() {
     setMatchAnalysis(null)
     setAtsScore(null)
     setSessionId(null)
+    setPreviewMode('original')
     lastSavedJdRef.current = ''
     setJdPrepStatus('')
     setUploading(true)
@@ -633,7 +757,7 @@ export default function ResumeEnhancer() {
       return
     }
     if (!jdText.trim()) {
-      setError('Paste a job description first. Click Upload on the JD box.')
+      setError('Paste a job description first. Click Paste JD on the job description box.')
       setJdEditorOpen(true)
       return
     }
@@ -645,6 +769,7 @@ export default function ResumeEnhancer() {
     enhancingRef.current = true
     setError('')
     setEnhancing(true)
+    window.scrollTo(0, 0)
     setStep('enhancing')
     setEnhanceStep('analyzing_resume')
     setReadyForDownload(false)
@@ -694,6 +819,7 @@ export default function ResumeEnhancer() {
 
       const enhanced = await fetchFileBlob(sessionId, 'enhanced')
       setEnhancedBlob(enhanced)
+      setPreviewMode('enhanced')
       setStep('done')
       setError('')
 
@@ -755,346 +881,419 @@ export default function ResumeEnhancer() {
     || comparison?.scoreBreakdown
     || null
   const showResults = step === 'done' && comparison && results
-
-  // Do not auto-scroll when results appear — on mobile this feels like the screen moving by itself.
-  // Users can jump via the explicit "View changes" control (scrollToAdded).
+  const atsMarks = results?.atsMarks || comparison?.atsMarks || {}
+  const workingItems = showResults ? deriveWorkingItems(results, afterBreakdown, atsMarks) : []
+  const fixItems = showResults ? deriveFixItems(results, afterBreakdown, results.afterScore) : []
+  const missingKeywords = asTextList(results?.keywordsStillMissing)
+  const displayScore = showResults ? (results.afterScore ?? results.beforeScore) : null
+  const beforeScore = results?.beforeScore
+  const tone = scoreTone(displayScore)
+  const headlineGood = Number(displayScore) >= 80
+  const previewBlob = previewMode === 'enhanced' && enhancedBlob ? enhancedBlob : originalBlob
+  const previewType = previewMode === 'enhanced' && enhancedBlob ? 'docx' : fileType
+  const changeCount = addedSkills.length + addedBullets.length + addedKeywords.length
 
   return (
-    <div className="service-block service-block--workspace service-block--enhancer">
-      <div className="enhancer-topbar">
-        <div className="service-block__header">
-          <span className="service-block__num">01</span>
+    <div className="service-block service-block--workspace service-block--enhancer pro-app">
+      <header className="pro-app__bar">
+        <div className="pro-app__identity">
+          <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+          </Link>
           <div>
-            <h3 className="service-block__title">AI Resume Enhancer</h3>
-            <p className="service-block__desc">Upload resume + JD, then enhance. Preview appears below.</p>
-            {usageText && (
-              <p className="enhancer-usage-chip">
-                {user?.planLabel || 'Free plan'} · {usageText}
-                {Number.isFinite(enhancerLimit) && enhancerLeft === 0 && (
-                  <> · <Link to="/#pricing">Upgrade for more</Link></>
-                )}
-              </p>
-            )}
-            {!isAuthenticated && (
-              <p className="enhancer-usage-chip">
-                <Link to="/login">Sign in</Link> to use your free plan (10 enhancements / month).
-              </p>
-            )}
+            <span className="pro-app__kicker">Resume Enhancer</span>
+            <h3 className="pro-app__title">Score your resume against the job</h3>
           </div>
         </div>
-
-        <button
-          type="button"
-          className="btn btn--primary enhancer-topbar__cta"
-          disabled={uploading || enhancing}
-          onClick={handleEnhance}
-        >
-          {enhancing ? (
-            <>
-              <span className="btn-spinner" />
-              {getEnhanceStepLabel(enhanceStep)}
-            </>
-          ) : (
-            <>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-              </svg>
-              Enhance Resume
-            </>
+        {showResults && (
+          <nav className="pro-app__tabs" aria-label="Report view">
+            <span className="pro-app__tab is-active">Score</span>
+          </nav>
+        )}
+        <div className="pro-app__actions">
+          {usageText && <p className="pro-app__usage">{user?.planLabel || 'Free plan'} · {usageText}</p>}
+          {originalBlob && (
+            <button
+              type="button"
+              className="btn btn--ghost-navy"
+              disabled={uploading || enhancing}
+              onClick={() => resumeInputRef.current?.click()}
+            >
+              Re-upload resume
+            </button>
           )}
-        </button>
-      </div>
+          <button
+            type="button"
+            className="btn btn--primary enhancer-topbar__cta"
+            disabled={uploading || enhancing}
+            onClick={handleEnhance}
+          >
+            {enhancing ? (
+              <>
+                <span className="btn-spinner" />
+                {getEnhanceStepLabel(enhanceStep)}
+              </>
+            ) : (
+              'Enhance Resume'
+            )}
+          </button>
+          {showResults && sessionId && readyForDownload && (
+            <a href={getDownloadUrl(sessionId)} className="btn btn--navy" download>
+              Download DOCX
+            </a>
+          )}
+        </div>
+      </header>
 
-      {error && <div className="enhancer-error">{error}</div>}
+      <input
+        ref={resumeInputRef}
+        type="file"
+        accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+        className="sr-only"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) handleUpload(file)
+          e.target.value = ''
+        }}
+      />
 
+      {error && <div className="pro-error" role="alert">{error}</div>}
       {apiOnline === false && !error && (
-        <div className="enhancer-notice enhancer-notice--warn">
-          Resume API is offline. Deploy the backend (Render/Railway) and set <code>VITE_API_BASE</code> in Vercel.
+        <div className="pro-notice">
+          Resume API is offline. Deploy the backend and set <code>VITE_API_BASE</code>.
         </div>
       )}
-
       {fileType === 'pdf' && sessionId && (
-        <div className="enhancer-notice">
-          PDF preview is supported. Upload a DOCX file to enable enhancement and DOCX download.
-        </div>
+        <div className="pro-notice">PDF preview is supported. Upload a DOCX file to enhance and download.</div>
       )}
 
       {enhancing && (
-        <p className="enhancer-progress">{getEnhanceStepLabel(enhanceStep)}</p>
+        <ProLoadingScreen
+          title="Please wait…"
+          subtitle="We’re scoring your resume against this job description."
+          steps={ENHANCE_LOAD_STEPS}
+          currentStep={enhanceStep}
+        />
       )}
 
-      <div className="service-section service-section--inputs">
-        <div className="resume-enhancer-workspace resume-enhancer-workspace--inputs">
-          <UploadPanel
-            label="Upload Resume"
-            sublabel={fileName || 'DOCX or PDF'}
-            uploading={uploading}
-            accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
-            onUpload={handleUpload}
-            statusText={fileName || 'No file uploaded yet'}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-              </svg>
-            }
-          />
+      <div className="pro-split">
+        <aside className={`pro-split__report ${showResults ? '' : 'pro-split__report--setup pro-setup'}`}>
+          {!showResults ? (
+            <>
+              <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
+              <p className="pro-setup__lede">Welcome back to your career toolkit. Upload a resume, paste the JD, then enhance.</p>
+              <div className="pro-setup__tiles">
+                <UploadPanel
+                  label="Upload Resume"
+                  sublabel={fileName || 'English resumes in PDF or DOCX'}
+                  uploading={uploading}
+                  accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+                  onUpload={handleUpload}
+                  statusText={fileName || 'Click Upload or drop your resume here'}
+                  icon={
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  }
+                />
+                <JdPanel
+                  jdText={jdText}
+                  jdPrepStatus={jdPrepStatus}
+                  boxRef={jdBoxRef}
+                  onOpen={() => {
+                    setError('')
+                    setJdEditorOpen(true)
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn btn--primary pro-setup__cta"
+                disabled={uploading || enhancing}
+                onClick={handleEnhance}
+              >
+                Enhance Resume
+              </button>
+              {!isAuthenticated && (
+                <p className="pro-setup__hint">
+                  <Link to="/login">Sign in</Link> to use your free plan (10 enhancements / month).
+                </p>
+              )}
+              {isAuthenticated && Number.isFinite(enhancerLimit) && enhancerLeft === 0 && (
+                <p className="pro-setup__hint">
+                  You’re out of enhancements this month. <Link to="/#pricing">Upgrade for more</Link>.
+                </p>
+              )}
+            </>
+          ) : (
+            <div id="enhancement-results">
+              <h2 className="pro-report__headline">
+                {headlineGood ? (
+                  <>Your resume is <em className="is-good">in strong shape.</em></>
+                ) : (
+                  <>Here&apos;s where your resume stands{Number(displayScore) < 70 ? <> — it&apos;s <em>falling short.</em></> : '.'}</>
+                )}
+              </h2>
+              <p className="pro-report__lede">
+                {beforeScore != null && displayScore != null
+                  ? `You moved from ${beforeScore} to ${displayScore}. Stronger resumes get more callbacks.`
+                  : 'Based on recruiter and ATS screening checks against this job description.'}
+              </p>
 
-          <JdPanel
-            jdText={jdText}
-            jdPrepStatus={jdPrepStatus}
-            boxRef={jdBoxRef}
-            onOpen={() => {
-              setError('')
-              setJdEditorOpen(true)
-            }}
-          />
-        </div>
-      </div>
-
-      {showResults && (
-        <section id="enhancement-results" className="enhance-results enhance-results--v2" aria-label="Enhancement results">
-          <div className="enhance-results__header">
-            <h4 className="enhance-results__title">Enhancement Results</h4>
-            <p className="enhance-results__subtitle">Score breakdown and verified changes</p>
-          </div>
-
-          <div className="ats-mini-grid" aria-label="Score cards">
-            <CompactScoreCard
-              cardKey="before"
-              title="Before score"
-              subtitle="Original resume vs JD"
-              score={results.beforeScore}
-              gradId="beforeScoreGrad"
-              breakdown={beforeBreakdown}
-              activeTab={beforeTab}
-              onTabChange={openBeforeTab}
-            />
-            <CompactScoreCard
-              cardKey="after"
-              title="After score"
-              subtitle="Enhanced resume vs JD"
-              score={results.afterScore}
-              gradId="afterScoreGrad"
-              breakdown={afterBreakdown}
-              badge={addedSkills.length > 0 ? `+${addedSkills.length} skills` : null}
-              activeTab={afterTab}
-              onTabChange={openAfterTab}
-            />
-            <ChangesAppliedCard
-              total={addedSkills.length + addedBullets.length + addedKeywords.length}
-              onViewChanges={scrollToAdded}
-              sessionId={sessionId}
-              onDownloadReport={handleDownloadScoreReport}
-            />
-          </div>
-
-          {(results.atsMarks || comparison?.atsMarks) && (
-            <div className="ats-marks-row" aria-label="ATS friendly marks">
-              {[
-                { key: 'atsFriendly', label: 'ATS Friendly' },
-                { key: 'readability', label: 'Readability' },
-                { key: 'attractiveness', label: 'Attractiveness' },
-              ].map((item) => {
-                const marks = results.atsMarks || comparison?.atsMarks || {}
-                const val = marks[item.key]
-                if (val == null) return null
-                return (
-                  <div key={item.key} className="ats-marks-row__item">
-                    <span className="ats-marks-row__label">{item.label}</span>
-                    <span className="ats-marks-row__value">{val}/100</span>
+              <div className="pro-score">
+                <div className="pro-score__row">
+                  <div className={`pro-score__value pro-score__value--${tone}`}>
+                    {displayScore ?? '—'} <span className="pro-score__denom">/ 100</span>
                   </div>
-                )
-              })}
-              {(results.atsMarks?.jdMatchLabel || comparison?.atsMarks?.jdMatchLabel) && (
-                <div className="ats-marks-row__item ats-marks-row__item--label">
-                  <span className="ats-marks-row__label">JD Match</span>
-                  <span className="ats-marks-row__value">
-                    {results.atsMarks?.jdMatchLabel || comparison?.atsMarks?.jdMatchLabel}
-                  </span>
+                  {beforeScore != null && (
+                    <span className="pro-score__was">Was {beforeScore}</span>
+                  )}
+                </div>
+                <div className="pro-score__bar" aria-hidden="true">
+                  <span
+                    className="pro-score__marker"
+                    style={{ left: `${Math.min(100, Math.max(0, Number(displayScore) || 0))}%` }}
+                  />
+                  {beforeScore != null && Number(displayScore) > Number(beforeScore) && (
+                    <span
+                      className="pro-score__potential"
+                      style={{ left: `${Math.min(100, Math.max(0, Number(displayScore) || 0))}%` }}
+                    >
+                      Enhanced {displayScore}
+                    </span>
+                  )}
+                </div>
+                <p className="pro-score__meta">
+                  Based on skills, keywords, experience coverage, and ATS format checks.
+                </p>
+              </div>
+
+              {(atsMarks.atsFriendly != null || atsMarks.readability != null || atsMarks.attractiveness != null) && (
+                <div className="pro-marks">
+                  {atsMarks.atsFriendly != null && (
+                    <span className="pro-mark">ATS friendly <span>{atsMarks.atsFriendly}/100</span></span>
+                  )}
+                  {atsMarks.readability != null && (
+                    <span className="pro-mark">Readability <span>{atsMarks.readability}/100</span></span>
+                  )}
+                  {atsMarks.attractiveness != null && (
+                    <span className="pro-mark">Attractiveness <span>{atsMarks.attractiveness}/100</span></span>
+                  )}
+                  {atsMarks.jdMatchLabel && (
+                    <span className="pro-mark">JD match <span>{atsMarks.jdMatchLabel}</span></span>
+                  )}
                 </div>
               )}
+
+              <CompactScoreCard
+                cardKey="after"
+                title="After score breakdown"
+                subtitle="Tap a category to see matched vs missing"
+                score={results.afterScore}
+                gradId="afterScoreGrad"
+                breakdown={afterBreakdown}
+                badge={addedSkills.length > 0 ? `+${addedSkills.length} skills` : null}
+                activeTab={afterTab}
+                onTabChange={openAfterTab}
+              />
+              {beforeBreakdown && (
+                <div style={{ marginTop: 12 }}>
+                  <CompactScoreCard
+                    cardKey="before"
+                    title="Before score breakdown"
+                    subtitle="Original resume vs this JD"
+                    score={results.beforeScore}
+                    gradId="beforeScoreGrad"
+                    breakdown={beforeBreakdown}
+                    activeTab={beforeTab}
+                    onTabChange={openBeforeTab}
+                  />
+                </div>
+              )}
+
+              {workingItems.length > 0 && (
+                <section className="pro-section">
+                  <h3 className="pro-section__title">What&apos;s working</h3>
+                  <p className="pro-section__sub">Your resume passes these recruiter and ATS checks.</p>
+                  {workingItems.map((item) => (
+                    <article key={item.title} className="pro-issue pro-issue--ok">
+                      <span className="pro-issue__icon" aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M5 12l5 5L20 7" />
+                        </svg>
+                      </span>
+                      <div className="pro-issue__body">
+                        <h4 className="pro-issue__title">{item.title}</h4>
+                        <p className="pro-issue__text">{item.body}</p>
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              )}
+
+              <section className="pro-section">
+                <h3 className="pro-section__title">What to fix</h3>
+                <p className="pro-section__sub">Sorted by remaining gap — start at the top.</p>
+                {fixItems.length > 0 ? fixItems.map((item) => (
+                  <article key={item.title} className="pro-issue pro-issue--fix">
+                    {item.scoreLabel && <span className="pro-issue__score">{item.scoreLabel}</span>}
+                    <span className="pro-issue__icon" aria-hidden="true">!</span>
+                    <div className="pro-issue__body">
+                      <h4 className="pro-issue__title">{item.title}</h4>
+                      <p className="pro-issue__text">{item.body}</p>
+                    </div>
+                    {item.impact && <span className="pro-issue__impact">{item.impact}</span>}
+                  </article>
+                )) : (
+                  <article className="pro-issue pro-issue--ok">
+                    <span className="pro-issue__icon" aria-hidden="true">✓</span>
+                    <div className="pro-issue__body">
+                      <h4 className="pro-issue__title">No major gaps left</h4>
+                      <p className="pro-issue__text">Remaining edits are polish — download and apply if you want.</p>
+                    </div>
+                  </article>
+                )}
+                {missingKeywords.length > 0 && (
+                  <div className="pro-chips" style={{ marginTop: 10 }}>
+                    {missingKeywords.slice(0, 12).map((kw) => (
+                      <span key={kw} className="pro-chip pro-chip--miss">{kw}</span>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <article id="added-to-resume" className="added-panel">
+                <div className="added-panel__head">
+                  <h3 className="added-panel__title">
+                    Added to resume
+                    <span className="added-panel__count">{changeCount} changes</span>
+                  </h3>
+                </div>
+                <div className="added-sections">
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added skills</h6>
+                    {addedSkills.length > 0 ? (
+                      <div className="pro-chips">
+                        {addedSkills.map(({ skill, category }) => (
+                          <span key={category + '-' + skill} className="pro-chip" title={category}>{skill}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="added-section__empty">No skills added</p>
+                    )}
+                  </div>
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added bullets</h6>
+                    {addedBullets.length > 0 ? (
+                      <ol className="added-bullets-steps">
+                        {addedBullets.map((item, idx) => (
+                          <li key={item.section + '-' + idx} className="added-bullets-steps__item">
+                            <span className="added-bullets-steps__num">{idx + 1}</span>
+                            <div className="added-bullets-steps__content">
+                              <span className="added-bullets-steps__where">
+                                {item.section}
+                                {item.rewritten ? ' | rewritten' : ' | added'}
+                              </span>
+                              <p className="added-bullets-steps__text">{item.text}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="added-section__empty">No bullets added</p>
+                    )}
+                  </div>
+                  <div className="added-section">
+                    <h6 className="added-section__heading">Added keywords</h6>
+                    {addedKeywords.length > 0 ? (
+                      <div className="pro-chips">
+                        {addedKeywords.map((kw) => (
+                          <span key={kw} className="pro-chip pro-chip--kw">{kw}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="added-section__empty">No new keywords matched</p>
+                    )}
+                  </div>
+                </div>
+              </article>
+
+              {sessionId && (
+                <button type="button" className="pro-report__link" onClick={handleDownloadScoreReport}>
+                  Download score report (PDF)
+                </button>
+              )}
+              {sessionId && enhancedBlob && (
+                readyForDownload ? (
+                  <a href={getDownloadUrl(sessionId)} className="btn btn--navy pro-report__cta" download>
+                    Download Enhanced DOCX
+                  </a>
+                ) : (
+                  <button type="button" className="btn btn--navy pro-report__cta" disabled>
+                    <span className="btn-spinner" />
+                    {polishLabel}
+                  </button>
+                )
+              )}
+              <p className="pro-section__sub" style={{ marginTop: 14, textAlign: 'center' }}>
+                Need a layout fix? Use the sticky AI Assistant.
+              </p>
             </div>
           )}
+        </aside>
 
-          <article id="added-to-resume" className="added-panel">
-            <div className="added-panel__head">
-              <h3 className="added-panel__title">
-                Added to resume
-                <span className="added-panel__count">
-                  {addedSkills.length + addedBullets.length + addedKeywords.length} changes
-                </span>
-              </h3>
-            </div>
-
-            <div className="added-sections">
-              <div className="added-section">
-                <h6 className="added-section__heading">Added skills</h6>
-                {addedSkills.length > 0 ? (
-                  <div className="added-skills-row">
-                    {addedSkills.map(({ skill, category }) => (
-                      <span key={category + '-' + skill} className="added-skill-chip" title={category}>
-                        {skill}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="added-section__empty">No skills added</p>
-                )}
+        <section className="pro-split__preview" aria-label="Resume preview">
+          <div className="pro-preview__toolbar">
+            {enhancedBlob ? (
+              <div className="pro-toggle" role="group" aria-label="Resume version">
+                <button
+                  type="button"
+                  className={`pro-toggle__btn ${previewMode === 'original' ? 'is-active' : ''}`}
+                  onClick={() => setPreviewMode('original')}
+                >
+                  Original
+                </button>
+                <button
+                  type="button"
+                  className={`pro-toggle__btn ${previewMode === 'enhanced' ? 'is-active' : ''}`}
+                  onClick={() => setPreviewMode('enhanced')}
+                >
+                  Rewritten
+                </button>
               </div>
-
-              <div className="added-section">
-                <h6 className="added-section__heading">Added bullets</h6>
-                {addedBullets.length > 0 ? (
-                  <ol className="added-bullets-steps">
-                    {addedBullets.map((item, idx) => (
-                      <li key={item.section + '-' + idx} className="added-bullets-steps__item">
-                        <span className="added-bullets-steps__num">{idx + 1}</span>
-                        <div className="added-bullets-steps__content">
-                          <span className="added-bullets-steps__where">
-                            {item.section}
-                            {item.rewritten ? ' | rewritten' : ' | added'}
-                          </span>
-                          <p className="added-bullets-steps__text">{item.text}</p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="added-section__empty">No bullets added</p>
-                )}
+            ) : (
+              <span className="pro-app__kicker">Resume preview</span>
+            )}
+            {enhancedBlob && previewMode === 'enhanced' && (
+              <div className="pro-preview__legend">
+                <span><span className="pro-preview__swatch pro-preview__swatch--green" /> Added</span>
+                <span><span className="pro-preview__swatch pro-preview__swatch--yellow" /> Rewritten</span>
               </div>
-
-              <div className="added-section">
-                <h6 className="added-section__heading">Added keywords</h6>
-                {addedKeywords.length > 0 ? (
-                  <div className="added-skills-row">
-                    {addedKeywords.map((kw) => (
-                      <span key={kw} className="added-skill-chip added-skill-chip--kw">{kw}</span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="added-section__empty">No new keywords matched</p>
-                )}
-              </div>
-            </div>
-          </article>
-        </section>
-      )}
-
-      <section
-        id="resume-preview-compare"
-        className={'enhance-preview-block enhance-preview-block--section' + (showResults ? ' is-after-results' : '')}
-        aria-label="Resume preview comparison"
-      >
-        {enhancedBlob && (
-          <p className="comparison-legend">
-            <span className="comparison-legend__item comparison-legend__item--green">Green = newly added bullet</span>
-            <span className="comparison-legend__item comparison-legend__item--yellow">Yellow = rewritten existing bullet</span>
-          </p>
-        )}
-
-        <div className="resume-enhancer-workspace resume-enhancer-workspace--previews">
-          <div className="upload-box">
-            <div className="upload-box__header">
-              <div className="upload-box__label-group">
-                <div>
-                  <h4 className="upload-box__label">Original Resume</h4>
-                  <p className="upload-box__sublabel">Your uploaded document</p>
-                </div>
-              </div>
-            </div>
-            <div className="upload-box__content upload-box__content--docx">
+            )}
+          </div>
+          {previewBlob ? (
+            <div className="pro-preview__frame">
               <DocumentPreview
-                blob={originalBlob}
-                fileType={fileType}
+                blob={previewBlob}
+                fileType={previewType}
                 emptyLabel="Upload a resume to preview it here"
               />
             </div>
-          </div>
-
-          <div className="upload-box">
-            <div className="upload-box__header">
-              <div className="upload-box__label-group">
-                <div>
-                  <h4 className="upload-box__label">Enhanced Resume</h4>
-                  <p className="upload-box__sublabel">Optimized content, same format</p>
-                </div>
-              </div>
+          ) : (
+            <div className="pro-preview__empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+              <strong>Your resume will appear here</strong>
+              <span>Upload a PDF or DOCX on the left to preview it beside your score.</span>
             </div>
-            <div className="upload-box__content upload-box__content--docx">
-              <DocumentPreview
-                blob={enhancedBlob}
-                fileType="docx"
-                emptyLabel={enhancing ? 'Enhancing your resume...' : 'Enhanced resume will appear here after you click Enhance'}
-              />
-            </div>
-          </div>
-        </div>
-
-        {enhancedBlob && sessionId && (
-          <div className={`enhancer-ready ${readyForDownload ? 'enhancer-ready--ok' : 'enhancer-ready--pending'}`}>
-            <div className="enhancer-ready__copy">
-              <strong>
-                {readyForDownload ? 'Your enhanced resume is ready' : 'Almost ready'}
-              </strong>
-              <span>
-                {readyForDownload
-                  ? 'Preview it above, then download your DOCX.'
-                  : 'We’re polishing page layout so your resume looks clean in Word.'}
-              </span>
-            </div>
-
-            {readyForDownload ? (
-              <a
-                href={getDownloadUrl(sessionId)}
-                className="btn btn--primary btn--xl enhancer-download-btn"
-                download
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                Download Enhanced DOCX
-              </a>
-            ) : (
-              <button
-                type="button"
-                className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
-                disabled
-                aria-busy="true"
-              >
-                <span className="btn-spinner" />
-                {polishLabel}
-              </button>
-            )}
-          </div>
-        )}
-        {enhancing && !enhancedBlob && (
-          <div className="enhancer-ready enhancer-ready--pending">
-            <div className="enhancer-ready__copy">
-              <strong>Enhancing your resume</strong>
-              <span>{getEnhanceStepLabel(enhanceStep) || 'Working on your resume…'}</span>
-            </div>
-            <button
-              type="button"
-              className="btn btn--primary btn--xl enhancer-download-btn enhancer-download-btn--busy"
-              disabled
-              aria-busy="true"
-            >
-              <span className="btn-spinner" />
-              {getEnhanceStepLabel(enhanceStep) || 'Loading…'}
-            </button>
-          </div>
-        )}
-
-        {sessionId && enhancedBlob && readyForDownload && (
-          <p className="enhancer-assistant-hint">
-            Need a format or layout fix? Use the sticky <strong>AI Assistant</strong> (bottom-right) — attach a screenshot if helpful.
-          </p>
-        )}
-      </section>
+          )}
+        </section>
+      </div>
 
       {jdEditorOpen && (
         <JdModal

@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { streamAssistantChat } from '../api/assistant'
 import { useAssistantWorkspace } from '../context/AssistantContext'
-import { useAuth } from '../context/AuthContext'
 
-const PROACTIVE_KEY = 'jobpilot_assistant_proactive_v1'
+const NUDGE_MS = 2800
 
 function serviceProactiveCopy(pathname) {
   if (pathname.includes('/services/resume-enhancer')) {
@@ -25,7 +24,6 @@ function serviceProactiveCopy(pathname) {
 export default function GlobalAiAssistant() {
   const location = useLocation()
   const { workspace } = useAssistantWorkspace()
-  const { user } = useAuth() || {}
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -43,22 +41,22 @@ export default function GlobalAiAssistant() {
     if (el) el.scrollTop = el.scrollHeight
   }, [thread, statusLine, open])
 
-  // Proactive sticky nudge when user starts/lands on a service
+  // Brief hello on first paint only. Route/auth updates used to cancel the
+  // hide timer and leave this bubble on screen forever.
   useEffect(() => {
-    const path = location.pathname
-    if (path.startsWith('/admin') || path === '/login' || path === '/signup') return undefined
-    const key = `${PROACTIVE_KEY}:${path}:${user?.id || 'guest'}`
-    try {
-      if (sessionStorage.getItem(key)) return undefined
-      sessionStorage.setItem(key, '1')
-    } catch { /* ignore */ }
-    const text = serviceProactiveCopy(path)
-    setNudge(text)
-    const t = setTimeout(() => setNudge(''), 9000)
-    return () => clearTimeout(t)
-  }, [location.pathname, user?.id])
+    const path = window.location.pathname
+    if (path.startsWith('/admin') || path === '/login' || path === '/signup' || path === '/verify') {
+      return undefined
+    }
+    setNudge(serviceProactiveCopy(path))
+    const hideId = window.setTimeout(() => setNudge(''), NUDGE_MS)
+    return () => {
+      window.clearTimeout(hideId)
+    }
+  }, [])
 
   function openWithGreeting() {
+    setNudge('')
     setOpen(true)
     setThread((prev) => {
       if (prev.length) return prev

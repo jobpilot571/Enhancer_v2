@@ -20,6 +20,13 @@ import {
 } from '../../api/builder'
 import { getAuthToken, getStoredUser } from '../../api/auth'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
+import ProLoadingScreen from './pro/ProLoadingScreen'
+
+const BUILD_LOAD_STEPS = [
+  { key: 'generating_content', label: 'Writing resume content…' },
+  { key: 'building_docx', label: 'Building your DOCX…' },
+  { key: 'preparing_preview', label: 'Preparing preview…' },
+]
 
 const LOCAL_MEMORY_KEY = 'jobpilot_builder_memory'
 
@@ -742,22 +749,51 @@ export default function BuildNewResume() {
   const isLastStep = step === SECTIONS.length - 1
 
   return (
-    <div className="service-block">
-      <div className="service-block__header">
-        <span className="service-block__num">02</span>
-        <div>
-          <h3 className="service-block__title">Professional Resume Builder</h3>
-          <p className="service-block__desc">
-            Enter your details step by step — optionally add reference docs for experience — and we&apos;ll generate a polished DOCX.
-          </p>
-          {!signedIn && (
-            <p className="enhancer-usage-chip">
-              <Link to="/login">Sign in</Link> required to build — free plan includes 5 resume builds / month.
-              You can fill the form first; Build needs an account.
+    <div className={`service-block service-block--builder-pro ${isLastStep ? 'pro-app pro-app--split' : ''}`}>
+      {isLastStep ? (
+        <header className="pro-app__bar">
+          <div className="pro-app__identity">
+            <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M19 12H5M12 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div>
+              <span className="pro-app__kicker">Resume Builder</span>
+              <h3 className="pro-app__title">Preview and download</h3>
+            </div>
+          </div>
+        </header>
+      ) : (
+        <div className="service-block__header">
+          <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+          </Link>
+          <div>
+            <h3 className="service-block__title">Professional Resume Builder</h3>
+            <p className="service-block__desc">
+              Enter your details step by step — optionally add reference docs for experience — and we&apos;ll generate a polished DOCX.
             </p>
-          )}
+            {!signedIn && (
+              <p className="enhancer-usage-chip">
+                <Link to="/login">Sign in</Link> required to build — free plan includes 5 resume builds / month.
+                You can fill the form first; Build needs an account.
+              </p>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {building && (
+        <ProLoadingScreen
+          title="Please wait…"
+          subtitle="We’re writing a professional ATS-friendly resume."
+          steps={BUILD_LOAD_STEPS}
+          currentStep={buildStep}
+        />
+      )}
 
       {apiOk === false && (
         <div className="enhancer-notice">
@@ -779,7 +815,7 @@ export default function BuildNewResume() {
         ))}
       </nav>
 
-      <div className="form-card">
+      <div className={`form-card ${isLastStep ? 'form-card--pro-split' : ''}`}>
         {step === 0 && (
         <section id="builder-basics" className="builder-section">
           <h4 className="builder-section__title">
@@ -1205,57 +1241,79 @@ export default function BuildNewResume() {
         )}
 
         {step === 6 && (
-        <section id="builder-review" className="builder-section">
-          <h4 className="builder-section__title">
-            <span className="builder-section__num">7</span>
-            Build
-          </h4>
-          <div className="builder-review">
-            {!previewBlob && !building && (
-              <div className="builder-review__summary">
-                <p>
-                  Ready to build a resume for <strong>{form.name || '—'}</strong> as{' '}
-                  <strong>{form.role || '—'}</strong> with {companyCount} compan
-                  {companyCount === 1 ? 'y' : 'ies'}, {form.bulletsPerCompany} bullets each, using the{' '}
-                  <strong>
-                    {RESUME_TEMPLATES.find((t) => t.id === form.templateId)?.name || 'selected'}
-                  </strong>{' '}
-                  template.
-                </p>
+        <section id="builder-review" className="builder-section pro-split">
+          <aside className="pro-split__report">
+            <div className="pro-recap">
+              <h2 className="pro-recap__title">
+                {previewBlob ? 'Your resume is ready.' : 'Build your resume'}
+              </h2>
+              <p className="pro-recap__lede">
+                Ready for <strong>{form.name || '—'}</strong> as <strong>{form.role || '—'}</strong>
+                {' '}with {companyCount} compan{companyCount === 1 ? 'y' : 'ies'}, {form.bulletsPerCompany} bullets each,
+                using the <strong>{RESUME_TEMPLATES.find((t) => t.id === form.templateId)?.name || 'selected'}</strong> template.
+              </p>
+              <ul className="pro-recap__list">
+                <li>
+                  <span className="pro-recap__dot" aria-hidden="true">1</span>
+                  Professional, ATS-friendly section order
+                </li>
+                <li>
+                  <span className="pro-recap__dot" aria-hidden="true">2</span>
+                  Humanized bullets with practical project language
+                </li>
+                <li>
+                  <span className="pro-recap__dot" aria-hidden="true">3</span>
+                  Preview on the right, then download DOCX
+                </li>
+              </ul>
+              {error && <p className="builder-error" role="alert">{error}</p>}
+              <button
+                type="button"
+                className="btn btn--navy pro-report__cta"
+                onClick={handleBuild}
+                disabled={building}
+              >
+                {building ? getBuildStepLabel(buildStep) : previewBlob ? 'Rebuild Resume' : 'Build Resume'}
+              </button>
+              {previewBlob && sessionId && (
+                <a href={getDownloadUrl(sessionId)} className="btn btn--ghost-navy pro-report__cta" download>
+                  Download DOCX
+                </a>
+              )}
+              <button type="button" className="pro-report__link" onClick={goBack} disabled={building}>
+                Back to templates
+              </button>
+            </div>
+          </aside>
+          <section className="pro-split__preview" aria-label="Resume preview">
+            <div className="pro-preview__toolbar">
+              <span className="pro-app__kicker">Resume preview</span>
+            </div>
+            {previewBlob ? (
+              <div className="pro-preview__frame">
+                <DocumentPreview
+                  blob={previewBlob}
+                  fileType="docx"
+                  emptyLabel="Preview will appear here"
+                />
+              </div>
+            ) : (
+              <div className="pro-preview__empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <strong>Your resume will appear here</strong>
+                <span>Click Build Resume to generate a professional DOCX preview beside this report.</span>
               </div>
             )}
-
-            {building && (
-              <p className="enhancer-progress">{getBuildStepLabel(buildStep)}</p>
-            )}
-
-            {previewBlob && (
-              <div className="builder-preview-panel">
-                <div className="upload-box">
-                  <div className="upload-box__header">
-                    <div className="upload-box__label-group">
-                      <div>
-                        <h4 className="upload-box__label">Your Resume</h4>
-                        <p className="upload-box__sublabel">Generated DOCX preview</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="upload-box__content upload-box__content--docx">
-                    <DocumentPreview
-                      blob={previewBlob}
-                      fileType="docx"
-                      emptyLabel="Preview will appear here"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          </section>
         </section>
         )}
 
-        {error && <p className="builder-error" role="alert">{error}</p>}
+        {error && !isLastStep && <p className="builder-error" role="alert">{error}</p>}
 
+        {!isLastStep && (
         <div className="form-cta form-cta--nav">
           {step > 0 && (
             <button
@@ -1267,52 +1325,16 @@ export default function BuildNewResume() {
               Back
             </button>
           )}
-
-          {!isLastStep && (
-            <button
-              type="button"
-              className="btn btn--primary btn--xl"
-              onClick={goNext}
-              disabled={building}
-            >
-              Next
-            </button>
-          )}
-
-          {isLastStep && (
-            <>
-              <button
-                type="button"
-                className="btn btn--primary btn--xl"
-                onClick={handleBuild}
-                disabled={building}
-              >
-                {building ? (
-                  <>
-                    <span className="btn-spinner" />
-                    {getBuildStepLabel(buildStep)}
-                  </>
-                ) : (
-                  <>
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                      <line x1="12" y1="18" x2="12" y2="12" />
-                      <line x1="9" y1="15" x2="15" y2="15" />
-                    </svg>
-                    {previewBlob ? 'Rebuild Resume' : 'Build Resume'}
-                  </>
-                )}
-              </button>
-
-              {previewBlob && sessionId && (
-                <a href={getDownloadUrl(sessionId)} className="btn btn--outline btn--xl" download>
-                  Download DOCX
-                </a>
-              )}
-            </>
-          )}
+          <button
+            type="button"
+            className="btn btn--primary btn--xl"
+            onClick={goNext}
+            disabled={building}
+          >
+            Next
+          </button>
         </div>
+        )}
       </div>
 
       {samplePreview && (

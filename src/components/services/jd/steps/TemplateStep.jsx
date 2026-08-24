@@ -28,6 +28,12 @@ export default function TemplateStep({
   signedIn = true,
 }) {
   const [samplePreview, setSamplePreview] = useState(null)
+  const [showAllTemplates, setShowAllTemplates] = useState(false)
+
+  const visibleTemplates = showAllTemplates
+    ? RESUME_TEMPLATES
+    : RESUME_TEMPLATES.slice(0, 3)
+  const hasMoreTemplates = RESUME_TEMPLATES.length > 3
 
   function openSample(templateId, e) {
     e?.preventDefault?.()
@@ -46,7 +52,7 @@ export default function TemplateStep({
   return (
     <div className="jd-step">
       <header className="jd-step__header">
-        <h4 className="jd-step__title">Templates</h4>
+        <h4 className="jd-step__title">Resume Templates</h4>
         <p className="jd-step__desc">
           Choose a layout, font, and optional keyword highlighting, then build your JD-tailored resume.
           Cards show the same readable design preview — scroll to compare fonts and spacing.
@@ -55,7 +61,7 @@ export default function TemplateStep({
       </header>
 
       <section className="jd-panel-card jd-template-options" aria-label="Font and highlight options">
-        <h5 className="jd-panel-card__title">Typography & highlights</h5>
+        <h5 className="jd-panel-card__title">Typography & Highlights</h5>
         <div className="form-grid form-grid--2">
           <label className="form-field">
             <span className="form-field__label">Font style</span>
@@ -97,7 +103,7 @@ export default function TemplateStep({
       </section>
 
       <div className="template-grid">
-        {RESUME_TEMPLATES.map((tpl) => {
+        {visibleTemplates.map((tpl) => {
           const sample = templateSamples[tpl.id]
           const product = JD_PRODUCT_TEMPLATES.find((p) => p.id === tpl.id)
 
@@ -159,6 +165,21 @@ export default function TemplateStep({
           )
         })}
       </div>
+
+      {hasMoreTemplates && (
+        <div className="jd-templates-more">
+          <button
+            type="button"
+            className="btn btn--outline"
+            disabled={building}
+            onClick={() => setShowAllTemplates((v) => !v)}
+          >
+            {showAllTemplates
+              ? 'Show fewer templates'
+              : `View more templates (${RESUME_TEMPLATES.length - 3} more)`}
+          </button>
+        </div>
+      )}
 
       <div className="form-cta form-cta--nav jd-templates-build">
         <button
