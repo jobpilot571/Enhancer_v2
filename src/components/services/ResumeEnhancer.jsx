@@ -15,6 +15,12 @@ import {
 } from '../../api/enhancer'
 import { useAuth } from '../../context/AuthContext'
 import { useAssistantWorkspace } from '../../context/AssistantContext'
+import {
+  fileFromSticky,
+  loadStickyResume,
+  saveStickyJd,
+  saveStickyResume,
+} from './enhancerResumeStorage'
 
 function ScoreRing({ score, label = '/ 100', gradId = 'scoreGrad', size = 'sm' }) {
   const pct = Math.min(100, Math.max(0, Number(score) || 0))
@@ -556,7 +562,7 @@ function deriveFixItems(results, afterBreakdown, afterScore) {
 }
 
 export default function ResumeEnhancer() {
-  const { user, isAuthenticated, refreshUser } = useAuth()
+  const { user, loading: authLoading, isAuthenticated, refreshUser } = useAuth()
   const { setWorkspace, clearWorkspace } = useAssistantWorkspace()
   const enhancerLeft = user?.usage?.remaining?.enhancer
   const enhancerLimit = user?.usage?.limits?.enhancer
@@ -595,6 +601,8 @@ export default function ResumeEnhancer() {
   const enhancingRef = useRef(false)
   const jdBoxRef = useRef(null)
   const resumeInputRef = useRef(null)
+  const restoreAttemptedRef = useRef(false)
+  const originalFileRef = useRef(null)
 
   const openBeforeTab = useCallback((key) => {
     setAfterTab(null)
@@ -630,6 +638,49 @@ export default function ResumeEnhancer() {
       }
     })
   }, [])
+
+  useEffect(() => {
+    if (authLoading || restoreAttemptedRef.current) return undefined
+    restoreAttemptedRef.current = true
+    let cancelled = false
+
+    ;(async () => {
+      const saved = await loadStickyResume(user?.id)
+      if (cancelled || !saved?.file) return
+      originalFileRef.current = saved.file
+      setFileName(saved.fileName)
+      setFileType(saved.fileType)
+      setOriginalBlob(saved.file)
+      if (saved.jdText) setJdText(saved.jdText)
+      setPreviewMode('original')
+      setStep('uploading')
+      setUploading(true)
+      try {
+        const result = await uploadResume(saved.file)
+        if (cancelled) return
+        setSessionId(result.sessionId)
+        if (result.fileName) setFileName(result.fileName)
+        if (result.fileType) setFileType(result.fileType)
+        setStep('uploaded')
+      } catch {
+        if (!cancelled) setStep('uploaded')
+      } finally {
+        if (!cancelled) setUploading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [authLoading, user?.id])
+
+  useEffect(() => {
+    if (!fileName) return undefined
+    const timer = window.setTimeout(() => {
+      saveStickyJd(user?.id, jdText)
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [jdText, fileName, user?.id])
 
   useEffect(() => {
     setWorkspace({
@@ -721,6 +772,7 @@ export default function ResumeEnhancer() {
     setFileName(file.name)
     setFileType(isPdf ? 'pdf' : 'docx')
     setOriginalBlob(file)
+    originalFileRef.current = file
     setEnhancedBlob(null)
     setLayoutQa(null)
     setReadyForDownload(false)
@@ -737,6 +789,12 @@ export default function ResumeEnhancer() {
     setStep('uploading')
 
     try {
+      await saveStickyResume(user?.id, {
+        file,
+        fileName: file.name,
+        fileType: isPdf ? 'pdf' : 'docx',
+        jdText,
+      })
       const result = await uploadResume(file)
       setSessionId(result.sessionId)
       if (result.fileName) setFileName(result.fileName)
@@ -747,12 +805,16 @@ export default function ResumeEnhancer() {
     } finally {
       setUploading(false)
     }
-  }, [])
+  }, [user?.id, jdText])
 
   const handleEnhance = async () => {
     if (enhancingRef.current || uploading || enhancing) return
 
-    if (!sessionId) {
+    const resumeFile = originalFileRef.current || (originalBlob
+      ? fileFromSticky(originalBlob, fileName, fileType)
+      : null)
+
+    if (!sessionId && !resumeFile) {
       setError('Upload a resume first.')
       return
     }
@@ -777,17 +839,26 @@ export default function ResumeEnhancer() {
     setJdEditorOpen(false)
 
     try {
+      let activeSessionId = sessionId
+      if (!activeSessionId && resumeFile) {
+        const uploaded = await uploadResume(resumeFile)
+        activeSessionId = uploaded.sessionId
+        setSessionId(uploaded.sessionId)
+        if (uploaded.fileName) setFileName(uploaded.fileName)
+        if (uploaded.fileType) setFileType(uploaded.fileType)
+      }
+
       clearTimeout(jdSaveTimerRef.current)
       if (jdText.trim() && jdText.trim() !== lastSavedJdRef.current) {
         try {
-          await setJD(sessionId, jdText.trim())
+          await setJD(activeSessionId, jdText.trim())
           lastSavedJdRef.current = jdText.trim()
         } catch {
           // enhance still carries jdText
         }
       }
 
-      const { jobId } = await startEnhance(sessionId, jdText)
+      const { jobId } = await startEnhance(activeSessionId, jdText)
       try {
         await refreshUser?.()
       } catch {
@@ -817,7 +888,7 @@ export default function ResumeEnhancer() {
       const qa = result.layoutQa || null
       setLayoutQa(qa)
 
-      const enhanced = await fetchFileBlob(sessionId, 'enhanced')
+      const enhanced = await fetchFileBlob(activeSessionId, 'enhanced')
       setEnhancedBlob(enhanced)
       setPreviewMode('enhanced')
       setStep('done')
@@ -840,6 +911,25 @@ export default function ResumeEnhancer() {
       setEnhanceStep('')
     }
   }
+
+  const handleStartAgain = useCallback(() => {
+    setEnhancedBlob(null)
+    setLayoutQa(null)
+    setReadyForDownload(false)
+    setDownloadPhase('idle')
+    setComparison(null)
+    setComparisonBefore(null)
+    setMatchAnalysis(null)
+    setAtsScore(null)
+    setPreviewMode('original')
+    setError('')
+    setJdEditorOpen(false)
+    setBeforeTab(null)
+    setAfterTab(null)
+    setEnhanceStep('')
+    setStep(originalFileRef.current || originalBlob || sessionId ? 'uploaded' : 'idle')
+    window.scrollTo(0, 0)
+  }, [originalBlob, sessionId])
 
   const closeJdEditor = (opts = {}) => {
     const fromPaste = Boolean(opts.fromPaste)
@@ -924,6 +1014,16 @@ export default function ResumeEnhancer() {
               Re-upload resume
             </button>
           )}
+          {showResults && (
+            <button
+              type="button"
+              className="btn btn--ghost-navy"
+              disabled={uploading || enhancing}
+              onClick={handleStartAgain}
+            >
+              Start again
+            </button>
+          )}
           <button
             type="button"
             className="btn btn--primary enhancer-topbar__cta"
@@ -991,7 +1091,11 @@ export default function ResumeEnhancer() {
                   uploading={uploading}
                   accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
                   onUpload={handleUpload}
-                  statusText={fileName || 'Click Upload or drop your resume here'}
+                  statusText={
+                    fileName
+                      ? 'Saved on this device · click Upload to replace'
+                      : 'Click Upload or drop your resume here'
+                  }
                   icon={
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -1238,8 +1342,16 @@ export default function ResumeEnhancer() {
                   </button>
                 )
               )}
+              <button
+                type="button"
+                className="btn btn--ghost-navy pro-report__cta"
+                disabled={uploading || enhancing}
+                onClick={handleStartAgain}
+              >
+                Start again
+              </button>
               <p className="pro-section__sub" style={{ marginTop: 14, textAlign: 'center' }}>
-                Need a layout fix? Use the sticky AI Assistant.
+                Your resume stays loaded. Change the JD and enhance again — no need to go back.
               </p>
             </div>
           )}
