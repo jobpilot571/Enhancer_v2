@@ -522,7 +522,7 @@ input, select, textarea { font-family: inherit; }
 /* ===== Hero ===== */
 .hero {
   position: relative;
-  padding: clamp(24px, 3.5vh, 44px) 0 clamp(20px, 3vh, 36px);
+  padding: 32px 0 28px;
   background: var(--gradient-hero);
   /* Clip decorative orbs/blur — filter:blur + negative offsets otherwise create page-level X scroll */
   overflow: hidden;
@@ -930,6 +930,7 @@ input, select, textarea { font-family: inherit; }
   background: #fff;
   border: 1px solid rgba(18, 24, 58, 0.08);
   border-radius: 10px;
+  min-height: 268px;
 }
 .hw-explain__title {
   display: block;
@@ -1005,7 +1006,9 @@ input, select, textarea { font-family: inherit; }
 .hw-window {
   position: relative;
   flex: 1;
+  height: 520px;
   min-height: 520px;
+  max-height: 520px;
   background: transparent;
   border-radius: 12px;
   overflow: hidden;
@@ -1290,6 +1293,7 @@ input, select, textarea { font-family: inherit; }
   font-size: 0.8125rem;
   color: #334155;
   line-height: 1.45;
+  min-height: 3.9em;
 }
 .hw-stage__cta {
   align-self: flex-start;
@@ -1306,7 +1310,11 @@ input, select, textarea { font-family: inherit; }
     min-height: 0;
     position: static;
   }
-  .hw-window { min-height: 400px; }
+  .hw-window {
+    height: 400px;
+    min-height: 400px;
+    max-height: 400px;
+  }
 }
 .steps {
   display: grid;
@@ -1444,9 +1452,9 @@ input, select, textarea { font-family: inherit; }
 }
 .service-card--live {
   position: relative;
-  height: min(52vh, 560px);
-  min-height: 440px;
-  max-height: 560px;
+  height: 520px;
+  min-height: 520px;
+  max-height: 520px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-xl);
@@ -7090,9 +7098,9 @@ body:has(.service-block--enhancer) .footer__col h4 {
     gap: 20px;
   }
   .service-card--live {
-    height: min(52vh, 640px);
+    height: 480px;
     min-height: 480px;
-    max-height: 640px;
+    max-height: 480px;
   }
   .service-card__content {
     height: 100%;
