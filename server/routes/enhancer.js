@@ -13,6 +13,8 @@ import { runEnhanceJob } from '../services/enhanceWorker.js'
 import { ensureResumeData, ensureJdData, precomputeResume, precomputeJd } from '../services/sessionPrepare.js'
 import { buildScoreReportPdf } from '../services/scoreReportPdfService.js'
 import { getLastResumeParseSnapshot } from '../services/resumeParseCache.js'
+import { getLastProjectContextSnapshot } from '../services/projectContextBuilder.js'
+import { getLastProjectContextRewriteSnapshot } from '../services/projectContextExperienceOverlay.js'
 import { fixReportedLayoutIssue } from '../services/layoutIssueService.js'
 import { requireUser, checkUsage, consumeUsage } from '../middleware/userAuth.js'
 import { AI_SERVICES, ensureSessionOperationId, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
@@ -280,7 +282,32 @@ router.get('/debug/session/:sessionId', (req, res) => {
     comparison: session.comparison || null,
     enhancementPlan: session.enhancementPlan || null,
     processingMeta: session.processingMeta || null,
+    projectContexts: session.projectContexts || null,
+    projectContextRewrites: session.projectContextRewrites || null,
+    projectContextRewriteMeta: session.projectContextRewriteMeta || null,
   })
+})
+
+// Debug: latest Phase 1 project context (also open server/.cache/last-project-contexts.json)
+router.get('/debug/last-project-contexts', (_req, res) => {
+  const snapshot = getLastProjectContextSnapshot()
+  if (!snapshot) {
+    return res.status(404).json({
+      error: 'No project context yet — run Enhance first, then refresh this URL.',
+    })
+  }
+  res.json(snapshot)
+})
+
+// Debug: latest 1–2 project-context experience rewrites per company
+router.get('/debug/last-project-context-rewrites', (_req, res) => {
+  const snapshot = getLastProjectContextRewriteSnapshot()
+  if (!snapshot) {
+    return res.status(404).json({
+      error: 'No project-context rewrites yet — run Enhance first, then refresh this URL.',
+    })
+  }
+  res.json(snapshot)
 })
 
 router.get('/score-report/:sessionId', async (req, res, next) => {

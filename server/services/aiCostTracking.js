@@ -17,6 +17,8 @@ const FEATURE_NAMES = {
   resume_parse: 'Resume Parse',
   jd_analysis: 'JD Analysis',
   company_context_research: 'Company Research',
+  project_context_builder: 'Project Context Builder',
+  project_context_experience_overlay: 'Project Context Experience Overlay',
   enhancement_plan: 'Enhancement',
   llm_ats_score: 'ATS Score',
   build_resume: 'Resume Generation',
