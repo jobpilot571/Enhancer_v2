@@ -35,6 +35,7 @@ import SavedResumesStep from './steps/SavedResumesStep'
 import { applyJdChatProjectUpdates } from './jdChatApply'
 import { useAssistantWorkspace } from '../../../context/AssistantContext'
 import ProLoadingScreen from '../pro/ProLoadingScreen'
+import useHideOnScrollDown from '../../../hooks/useHideOnScrollDown'
 
 const JD_LOAD_STEPS = [
   { key: 'parsing_jd', label: 'Analyzing the job description…' },
@@ -201,7 +202,9 @@ export default function JdBuilderWizard() {
   const buildingRef = useRef(false)
   const saveTimer = useRef(null)
   const projectRef = useRef(project)
+  const workspaceRef = useRef(null)
   projectRef.current = project
+  const stepsHidden = useHideOnScrollDown(workspaceRef, step)
 
   useEffect(() => {
     let cancelled = false
@@ -588,7 +591,7 @@ export default function JdBuilderWizard() {
   const stepCopy = JD_STEP_COPY[stepId] || JD_STEP_COPY.basic
 
   return (
-    <div className="service-block service-block--jd-wizard pro-app pro-app--split">
+    <div ref={workspaceRef} className="service-block service-block--jd-wizard pro-app pro-app--split">
       <header className="pro-app__bar">
         <div className="pro-app__identity">
           <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
@@ -657,7 +660,11 @@ export default function JdBuilderWizard() {
         </div>
       )}
 
-      <nav className="builder-steps builder-steps--pro" aria-label="JD-tailored resume builder steps">
+      <nav
+        className={`builder-steps builder-steps--pro${stepsHidden ? ' is-collapsed' : ''}`}
+        aria-label="JD-tailored resume builder steps"
+        aria-hidden={stepsHidden || undefined}
+      >
         {JD_STEPS.map((s, i) => (
           <button
             key={s.id}

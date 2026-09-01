@@ -10226,6 +10226,25 @@ body:has(.app--pro-workspace),
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0;
   gap: 6px;
+  max-height: 160px;
+  overflow: hidden;
+  opacity: 1;
+  transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.18s ease, border-width 0.22s ease;
+}
+.service-block--builder-pro.pro-app > .builder-steps.is-collapsed,
+.service-block--jd-wizard.pro-app > .builder-steps.is-collapsed,
+.builder-steps--pro.is-collapsed {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-width: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .builder-steps--pro {
+    transition: none;
+  }
 }
 .builder-steps--pro .builder-steps__item {
   background: transparent;
@@ -10357,19 +10376,29 @@ body:has(.app--pro-workspace),
   font-style: normal;
   font-size: 0.75rem;
 }
-.builder-dates-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+.form-grid > .month-year-picker,
+.form-grid--2 > .month-year-picker,
+.form-grid--3 > .month-year-picker {
   grid-column: 1 / -1;
 }
-.builder-dates-row .month-year-picker {
+.builder-dates-row {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch;
+  gap: 16px;
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.builder-dates-row > .month-year-picker,
+.builder-dates-row > .form-field {
+  width: 100%;
   min-width: 0;
 }
-@media (max-width: 720px) {
-  .builder-dates-row {
-    grid-template-columns: 1fr;
-  }
+.builder-section > .jd-step__row-head {
+  margin-bottom: 8px;
+}
+.builder-section > .jd-step__row-head .builder-section__title {
+  margin-bottom: 0;
 }
 .builder-draft--template {
   display: flex;

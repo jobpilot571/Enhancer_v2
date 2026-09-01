@@ -38,6 +38,16 @@ export function defaultBulletCountForCompanyIndex(index) {
   return bulletRangeForCompanyIndex(index).default
 }
 
+/** Clamp a bullet count into the allowed range for that company rank. */
+export function clampBulletCountForCompany(index, value, fallback = null) {
+  const range = bulletRangeForCompanyIndex(index)
+  const n = Number(value)
+  if (Number.isFinite(n)) return Math.min(range.max, Math.max(range.min, n))
+  const fb = Number(fallback)
+  if (Number.isFinite(fb)) return Math.min(range.max, Math.max(range.min, fb))
+  return Number(range.default)
+}
+
 export const JD_FONT_OPTIONS = [
   { value: 'Calibri', label: 'Calibri' },
   { value: 'Arial', label: 'Arial' },

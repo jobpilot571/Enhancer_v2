@@ -18,7 +18,7 @@ import {
 } from '../store/userStore.js'
 import { extractResumeText } from '../services/resumeExtract.js'
 import { parseResumeLocally } from '../services/localResumeParse.js'
-import { parseResume } from '../services/openaiService.js'
+import { parseResume, suggestCompaniesFromJd } from '../services/openaiService.js'
 import { mapResumeToBuilderSuggestions } from '../services/builderReferenceMap.js'
 import { AI_SERVICES, finalizeAiServiceCost, runWithAiCostContext } from '../services/aiCostTracking.js'
 
@@ -66,11 +66,10 @@ function validateFormData(formData) {
     if (!String(c.startDate || '').trim()) return `Company ${i + 1}: start date is required`
     if (!String(c.city || '').trim()) return `Company ${i + 1}: city is required`
     if (!String(c.state || '').trim()) return `Company ${i + 1}: state is required`
-  }
-
-  const bullets = Number(formData.bulletsPerCompany)
-  if (!Number.isFinite(bullets) || bullets < 5 || bullets > 15) {
-    return 'Bullets per company must be between 5 and 15'
+    const bullets = Number(c.bulletCount)
+    if (!Number.isFinite(bullets) || bullets < 5 || bullets > 15) {
+      return `Company ${i + 1}: bullets must be between 5 and 15`
+    }
   }
 
   const edu = formData.education || {}
@@ -177,6 +176,77 @@ router.post('/reference-upload', optionalUser, upload.single('reference'), async
       suggestions,
     })
   } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * AI / Auto mode: suggest companies from target role (USA/India split, present→past dates).
+ */
+router.post('/suggest-companies', optionalUser, async (req, res, next) => {
+  try {
+    const {
+      roleTitle,
+      yearsOfExperience,
+      companyCount,
+      usaCount,
+      indiaCount,
+    } = req.body || {}
+
+    const role = String(roleTitle || '').trim()
+    if (!role) return res.status(400).json({ error: 'Enter a target role first (Basics step).' })
+
+    const total = Number(companyCount)
+    const usa = Number(usaCount)
+    const india = Number(indiaCount)
+    if (!Number.isFinite(total) || total < 1 || total > 6) {
+      return res.status(400).json({ error: 'companyCount must be between 1 and 6' })
+    }
+    if (!Number.isFinite(usa) || !Number.isFinite(india) || usa < 0 || india < 0) {
+      return res.status(400).json({ error: 'usaCount and indiaCount must be non-negative numbers' })
+    }
+    if (usa + india !== total) {
+      return res.status(400).json({ error: 'usaCount + indiaCount must equal companyCount' })
+    }
+
+    const years = Number(yearsOfExperience) || 5
+    const syntheticJd = [
+      `We are hiring a ${role}.`,
+      `The role requires about ${years} years of professional experience.`,
+      `Typical work includes delivery, stakeholder collaboration, and tools used by this occupation.`,
+      `Suggest a realistic company history for a candidate targeting this role.`,
+    ].join(' ')
+
+    const result = await runWithAiCostContext({
+      userId: req.user?.id || null,
+      serviceName: AI_SERVICES.BUILDER,
+    }, async () => {
+      try {
+        const suggested = await suggestCompaniesFromJd({
+          jdText: syntheticJd,
+          roleTitle: role,
+          yearsOfExperience: years,
+          companyCount: total,
+          usaCount: usa,
+          indiaCount: india,
+        })
+        finalizeAiServiceCost({ status: 'completed' })
+        return suggested
+      } catch (err) {
+        finalizeAiServiceCost({ status: 'failed' })
+        throw err
+      }
+    })
+
+    const userTag = req.user?.id || 'guest'
+    console.log(
+      `[builder] suggest-companies user=${userTag} role=${role} total=${total} usa=${usa} india=${india} `
+      + `industry=${result.industry || '-'}`,
+    )
+
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message })
     next(err)
   }
 })

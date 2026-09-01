@@ -63,6 +63,7 @@ export function MonthYearPicker({
   onChange,
   allowPresent = false,
   required,
+  className = '',
 }) {
   const initial = parseMonthYear(value)
   const [month, setMonth] = useState(initial.month)
@@ -100,7 +101,7 @@ export function MonthYearPicker({
   }
 
   return (
-    <div className="month-year-picker">
+    <div className={`month-year-picker form-field--full ${className}`.trim()}>
       <div className="month-year-picker__label-row">
         <span className="form-field__label">{label}{required ? ' *' : ''}</span>
         {allowPresent && (

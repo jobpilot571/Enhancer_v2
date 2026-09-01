@@ -116,6 +116,19 @@ export async function uploadReferenceDocument(file) {
   return res.json()
 }
 
+/**
+ * AI mode: suggest companies (USA/India) + present→past dates from the target role.
+ */
+export async function suggestCompaniesFromRole(payload) {
+  const res = await request('/suggest-companies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(120000),
+  })
+  return res.json()
+}
+
 export async function startBuild(formData, sessionId = null) {
   const res = await request('/build', {
     method: 'POST',

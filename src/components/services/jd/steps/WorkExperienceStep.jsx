@@ -69,14 +69,16 @@ export default function WorkExperienceStep({ project, onChange }) {
             <FormField label="Job title" value={exp.jobTitle} onChange={(e) => patchExp(index, 'jobTitle', e.target.value)} required />
             <FormField label="Location" value={exp.location} onChange={(e) => patchExp(index, 'location', e.target.value)} placeholder="City, State or Remote" />
             <FormField label="Industry / domain" value={exp.domain} onChange={(e) => patchExp(index, 'domain', e.target.value)} />
-            <FormField label="Start date" value={exp.startDate} onChange={(e) => patchExp(index, 'startDate', e.target.value)} placeholder="e.g. Jan 2022" required />
-            <FormField
-              label="End date"
-              value={exp.endDate}
-              onChange={(e) => patchExp(index, 'endDate', e.target.value)}
-              placeholder="e.g. Present"
-              disabled={exp.isCurrent}
-            />
+            <div className="builder-dates-row form-field--full">
+              <FormField label="Start date" value={exp.startDate} onChange={(e) => patchExp(index, 'startDate', e.target.value)} placeholder="e.g. Jan 2022" required />
+              <FormField
+                label="End date"
+                value={exp.endDate}
+                onChange={(e) => patchExp(index, 'endDate', e.target.value)}
+                placeholder="e.g. Present"
+                disabled={exp.isCurrent}
+              />
+            </div>
             <label className="form-field form-field--full jd-check">
               <input
                 type="checkbox"
