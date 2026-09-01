@@ -1,31 +1,32 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 /**
- * Hide sticky workspace chrome when the user scrolls down in the form panel,
- * and show it again when they scroll up (or return to the top).
+ * Hide workspace chrome when the form panel is scrolled down.
+ * Returns [hidden, setScrollEl] — put setScrollEl on the scrolling aside.
  */
-export default function useHideOnScrollDown(rootRef, resetKey, { threshold = 8, minY = 20 } = {}) {
+export default function useHideOnScrollDown(resetKey, { threshold = 6, minY = 16 } = {}) {
   const [hidden, setHidden] = useState(false)
+  const [node, setNode] = useState(null)
+  const setScrollEl = useCallback((el) => {
+    setNode(el)
+  }, [])
 
   useEffect(() => {
     setHidden(false)
   }, [resetKey])
 
   useEffect(() => {
-    const root = rootRef?.current
-    if (!root) return undefined
+    if (!node) {
+      setHidden(false)
+      return undefined
+    }
 
-    const lastByTarget = new WeakMap()
+    let lastY = node.scrollTop
 
-    function onScroll(event) {
-      const target = event.target
-      if (!(target instanceof HTMLElement)) return
-      if (!target.classList.contains('pro-split__report')) return
-
-      const y = target.scrollTop
-      const last = lastByTarget.get(target) ?? 0
-      lastByTarget.set(target, y)
-      const dy = y - last
+    function onScroll() {
+      const y = node.scrollTop
+      const dy = y - lastY
+      lastY = y
 
       if (y <= minY) {
         setHidden(false)
@@ -35,9 +36,9 @@ export default function useHideOnScrollDown(rootRef, resetKey, { threshold = 8, 
       else if (dy < -threshold) setHidden(false)
     }
 
-    root.addEventListener('scroll', onScroll, { capture: true, passive: true })
-    return () => root.removeEventListener('scroll', onScroll, { capture: true })
-  }, [rootRef, resetKey, threshold, minY])
+    node.addEventListener('scroll', onScroll, { passive: true })
+    return () => node.removeEventListener('scroll', onScroll)
+  }, [node, resetKey, threshold, minY])
 
-  return hidden
+  return [hidden, setScrollEl]
 }

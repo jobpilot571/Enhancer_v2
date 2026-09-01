@@ -6081,8 +6081,12 @@ body:has(.service-block--enhancer) .footer__col h4 {
   margin: 0;
 }
 .month-year-picker__row {
-  align-items: end;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: stretch;
   margin: 0;
+  width: 100%;
 }
 .month-year-picker__present {
   display: inline-flex;
@@ -9218,8 +9222,7 @@ canvas {
     width: 100%;
   }
 
-  /* Date pickers / 2-col form rows always stack on phones */
-  .month-year-picker__row,
+  /* 2-col form rows stack on phones; month/year already stack at all sizes */
   .form-grid--2,
   .form-grid--3,
   .form-grid {
@@ -9252,8 +9255,7 @@ canvas {
   /* Tablet: keep 2-col forms where space allows */
   .form-grid,
   .form-grid--2,
-  .form-grid--3,
-  .month-year-picker__row {
+  .form-grid--3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .hero__actions {
@@ -10359,6 +10361,12 @@ body:has(.app--pro-workspace),
   line-height: 1.5;
   color: #334155;
   white-space: pre-wrap;
+}
+.builder-draft__dates {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 0.8125rem;
+  color: #64748b;
 }
 .builder-draft__job {
   display: flex;

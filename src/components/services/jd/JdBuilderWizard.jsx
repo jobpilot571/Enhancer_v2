@@ -128,6 +128,11 @@ function JdDraftPreview({ project }) {
                   <strong>{[edu.degree, edu.major].filter(Boolean).join(' · ') || 'Degree'}</strong>
                   {edu.school ? ` · ${edu.school}` : ''}
                 </p>
+                {[edu.startDate, edu.endDate].filter(Boolean).length ? (
+                  <p className="builder-draft__dates">
+                    {[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}
+                  </p>
+                ) : null}
               </section>
             ) : null}
           </article>
@@ -202,9 +207,8 @@ export default function JdBuilderWizard() {
   const buildingRef = useRef(false)
   const saveTimer = useRef(null)
   const projectRef = useRef(project)
-  const workspaceRef = useRef(null)
   projectRef.current = project
-  const stepsHidden = useHideOnScrollDown(workspaceRef, step)
+  const [stepsHidden, setFormScrollEl] = useHideOnScrollDown(step)
 
   useEffect(() => {
     let cancelled = false
@@ -591,7 +595,7 @@ export default function JdBuilderWizard() {
   const stepCopy = JD_STEP_COPY[stepId] || JD_STEP_COPY.basic
 
   return (
-    <div ref={workspaceRef} className="service-block service-block--jd-wizard pro-app pro-app--split">
+    <div className="service-block service-block--jd-wizard pro-app pro-app--split">
       <header className="pro-app__bar">
         <div className="pro-app__identity">
           <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
@@ -695,7 +699,7 @@ export default function JdBuilderWizard() {
       </div>
       ) : (
       <div className="pro-split">
-        <aside className="pro-split__report pro-split__report--setup pro-setup">
+        <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">

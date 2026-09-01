@@ -231,10 +231,12 @@ function BuilderDraftPreview({ form, companyCount, step, selectedTemplate }) {
                   {[edu.city, edu.state].filter(Boolean).length
                     ? ` · ${[edu.city, edu.state].filter(Boolean).join(', ')}`
                     : ''}
-                  {[edu.startDate, edu.endDate].filter(Boolean).length
-                    ? ` · ${[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}`
-                    : ''}
                 </p>
+                {[edu.startDate, edu.endDate].filter(Boolean).length ? (
+                  <p className="builder-draft__dates">
+                    {[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}
+                  </p>
+                ) : null}
               </section>
             ) : null}
           </article>
@@ -456,10 +458,9 @@ export default function BuildNewResume() {
   const refInputRef = useRef(null)
   const buildingRef = useRef(false)
   const cacheTimerRef = useRef(null)
-  const workspaceRef = useRef(null)
   const user = getStoredUser()
   const signedIn = Boolean(getAuthToken() && user)
-  const stepsHidden = useHideOnScrollDown(workspaceRef, step)
+  const [stepsHidden, setFormScrollEl] = useHideOnScrollDown(step)
 
   useEffect(() => {
     setWorkspace({
@@ -970,7 +971,7 @@ export default function BuildNewResume() {
   const stepCopy = STEP_COPY[step] || STEP_COPY[0]
 
   return (
-    <div ref={workspaceRef} className="service-block service-block--builder-pro pro-app pro-app--split">
+    <div className="service-block service-block--builder-pro pro-app pro-app--split">
       <header className="pro-app__bar">
         <div className="pro-app__identity">
           <Link to="/#services" className="pro-app__back" aria-label="Back to Services">
@@ -1058,7 +1059,7 @@ export default function BuildNewResume() {
 
       {!isLastStep && (
       <div className="pro-split">
-        <aside className="pro-split__report pro-split__report--setup pro-setup">
+        <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">

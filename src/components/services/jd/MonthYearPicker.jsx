@@ -125,7 +125,7 @@ export function MonthYearPicker({
           </label>
         )}
       </div>
-      <div className="form-grid form-grid--2 month-year-picker__row">
+      <div className="month-year-picker__row">
         <FormField
           label="Month"
           options={MONTHS}
