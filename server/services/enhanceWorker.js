@@ -22,6 +22,11 @@ import {
   isPlanTechnicallyValid,
 } from './openaiService.js'
 import { researchCompanyContexts } from './companyContextService.js'
+import { buildProjectContexts, logProjectContexts } from './projectContextBuilder.js'
+import {
+  applyProjectContextExperienceOverlay,
+  logProjectContextRewrites,
+} from './projectContextExperienceOverlay.js'
 import { scoreResumeWithLlm, mergeAtsScores } from './llmScoreService.js'
 import { ensureResumeData, ensureJdData } from './sessionPrepare.js'
 import PizZip from 'pizzip'
@@ -142,6 +147,20 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
     )
     timer.mark('company_context_research')
 
+    // Phase 1 Project Context Builder — INTERNAL / DEBUG ONLY.
+    // Reconstructs a realistic enterprise project per company from JD + resume.
+    // Must NOT be passed to createEnhancementPlan, patchDocx, scoring, or QA.
+    log(jobId, 'building internal project context per company (inspect-only)')
+    const projectContexts = await buildProjectContexts(resumeData, jdData, {
+      companyContexts,
+      sessionId,
+      jobId,
+      fileName: getSession(sessionId)?.fileName,
+    })
+    logProjectContexts((message) => log(jobId, message), projectContexts)
+    updateSession(sessionId, { projectContexts })
+    timer.mark('project_context_builder')
+
     log(jobId, 'writing complete enhancement plan (1 LLM call)')
     let planRaw
     let repaired = false
@@ -177,6 +196,44 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
     enhancementPlan = mergeExperienceAdditions(enhancementPlan, resumeData)
     enhancementPlan = dedupeExperienceAdditionsAcrossCompanies(enhancementPlan, resumeData)
     timer.mark('validate_plan_local')
+
+    // Limited test: overlay 1–2 weak/JD-misaligned experience rewrites from projectContext.
+    // Does not change Summary, Skills, additions, plan prompt, formatting, scoring, or DOCX logic.
+    // If context is missing or this step fails, the existing plan is used as-is.
+    log(jobId, 'project-context experience overlay (max 2 weak bullets/company)')
+    let projectContextRewriteMeta = {
+      skipped: true,
+      skipReason: 'not_run',
+      maxPerCompany: 2,
+      rewriteCount: 0,
+      perCompany: {},
+    }
+    let projectContextRewrites = []
+    try {
+      const overlay = await applyProjectContextExperienceOverlay(
+        enhancementPlan,
+        resumeData,
+        jdData,
+        comparison,
+        projectContexts,
+        { sessionId, jobId },
+      )
+      enhancementPlan = overlay.plan
+      projectContextRewrites = overlay.rewrites || []
+      projectContextRewriteMeta = overlay.meta || projectContextRewriteMeta
+      logProjectContextRewrites((message) => log(jobId, message), projectContextRewrites, projectContextRewriteMeta)
+    } catch (err) {
+      log(jobId, `project-context overlay failed (existing enhancer unchanged): ${err.message}`)
+      projectContextRewriteMeta = {
+        skipped: true,
+        skipReason: 'overlay_exception',
+        maxPerCompany: 2,
+        rewriteCount: 0,
+        perCompany: {},
+      }
+    }
+    updateSession(sessionId, { projectContextRewrites, projectContextRewriteMeta })
+    timer.mark('project_context_experience_overlay')
 
     if (!(enhancementPlan.summaryBullets?.length) && !(enhancementPlan.bulletRewrites || []).some((r) => {
       const c = (r.company || '').toLowerCase()
@@ -406,6 +463,19 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
         mergedAfter: finalAfter,
       },
       atsMarks: newComparison.atsMarks,
+      projectContextBuilder: {
+        phase: 1,
+        usedForEnhancement: false,
+        companyCount: projectContexts.length,
+        companies: projectContexts.map((c) => c.company),
+      },
+      projectContextExperienceOverlay: {
+        maxPerCompany: projectContextRewriteMeta.maxPerCompany || 2,
+        skipped: !!projectContextRewriteMeta.skipped,
+        skipReason: projectContextRewriteMeta.skipReason || null,
+        rewriteCount: projectContextRewriteMeta.rewriteCount || 0,
+        perCompany: projectContextRewriteMeta.perCompany || {},
+      },
     }
     const matchAnalysis = buildMatchAnalysis(comparisonBeforeScored, newComparison, applied, processingMeta)
 
@@ -429,6 +499,9 @@ export async function runEnhanceJob(jobId, sessionId, jdText, { userId = null } 
       atsScore: finalAfter,
       processingMeta,
       layoutQa,
+      projectContexts,
+      projectContextRewrites,
+      projectContextRewriteMeta,
     })
 
     updateEnhanceJob(jobId, {

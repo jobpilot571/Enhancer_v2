@@ -164,16 +164,18 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               onChange={(e) => patchEdu(index, 'location', e.target.value)}
               placeholder="City, State"
             />
-            <MonthYearPicker
-              label="Start date"
-              value={edu.startDate}
-              onChange={(v) => patchEdu(index, 'startDate', v)}
-            />
-            <MonthYearPicker
-              label="End date / graduation"
-              value={edu.endDate || ''}
-              onChange={(v) => patchEdu(index, 'endDate', v)}
-            />
+            <div className="builder-dates-row form-field--full">
+              <MonthYearPicker
+                label="Start date"
+                value={edu.startDate}
+                onChange={(v) => patchEdu(index, 'startDate', v)}
+              />
+              <MonthYearPicker
+                label="End date / graduation"
+                value={edu.endDate || ''}
+                onChange={(v) => patchEdu(index, 'endDate', v)}
+              />
+            </div>
             <FormField
               label="GPA (optional)"
               value={edu.gpa}

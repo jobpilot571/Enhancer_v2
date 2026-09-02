@@ -25,10 +25,19 @@ import {
   uploadReferenceDocument,
   getBuilderMemory,
   saveBuilderMemory,
+  suggestCompaniesFromRole,
 } from '../../api/builder'
 import { getAuthToken, getStoredUser } from '../../api/auth'
 import { fetchPublicTemplateSamples, getSampleFileUrl } from '../../api/admin'
 import ProLoadingScreen from './pro/ProLoadingScreen'
+import AiCompanyModeModal from './AiCompanyModeModal'
+import useHideOnScrollDown from '../../hooks/useHideOnScrollDown'
+import {
+  BULLET_OPTIONS,
+  bulletRangeForCompanyIndex,
+  clampBulletCountForCompany,
+  defaultBulletCountForCompanyIndex,
+} from './jd/jdProjectModel'
 
 const BUILD_LOAD_STEPS = [
   { key: 'generating_content', label: 'Writing resume content…' },
@@ -222,10 +231,12 @@ function BuilderDraftPreview({ form, companyCount, step, selectedTemplate }) {
                   {[edu.city, edu.state].filter(Boolean).length
                     ? ` · ${[edu.city, edu.state].filter(Boolean).join(', ')}`
                     : ''}
-                  {[edu.startDate, edu.endDate].filter(Boolean).length
-                    ? ` · ${[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}`
-                    : ''}
                 </p>
+                {[edu.startDate, edu.endDate].filter(Boolean).length ? (
+                  <p className="builder-draft__dates">
+                    {[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}
+                  </p>
+                ) : null}
               </section>
             ) : null}
           </article>
@@ -244,17 +255,12 @@ function BuilderDraftPreview({ form, companyCount, step, selectedTemplate }) {
   )
 }
 
-const BULLET_OPTIONS = Array.from({ length: 11 }, (_, i) => ({
-  value: String(i + 5),
-  label: `${i + 5} bullets`,
-}))
-
 const COMPANY_COUNT_OPTIONS = Array.from({ length: 6 }, (_, i) => ({
   value: String(i + 1),
   label: String(i + 1),
 }))
 
-function emptyCompany() {
+function emptyCompany(index = 0) {
   return {
     name: '',
     role: '',
@@ -263,6 +269,7 @@ function emptyCompany() {
     city: '',
     state: '',
     skills: [],
+    bulletCount: defaultBulletCountForCompanyIndex(index),
   }
 }
 
@@ -274,8 +281,7 @@ const initialForm = {
   role: '',
   yearsOfExperience: '',
   companyCount: '2',
-  bulletsPerCompany: '8',
-  companies: [emptyCompany(), emptyCompany()],
+  companies: [emptyCompany(0), emptyCompany(1)],
   summaryNotes: '',
   templateId: RESUME_TEMPLATES[0].id,
   education: {
@@ -379,6 +385,9 @@ function applyReferenceSuggestions(form, suggestions, { overwriteCompanies = tru
           city: fillBlank(existing.city, incoming.city),
           state: fillBlank(existing.state, incoming.state),
           skills: (existing.skills?.length ? existing.skills : (incoming.skills || [])),
+          bulletCount: incoming.bulletCount
+            || existing.bulletCount
+            || defaultBulletCountForCompanyIndex(i),
         }
       }),
       companyCount,
@@ -415,8 +424,12 @@ function applyReferenceSuggestions(form, suggestions, { overwriteCompanies = tru
 }
 
 function syncCompanies(companies, count) {
-  const next = companies.slice(0, count)
-  while (next.length < count) next.push(emptyCompany())
+  const next = companies.slice(0, count).map((c, i) => ({
+    ...emptyCompany(i),
+    ...c,
+    bulletCount: c.bulletCount || defaultBulletCountForCompanyIndex(i),
+  }))
+  while (next.length < count) next.push(emptyCompany(next.length))
   return next
 }
 
@@ -438,11 +451,16 @@ export default function BuildNewResume() {
   const [cacheReady, setCacheReady] = useState(false)
   const [cacheNotice, setCacheNotice] = useState('')
   const [uploadAuthPrompt, setUploadAuthPrompt] = useState(false)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [aiNotice, setAiNotice] = useState('')
   const refInputRef = useRef(null)
   const buildingRef = useRef(false)
   const cacheTimerRef = useRef(null)
   const user = getStoredUser()
   const signedIn = Boolean(getAuthToken() && user)
+  const [stepsHidden, setFormScrollEl] = useHideOnScrollDown(step)
 
   useEffect(() => {
     setWorkspace({
@@ -644,6 +662,55 @@ export default function BuildNewResume() {
     updateCompany(index, 'skills', skills)
   }
 
+  async function handleAiGenerate(answers) {
+    const roleTitle = String(form.role || '').trim()
+    if (!roleTitle) {
+      setAiError('Enter your target role in Basics first.')
+      return
+    }
+    setAiLoading(true)
+    setAiError('')
+    setAiNotice('')
+    try {
+      const result = await suggestCompaniesFromRole({
+        roleTitle,
+        ...answers,
+      })
+      const companies = Array.isArray(result?.companies) ? result.companies : []
+      if (!companies.length) {
+        throw new Error('AI did not return companies. Try again.')
+      }
+      const customDates = Array.isArray(answers.workedDates) ? answers.workedDates : null
+      const next = companies.slice(0, 6).map((c, i) => ({
+        ...emptyCompany(i),
+        name: String(c.companyName || c.name || '').trim(),
+        role: String(c.jobTitle || c.role || roleTitle).trim(),
+        city: String(c.city || '').trim(),
+        state: String(c.state || '').trim(),
+        startDate: String(customDates?.[i]?.startDate || c.startDate || '').trim(),
+        endDate: String(customDates?.[i]?.endDate || c.endDate || '').trim() || (i === 0 ? 'Present' : ''),
+        bulletCount: String(clampBulletCountForCompany(i, c.bulletCount)),
+        skills: Array.isArray(c.skills) ? c.skills : [],
+      }))
+      setForm((f) => ({
+        ...f,
+        yearsOfExperience: String(answers.yearsOfExperience || f.yearsOfExperience),
+        companyCount: String(next.length),
+        companies: next,
+      }))
+      setAiNotice(
+        `AI filled ${next.length} compan${next.length === 1 ? 'y' : 'ies'}`
+        + (result.industry ? ` for ${result.industry}` : '')
+        + '. Review and edit anything you want.',
+      )
+      setAiOpen(false)
+    } catch (err) {
+      setAiError(err.message || 'AI company generation failed.')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   function patchEducation(field, value) {
     setForm((f) => ({
       ...f,
@@ -775,7 +842,6 @@ export default function BuildNewResume() {
     }
 
     if (index === 1) {
-      if (!form.bulletsPerCompany) return 'Select how many bullets per company.'
       const count = Number(form.companyCount) || form.companies.length
       for (let i = 0; i < count; i++) {
         const c = form.companies[i] || {}
@@ -784,6 +850,11 @@ export default function BuildNewResume() {
         if (!String(c.startDate || '').trim()) return `Company ${i + 1}: enter the start date.`
         if (!String(c.city || '').trim()) return `Company ${i + 1}: enter the city.`
         if (!String(c.state || '').trim()) return `Company ${i + 1}: enter the state.`
+        const range = bulletRangeForCompanyIndex(i)
+        const bullets = Number(c.bulletCount)
+        if (!Number.isFinite(bullets) || bullets < range.min || bullets > range.max) {
+          return `Company ${i + 1}: select ${range.min}–${range.max} bullets.`
+        }
       }
     }
 
@@ -812,9 +883,8 @@ export default function BuildNewResume() {
       role: form.role.trim(),
       yearsOfExperience: Number(form.yearsOfExperience) || 0,
       companyCount: count,
-      bulletsPerCompany: Number(form.bulletsPerCompany) || 8,
       templateId: form.templateId,
-      companies: form.companies.slice(0, count).map((c) => ({
+      companies: form.companies.slice(0, count).map((c, i) => ({
         name: c.name.trim(),
         role: c.role.trim(),
         startDate: c.startDate.trim(),
@@ -822,6 +892,7 @@ export default function BuildNewResume() {
         city: c.city.trim(),
         state: c.state.trim(),
         skills: Array.isArray(c.skills) ? c.skills : [],
+        bulletCount: clampBulletCountForCompany(i, c.bulletCount, 8),
       })),
       summaryNotes: form.summaryNotes.trim(),
       education: {
@@ -968,7 +1039,11 @@ export default function BuildNewResume() {
         </div>
       )}
 
-      <nav className="builder-steps builder-steps--pro" aria-label="Resume builder steps">
+      <nav
+        className={`builder-steps builder-steps--pro${stepsHidden ? ' is-collapsed' : ''}`}
+        aria-label="Resume builder steps"
+        aria-hidden={stepsHidden || undefined}
+      >
         {SECTIONS.map((s, i) => (
           <button
             key={s.id}
@@ -984,7 +1059,7 @@ export default function BuildNewResume() {
 
       {!isLastStep && (
       <div className="pro-split">
-        <aside className="pro-split__report pro-split__report--setup pro-setup">
+        <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">
@@ -1071,24 +1146,27 @@ export default function BuildNewResume() {
 
         {step === 1 && (
         <section id="builder-experience" className="builder-section">
-          <h4 className="builder-section__title">
-            <span className="builder-section__num">2</span>
-            Experience
-          </h4>
+          <div className="jd-step__row-head">
+            <h4 className="builder-section__title">
+              <span className="builder-section__num">2</span>
+              Experience
+            </h4>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={() => {
+                setAiError('')
+                setAiOpen(true)
+              }}
+            >
+              AI mode / Auto fill
+            </button>
+          </div>
+          <p className="builder-hint">
+            Each company has its own bullet count. Use <strong>AI mode</strong> to generate a present→past history from your target role.
+          </p>
+          {aiNotice && <p className="builder-hint" role="status">{aiNotice}</p>}
           <div className="builder-experience">
-            <div className="form-grid">
-              <FormField
-                label="Bullets per company (same for all)"
-                name="bulletsPerCompany"
-                options={BULLET_OPTIONS}
-                placeholder="Select 5–15"
-                value={form.bulletsPerCompany}
-                onChange={updateField}
-                required
-                className="form-field--full"
-              />
-            </div>
-
             {form.companies.slice(0, companyCount).map((company, index) => (
               <div key={index} className="builder-company">
                 <h4 className="builder-company__title">Company {index + 1}</h4>
@@ -1121,7 +1199,7 @@ export default function BuildNewResume() {
                       setError('')
                     }}
                   />
-                  <div className="builder-dates-row">
+                  <div className="builder-dates-row form-field--full">
                     <MonthYearPicker
                       label="Start date"
                       value={company.startDate}
@@ -1135,6 +1213,19 @@ export default function BuildNewResume() {
                       allowPresent
                     />
                   </div>
+                  <FormField
+                    label={`Bullets for this company (${bulletRangeForCompanyIndex(index).min}–${bulletRangeForCompanyIndex(index).max})`}
+                    options={BULLET_OPTIONS.filter((o) => {
+                      const n = Number(o.value)
+                      const r = bulletRangeForCompanyIndex(index)
+                      return n >= r.min && n <= r.max
+                    })}
+                    placeholder={`Select ${bulletRangeForCompanyIndex(index).min}–${bulletRangeForCompanyIndex(index).max}`}
+                    value={company.bulletCount || defaultBulletCountForCompanyIndex(index)}
+                    onChange={(e) => updateCompany(index, 'bulletCount', e.target.value)}
+                    required
+                    className="form-field--full"
+                  />
                 </div>
 
                 <SkillsPicker
@@ -1145,6 +1236,20 @@ export default function BuildNewResume() {
               </div>
             ))}
           </div>
+          <AiCompanyModeModal
+            open={aiOpen}
+            onClose={() => !aiLoading && setAiOpen(false)}
+            onSubmit={handleAiGenerate}
+            loading={aiLoading}
+            error={aiError}
+            description="We'll pick an industry-fit company history (USA + India) from your target role and set dates from present → past. Each company gets its own bullet count."
+            defaults={{
+              years: form.yearsOfExperience || '5',
+              companyCount: String(companyCount || 3),
+              usaCount: String(Math.min(Number(companyCount) || 3, 2)),
+              indiaCount: String(Math.max(0, (Number(companyCount) || 3) - Math.min(Number(companyCount) || 3, 2))),
+            }}
+          />
         </section>
         )}
 
@@ -1226,7 +1331,7 @@ export default function BuildNewResume() {
                 setError('')
               }}
             />
-            <div className="builder-dates-row">
+            <div className="builder-dates-row form-field--full">
               <MonthYearPicker
                 label="Start date"
                 value={form.education.startDate}
@@ -1467,7 +1572,7 @@ export default function BuildNewResume() {
               </h2>
               <p className="pro-recap__lede">
                 Ready for <strong>{form.name || '—'}</strong> as <strong>{form.role || '—'}</strong>
-                {' '}with {companyCount} compan{companyCount === 1 ? 'y' : 'ies'}, {form.bulletsPerCompany} bullets each,
+                {' '}with {companyCount} compan{companyCount === 1 ? 'y' : 'ies'} and a custom bullet count on each,
                 using the <strong>{selectedTemplate?.name || 'selected'}</strong> template.
               </p>
               <ul className="pro-recap__list">

@@ -35,6 +35,7 @@ import SavedResumesStep from './steps/SavedResumesStep'
 import { applyJdChatProjectUpdates } from './jdChatApply'
 import { useAssistantWorkspace } from '../../../context/AssistantContext'
 import ProLoadingScreen from '../pro/ProLoadingScreen'
+import useHideOnScrollDown from '../../../hooks/useHideOnScrollDown'
 
 const JD_LOAD_STEPS = [
   { key: 'parsing_jd', label: 'Analyzing the job description…' },
@@ -127,6 +128,11 @@ function JdDraftPreview({ project }) {
                   <strong>{[edu.degree, edu.major].filter(Boolean).join(' · ') || 'Degree'}</strong>
                   {edu.school ? ` · ${edu.school}` : ''}
                 </p>
+                {[edu.startDate, edu.endDate].filter(Boolean).length ? (
+                  <p className="builder-draft__dates">
+                    {[edu.startDate, edu.endDate].filter(Boolean).join(' – ')}
+                  </p>
+                ) : null}
               </section>
             ) : null}
           </article>
@@ -202,6 +208,7 @@ export default function JdBuilderWizard() {
   const saveTimer = useRef(null)
   const projectRef = useRef(project)
   projectRef.current = project
+  const [stepsHidden, setFormScrollEl] = useHideOnScrollDown(step)
 
   useEffect(() => {
     let cancelled = false
@@ -657,7 +664,11 @@ export default function JdBuilderWizard() {
         </div>
       )}
 
-      <nav className="builder-steps builder-steps--pro" aria-label="JD-tailored resume builder steps">
+      <nav
+        className={`builder-steps builder-steps--pro${stepsHidden ? ' is-collapsed' : ''}`}
+        aria-label="JD-tailored resume builder steps"
+        aria-hidden={stepsHidden || undefined}
+      >
         {JD_STEPS.map((s, i) => (
           <button
             key={s.id}
@@ -688,7 +699,7 @@ export default function JdBuilderWizard() {
       </div>
       ) : (
       <div className="pro-split">
-        <aside className="pro-split__report pro-split__report--setup pro-setup">
+        <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">

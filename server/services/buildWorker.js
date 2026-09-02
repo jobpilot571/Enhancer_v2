@@ -20,6 +20,23 @@ function formatCityState(company) {
   return [company.city, company.state].filter(Boolean).join(', ')
 }
 
+const BULLET_RANGES = [
+  { min: 12, max: 14, def: 13 },
+  { min: 11, max: 13, def: 12 },
+  { min: 10, max: 12, def: 11 },
+  { min: 9, max: 11, def: 10 },
+  { min: 7, max: 9, def: 8 },
+]
+
+function bulletsForCompany(company, index, formData) {
+  const range = BULLET_RANGES[index] || { min: 7, max: 12, def: 8 }
+  const n = Number(company?.bulletCount)
+  if (Number.isFinite(n)) return Math.min(range.max, Math.max(range.min, n))
+  const fallback = Number(formData?.bulletsPerCompany)
+  if (Number.isFinite(fallback)) return Math.min(range.max, Math.max(range.min, fallback))
+  return range.def
+}
+
 function collectUserSkills(formData) {
   const all = []
   for (const c of formData.companies || []) {
@@ -34,16 +51,16 @@ function collectUserSkills(formData) {
 /** Merge AI output with user-provided facts so names/dates/contact never drift. */
 function mergeResumeWithForm(aiResume, formData) {
   const companies = Array.isArray(formData.companies) ? formData.companies : []
-  const bulletsPerCompany = Math.min(15, Math.max(5, Number(formData.bulletsPerCompany) || 8))
   const edu = formData.education || {}
   const userSkills = collectUserSkills(formData)
 
   const experience = companies.map((c, i) => {
     const aiJob = (aiResume.experience || [])[i] || {}
+    const cap = bulletsForCompany(c, i, formData)
     const bullets = (aiJob.bullets || [])
       .map((b) => String(b || '').trim())
       .filter(Boolean)
-      .slice(0, bulletsPerCompany)
+      .slice(0, cap)
 
     return {
       company: String(c.name || '').trim(),

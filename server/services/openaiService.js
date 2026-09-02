@@ -735,16 +735,18 @@ const BUILD_RESUME_SCHEMA = {
  */
 export async function generateResumeFromForm(formData) {
   const companies = Array.isArray(formData.companies) ? formData.companies : []
-  const bulletsPerCompany = Math.min(15, Math.max(5, Number(formData.bulletsPerCompany) || 8))
   const years = Number(formData.yearsOfExperience) || 0
   const education = formData.education || {}
+  const fallbackBullets = Math.min(15, Math.max(5, Number(formData.bulletsPerCompany) || 8))
 
   const companyLines = companies.map((c, i) => {
     const loc = [c.city, c.state].filter(Boolean).join(', ')
     const skills = Array.isArray(c.skills) && c.skills.length
       ? c.skills.join(', ')
       : '(none selected)'
-    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | City/State="${loc || 'N/A'}" | Skills=[${skills}]`
+    const n = Number(c.bulletCount)
+    const bullets = Number.isFinite(n) ? Math.min(15, Math.max(5, n)) : fallbackBullets
+    return `${i + 1}. Company="${c.name}" | Role="${c.role}" | Start=${c.startDate || '?'} | End=${c.endDate || 'Present'} | City/State="${loc || 'N/A'}" | Skills=[${skills}] | Write EXACTLY ${bullets} bullets`
   }).join('\n')
 
   const allUserSkills = [...new Set(
@@ -788,7 +790,7 @@ Quality bar (mandatory):
 
 Hard rules:
 - Use the EXACT company names, job titles, and dates the user provided. Do not rename companies or invent extra jobs.
-- Write EXACTLY ${bulletsPerCompany} bullets for EACH company (no more, no less).
+- Write EXACTLY the requested number of bullets for EACH company (see each company line). Do not use the same count for every company unless asked.
 - Weave user-selected skills AND reference skills naturally into company bullets and skillCategories.
 - Bullets must be role-appropriate for "${formData.role}" with about ${years} years of experience.
 - When reference document material is provided: reuse and polish those bullets/summary lines for matching companies. Keep real achievements, metrics, tools, and project context. Rewrite for clarity and ATS impact — do NOT invent fake employers or unrelated claims.
@@ -809,7 +811,7 @@ Hard rules:
 - Skills pool (must appear in skillCategories): ${skillPool.join(', ') || '(none — invent realistic skills for the role)'}
 - Summary notes from user (optional guidance): ${formData.summaryNotes || '(none — invent a strong summary)'}
 
-Companies (write ${bulletsPerCompany} bullets each; use that company's skills in bullets):
+Companies (use that company's skills in bullets; honor each company's bullet count):
 ${companyLines || '(none)'}
 
 Education:
