@@ -83,7 +83,7 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
       </div>
 
       <h5 className="jd-step__subtitle">Contact Information</h5>
-      <div className="form-grid form-grid--3">
+      <div className="form-grid form-grid--2">
         <FormField
           label="Full name"
           value={b.fullName}
@@ -133,7 +133,7 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               </button>
             )}
           </div>
-          <div className="form-grid form-grid--3">
+          <div className="form-grid form-grid--2">
             <SelectWithOther
               label="Degree"
               value={edu.degree}
@@ -151,6 +151,7 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               onChange={(v) => patchEdu(index, 'major', v)}
             />
             <SelectWithOther
+              className="form-field--full"
               label="University / college"
               value={edu.school}
               options={US_UNIVERSITY_OPTIONS}
@@ -164,6 +165,12 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
               onChange={(e) => patchEdu(index, 'location', e.target.value)}
               placeholder="City, State"
             />
+            <FormField
+              label="GPA (optional)"
+              value={edu.gpa}
+              onChange={(e) => patchEdu(index, 'gpa', e.target.value)}
+              placeholder="Only if on resume"
+            />
             <div className="builder-dates-row form-field--full">
               <MonthYearPicker
                 label="Start date"
@@ -176,12 +183,6 @@ export default function BasicResumeStep({ project, onChange, onUploadBasicResume
                 onChange={(v) => patchEdu(index, 'endDate', v)}
               />
             </div>
-            <FormField
-              label="GPA (optional)"
-              value={edu.gpa}
-              onChange={(e) => patchEdu(index, 'gpa', e.target.value)}
-              placeholder="Only if on resume"
-            />
           </div>
         </div>
       ))}

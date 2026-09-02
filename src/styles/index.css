@@ -5823,7 +5823,7 @@ body:has(.service-block--enhancer) .footer__col h4 {
   gap: 12px;
 }
 .service-block--jd-wizard .form-grid--3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .service-block--jd-wizard .jd-templates-more {
   margin-top: 1rem;
@@ -10544,6 +10544,17 @@ body:has(.app--pro-workspace),
   flex: 1;
   min-height: 0;
 }
+.service-block--jd-wizard.pro-app > .pro-split,
+.service-block--jd-wizard.pro-app > .pro-split--equal {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.service-block--jd-wizard .form-card--pro-split .jd-step--preview.pro-split,
+.service-block--jd-wizard .jd-step--preview.pro-split {
+  grid-template-columns: minmax(240px, 30%) minmax(0, 1fr);
+}
+.service-block--jd-wizard .month-year-picker__row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
 .builder-pro-card .jd-step {
   padding: 0;
 }
@@ -10562,7 +10573,11 @@ body:has(.app--pro-workspace),
 }
 
 @media (max-width: 1024px) {
-  .pro-split {
+  .pro-split,
+  .service-block--jd-wizard.pro-app > .pro-split,
+  .service-block--jd-wizard.pro-app > .pro-split--equal,
+  .service-block--jd-wizard .form-card--pro-split .jd-step--preview.pro-split,
+  .service-block--jd-wizard .jd-step--preview.pro-split {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) minmax(180px, 34vh);
   }

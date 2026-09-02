@@ -46,6 +46,7 @@ export default function SelectWithOther({
           onChange={(e) => onChange(e.target.value, true)}
           placeholder={otherPlaceholder}
           required={required}
+          className={className}
         />
       )}
     </div>

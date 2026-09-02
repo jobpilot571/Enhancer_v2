@@ -700,7 +700,7 @@ export default function JdBuilderWizard() {
         {error && <p className="builder-error" role="alert">{error}</p>}
       </div>
       ) : (
-      <div className="pro-split">
+      <div className="pro-split pro-split--equal">
         <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
           <div className="builder-steps-anchor" aria-hidden="true" />
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>

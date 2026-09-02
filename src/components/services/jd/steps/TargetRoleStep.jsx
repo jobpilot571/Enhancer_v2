@@ -245,6 +245,7 @@ export default function TargetRoleStep({ project, onChange }) {
                   onChange={(loc) => patchExpLoc(index, loc)}
                 />
                 <FormField
+                  className="form-field--full"
                   label={`Required bullets (${bulletRangeForCompanyIndex(index).min}–${bulletRangeForCompanyIndex(index).max})`}
                   options={BULLET_OPTIONS.filter((o) => {
                     const n = Number(o.value)
