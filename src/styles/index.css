@@ -9276,13 +9276,13 @@ html:has(.app--pro-workspace),
 body:has(.app--pro-workspace),
 #root:has(.app--pro-workspace) {
   height: 100%;
-  max-height: 100dvh;
+  max-height: 100svh;
   overflow: hidden;
 }
 .app--pro-workspace {
   background: var(--pro-canvas);
-  height: 100dvh;
-  max-height: 100dvh;
+  height: 100svh;
+  max-height: 100svh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -10210,13 +10210,22 @@ body:has(.app--pro-workspace),
 .service-block--jd-wizard.pro-app {
   display: flex;
   flex-direction: column;
-  min-height: calc(100dvh - var(--nav-height));
+  min-height: calc(100svh - var(--nav-height));
   margin: 0 !important;
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
   padding: 0 !important;
   background: var(--pro-canvas);
+}
+.service-block--builder-pro.pro-app > .builder-steps-host,
+.service-block--jd-wizard.pro-app > .builder-steps-host {
+  flex: 0 0 0;
+  height: 0;
+  overflow: visible;
+  position: relative;
+  z-index: 8;
+  pointer-events: none;
 }
 .service-block--builder-pro.pro-app > .builder-steps,
 .service-block--jd-wizard.pro-app > .builder-steps,
@@ -10228,20 +10237,32 @@ body:has(.app--pro-workspace),
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0;
   gap: 6px;
-  max-height: 160px;
-  overflow: hidden;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  pointer-events: auto;
+  transform: translateY(0);
   opacity: 1;
-  transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.18s ease, border-width 0.22s ease;
+  transition: transform 0.2s ease, opacity 0.18s ease;
+}
+.builder-steps-host .builder-steps--pro {
+  pointer-events: auto;
 }
 .service-block--builder-pro.pro-app > .builder-steps.is-collapsed,
 .service-block--jd-wizard.pro-app > .builder-steps.is-collapsed,
 .builder-steps--pro.is-collapsed {
-  max-height: 0;
+  transform: translateY(-110%);
   opacity: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  border-bottom-width: 0;
   pointer-events: none;
+}
+.builder-steps-anchor {
+  height: 3.25rem;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.service-block--builder-pro .pro-split__report--setup,
+.service-block--jd-wizard .pro-split__report--setup {
+  padding-top: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .builder-steps--pro {
@@ -10543,7 +10564,7 @@ body:has(.app--pro-workspace),
 @media (max-width: 1024px) {
   .pro-split {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(280px, 46vh) minmax(320px, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(180px, 34vh);
   }
   .pro-split--preview-first {
     grid-template-rows: minmax(320px, 1fr) minmax(240px, 42vh);
@@ -10572,12 +10593,28 @@ body:has(.app--pro-workspace),
     padding: 6px 8px;
   }
   .pro-app__bar {
-    flex-wrap: wrap;
-    padding: 8px 12px;
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 6px 10px;
+    min-height: 48px;
+    gap: 8px;
+  }
+  .pro-app__kicker {
+    display: none;
   }
   .pro-app__actions {
-    width: 100%;
+    width: auto;
+    flex-shrink: 0;
     justify-content: flex-end;
+    gap: 6px;
+  }
+  .pro-app__actions .btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+  .pro-app__actions .enhancer-topbar__cta {
+    width: auto;
   }
   .pro-app__usage {
     display: none;
@@ -11232,9 +11269,140 @@ body:has(.app--pro-workspace),
   .app--pro-home .hero__workspace {
     width: 100%;
     max-width: none;
-    height: 380px;
-    min-height: 380px;
+    height: min(380px, 58vh);
+    min-height: 300px;
     max-height: 380px;
+  }
+  .app--pro-home .hero__workspace-split,
+  .app--pro-home .hero__workspace.is-compact .hero__workspace-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .app--pro-home .hero__workspace-setup {
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 10px 12px;
+  }
+}
+
+/* —— Phone layout: stop wrapping chrome, give the form room, prevent horizontal spill —— */
+@media (max-width: 767px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  .pro-app.service-block--enhancer,
+  .service-block--enhancer.pro-app {
+    min-height: calc(100svh - var(--nav-height));
+  }
+
+  .pro-split {
+    grid-template-rows: minmax(0, 1fr) minmax(140px, 28vh);
+  }
+  .pro-split--preview-first {
+    grid-template-rows: minmax(140px, 28vh) minmax(0, 1fr);
+  }
+  .pro-notice {
+    margin: 0;
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    border-radius: 0;
+  }
+
+  .builder-steps-anchor {
+    height: 2.75rem;
+  }
+  .builder-steps--pro {
+    padding: 4px 8px 6px;
+  }
+  .builder-steps--pro .builder-steps__item {
+    flex: 0 0 auto;
+  }
+
+  .pro-split__report,
+  .pro-split__preview {
+    padding: 12px 12px 20px;
+  }
+  .service-block--builder-pro .pro-split__report--setup,
+  .service-block--jd-wizard .pro-split__report--setup {
+    padding-top: 0;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .pro-setup__hello {
+    font-size: 1.35rem;
+    margin-top: 8px;
+  }
+  .pro-setup__lede {
+    font-size: 0.8125rem;
+    margin-bottom: 14px;
+  }
+  .builder-pro-card {
+    padding: 12px 12px 6px;
+    border-radius: 12px;
+  }
+
+  .form-grid,
+  .form-grid--2,
+  .form-grid--3 {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  .pro-preview__toolbar {
+    padding: 8px 10px;
+  }
+  .builder-draft {
+    padding: 12px 14px 16px;
+  }
+
+  .contact,
+  .contact__inner,
+  .contact__form,
+  .contact__info {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .contact__form {
+    padding: 18px 16px;
+  }
+
+  .hero-demo__tip {
+    white-space: normal;
+    max-width: min(220px, calc(100% - 24px));
+  }
+
+  .site-assistant {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .site-assistant__fab {
+    width: 52px;
+    height: 52px;
+  }
+  .site-assistant__nudge {
+    max-width: min(260px, calc(100vw - 80px));
+  }
+
+  .form-cta--nav {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .form-cta--nav .btn {
+    width: 100%;
+  }
+
+  .navbar__inner {
+    min-width: 0;
+  }
+  .how-it-works,
+  .services-cards,
+  .pricing,
+  .hero,
+  .footer {
+    overflow-x: hidden;
   }
 }
 

@@ -664,6 +664,7 @@ export default function JdBuilderWizard() {
         </div>
       )}
 
+      <div className="builder-steps-host">
       <nav
         className={`builder-steps builder-steps--pro${stepsHidden ? ' is-collapsed' : ''}`}
         aria-label="JD-tailored resume builder steps"
@@ -681,6 +682,7 @@ export default function JdBuilderWizard() {
           </button>
         ))}
       </nav>
+      </div>
 
       {isPreview ? (
       <div className="form-card form-card--jd-step form-card--pro-split">
@@ -700,6 +702,7 @@ export default function JdBuilderWizard() {
       ) : (
       <div className="pro-split">
         <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
+          <div className="builder-steps-anchor" aria-hidden="true" />
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">

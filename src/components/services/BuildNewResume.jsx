@@ -1039,6 +1039,7 @@ export default function BuildNewResume() {
         </div>
       )}
 
+      <div className="builder-steps-host">
       <nav
         className={`builder-steps builder-steps--pro${stepsHidden ? ' is-collapsed' : ''}`}
         aria-label="Resume builder steps"
@@ -1056,10 +1057,12 @@ export default function BuildNewResume() {
           </button>
         ))}
       </nav>
+      </div>
 
       {!isLastStep && (
       <div className="pro-split">
         <aside ref={setFormScrollEl} className="pro-split__report pro-split__report--setup pro-setup">
+          <div className="builder-steps-anchor" aria-hidden="true" />
           <h2 className="pro-setup__hello">{greetingLine(user)}</h2>
           <p className="pro-setup__lede">{stepCopy.lede}</p>
           <div className="builder-pro-card">
