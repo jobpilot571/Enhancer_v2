@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
 import GlobalAiAssistant from './components/GlobalAiAssistant'
@@ -13,6 +13,21 @@ import VerifyEmailPage from './pages/VerifyEmailPage'
 import BillingCheckoutPage from './pages/BillingCheckoutPage'
 import BillingSuccessPage from './pages/BillingSuccessPage'
 import useScrollReveal, { useScrollToHash } from './hooks/useScrollReveal'
+import { useAuth } from './context/AuthContext'
+
+function RequireAuth({ children }) {
+  const { loading, isAuthenticated } = useAuth()
+  const location = useLocation()
+
+  if (loading) return null
+
+  if (!isAuthenticated) {
+    const next = `${location.pathname}${location.search}${location.hash}`
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />
+  }
+
+  return children
+}
 
 export default function App() {
   useScrollReveal()
@@ -47,9 +62,18 @@ export default function App() {
         <Navbar />
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/services/resume-enhancer" element={<ResumeEnhancerPage />} />
-          <Route path="/services/resume-builder" element={<ResumeBuilderPage />} />
-          <Route path="/services/jd-tailored-resume" element={<JDTailoredResumePage />} />
+          <Route
+            path="/services/resume-enhancer"
+            element={<RequireAuth><ResumeEnhancerPage /></RequireAuth>}
+          />
+          <Route
+            path="/services/resume-builder"
+            element={<RequireAuth><ResumeBuilderPage /></RequireAuth>}
+          />
+          <Route
+            path="/services/jd-tailored-resume"
+            element={<RequireAuth><JDTailoredResumePage /></RequireAuth>}
+          />
           <Route path="/billing/checkout" element={<BillingCheckoutPage />} />
           <Route path="/billing/success" element={<BillingSuccessPage />} />
         </Routes>
