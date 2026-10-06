@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getGoogleClientId } from '../utils/googleAuthUi'
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -30,7 +31,7 @@ export default function GoogleSignInButton({ onCredential, onError, text = 'cont
 
   useEffect(() => {
     let cancelled = false
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    const clientId = getGoogleClientId()
 
     // No client ID → hide quietly (email/password still works)
     if (!clientId) {

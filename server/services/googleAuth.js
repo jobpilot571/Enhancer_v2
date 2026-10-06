@@ -3,12 +3,19 @@
  * Requires GOOGLE_CLIENT_ID (same as VITE_GOOGLE_CLIENT_ID).
  */
 
-export function isGoogleAuthConfigured() {
-  return Boolean(process.env.GOOGLE_CLIENT_ID?.trim() || process.env.VITE_GOOGLE_CLIENT_ID?.trim())
-}
+const CURRENT_GOOGLE_CLIENT_ID =
+  '273668616005-mfd4k3uftj9nhmcbrrbhg2v6eqqfrq8c.apps.googleusercontent.com'
+const DELETED_GOOGLE_CLIENT_ID =
+  '273668616005-r2g0h1gp0oj9tudrbdhl03c1o35ue0lu.apps.googleusercontent.com'
 
 function getGoogleClientId() {
-  return (process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '').trim()
+  const configured = (process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '').trim()
+  if (!configured || configured === DELETED_GOOGLE_CLIENT_ID) return CURRENT_GOOGLE_CLIENT_ID
+  return configured
+}
+
+export function isGoogleAuthConfigured() {
+  return Boolean(getGoogleClientId())
 }
 
 export async function verifyGoogleIdToken(idToken) {
